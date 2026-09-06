@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
+from app import __version__
 from app.io.protocol import Transfer
 from app.theme import sheet
 from app.theme.tokens import (
@@ -34,10 +35,11 @@ TITLE = "File Manager"
 
 class MainWindow(QMainWindow):
 
-    def __init__(self, config, left, right, volumes, transfers,
+    def __init__(self, config, left, right, volumes, transfers, updates=None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
+        self._updates = updates
         self._panes = (left, right)
         self._volumes = volumes
         self._transfers = transfers
@@ -58,6 +60,12 @@ class MainWindow(QMainWindow):
             widget.transferRequested.connect(self._on_transfer_requested)
         transfers.conflict.connect(self._on_conflict)
         transfers.finished.connect(self._on_transfer_finished)
+        if updates is not None:
+            updates.available.connect(self._on_update_available)
+            updates.uptodate.connect(self._on_up_to_date)
+            updates.problem.connect(self._on_update_problem)
+            updates.progress.connect(self._on_update_progress)
+            updates.ready.connect(self._on_update_ready)
         self._splitter.setChildrenCollapsible(False)
         self.setCentralWidget(self._splitter)
 
@@ -135,6 +143,22 @@ class MainWindow(QMainWindow):
         unc.setChecked(bool(self._config.get("left.show_unc")))
         unc.triggered.connect(self._set_show_unc)
         view.addAction(unc)
+
+        helping = self.menuBar().addMenu("&Help")
+        version = QAction(f"Version {__version__}", self)
+        version.setEnabled(False)
+        helping.addAction(version)
+        helping.addSeparator()
+        check = QAction("Check for updates", self)
+        check.triggered.connect(self._check_for_updates)
+        check.setEnabled(self._updates is not None)
+        helping.addAction(check)
+        automatic = QAction("Check on launch", self, checkable=True)
+        automatic.setChecked(bool(self._config.get("updates.check_on_launch")))
+        automatic.triggered.connect(
+            lambda checked: self._config.set("updates.check_on_launch", bool(checked)))
+        automatic.setEnabled(self._updates is not None)
+        helping.addAction(automatic)
 
     def _axis_menu(self, parent, title: str, labels: dict[str, str], key: str) -> None:
         """One submenu per axis of the design system.
@@ -297,6 +321,48 @@ class MainWindow(QMainWindow):
         for pane in self._panes:
             pane.set_show_unc(checked)
 
+    # ---------------------------------------------------------------- updates
+
+    def _check_for_updates(self) -> None:
+        if self._updates is None:
+            return
+        self.statusBar().showMessage("checking for updates", 4000)
+        self._updates.check(manual=True)
+
+    def _on_update_available(self, release) -> None:
+        """Found something newer. Nothing is downloaded until this is answered."""
+        answer = dialogs.offer_update(self, version=release.version,
+                                      current=__version__, size=release.size)
+        if answer == dialogs.UpdateOffer.DOWNLOAD:
+            self._updates.accept(release)
+        elif answer == dialogs.UpdateOffer.SKIP:
+            self._updates.skip(release)
+
+    def _on_up_to_date(self, current: str) -> None:
+        self.statusBar().showMessage(f"{current} is the latest version", 6000)
+
+    def _on_update_problem(self, message: str) -> None:
+        self.statusBar().showMessage(message, 8000)
+
+    def _on_update_progress(self, done: int, total: int) -> None:
+        """In the status bar rather than a dialog.
+
+        A download that has to be watched is a download that stops somebody
+        working for the length of it, and this one has no reason to.
+        """
+        share = (done / total * 100) if total else 0
+        self.statusBar().showMessage(f"downloading update  {share:.0f}%", 2000)
+
+    def _on_update_ready(self, release) -> None:
+        """Downloaded and verified. It runs when this window closes, either now
+        or the next time -- `app/__main__.py` starts it after the pool is down.
+        """
+        self.statusBar().showMessage(
+            f"File Manager {release.version} installs when you quit", 10000)
+        if dialogs.confirm_install(self, version=release.version,
+                                   transfers=bool(self._transfers.active)):
+            self.close()
+
     # ------------------------------------------------------------------ panes
 
     def _current_pane(self):
@@ -334,6 +400,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._transfers.shutdown()
+        if self._updates is not None:
+            self._updates.shutdown()
         self._config.set("window.width", self.width())
         self._config.set("window.height", self.height())
         for side, pane in zip(("left", "right"), self._panes):

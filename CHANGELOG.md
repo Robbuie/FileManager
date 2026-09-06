@@ -5,6 +5,46 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.7.0]
+
+### Added
+- An installer. `packaging/build.py` freezes the application with PyInstaller,
+  packs it with Inno Setup and writes `FileManager-Setup-<version>.exe` into
+  `dist/`. Installs per user into `%LOCALAPPDATA%\Programs\FileManager`, with a
+  Start menu entry and an optional desktop shortcut.
+- Auto-update. **Help > Check for updates**, and one check a few seconds after
+  launch unless that is turned off. A newer version is offered, never taken:
+  nothing is downloaded until the offer is accepted, and the download runs off
+  the UI thread and installs when the application quits. A version can be
+  skipped, and stays skipped until a newer one appears.
+- What is downloaded is checked against the size and the SHA-256 in the release
+  manifest and written to a `.part` file that is renamed onto the real name
+  only if both match -- the same rule the transfer engine uses. A download that
+  does not match is discarded rather than run.
+- `packaging/build.py` writes `latest.json`, the manifest the shipped updater
+  reads, and refuses to finish if it names a file that is not there or a
+  version that disagrees with `app/__init__.py`.
+- An icon, drawn by `packaging/icon.py`: the family's dark tile with two panes
+  on it and the Drafting blue on the active one.
+- `.github/workflows/` -- tests on every push, and a tagged build that produces
+  the installer and publishes it. The build tool builds and `gh` publishes,
+  which is the one thing Redline PDF got wrong and this repository is not
+  going to repeat.
+
+### Changed
+- The application is now started through `packaging/entry.py` when frozen,
+  which calls `multiprocessing.freeze_support()` before anything else. Without
+  it every spawned worker would re-run the entry point and open another window.
+
+### Known limits
+- The installer is unsigned, so the trust boundary for an update is HTTPS to
+  github.com. The checksum proves the download arrived intact, not who built
+  it. Signing is the upgrade path if this ever runs on a machine other than the
+  author's, and it is written down in `app/core/updates.py` so it does not
+  become an accident.
+- Updating only works from an installed build. Run from a checkout, the menu
+  entry says so rather than doing nothing.
+
 ## [0.6.0]
 
 ### Added

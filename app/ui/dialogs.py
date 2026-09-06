@@ -1,4 +1,4 @@
-"""The two dialogs an operation needs: ask for a name, and confirm a delete.
+"""The dialogs: ask for a name, confirm a delete, offer an update.
 
 Written rather than taken from `QInputDialog` and `QMessageBox` for two
 reasons. The stock ones draw the platform's own icons and button order, which
@@ -175,6 +175,91 @@ class StopConfirm(QDialog):
         layout.addWidget(buttons)
 
 
+class UpdateOffer(QDialog):
+    """A newer version exists. Three answers, and none of them is automatic."""
+
+    DOWNLOAD = "download"
+    SKIP = "skip"
+    LATER = "later"
+
+    def __init__(self, parent: QWidget | None, *, version: str, current: str,
+                 size: int) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Update available")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        self.answer = self.LATER
+
+        headline = QLabel(f"File Manager {version} is available.")
+        headline.setWordWrap(True)
+
+        note = QLabel(
+            f"You are on {current}. The download is about {size / (1024 * 1024):.0f} MB "
+            "and installs when you quit -- nothing is interrupted and no transfer "
+            "is touched."
+        )
+        note.setWordWrap(True)
+        note.setProperty("role", "note")
+
+        buttons = QDialogButtonBox()
+        download = buttons.addButton("Download", QDialogButtonBox.AcceptRole)
+        skip = buttons.addButton("Skip this version", QDialogButtonBox.DestructiveRole)
+        later = buttons.addButton("Not now", QDialogButtonBox.RejectRole)
+        download.clicked.connect(lambda: self._answer(self.DOWNLOAD))
+        skip.clicked.connect(lambda: self._answer(self.SKIP))
+        later.clicked.connect(lambda: self._answer(self.LATER))
+        download.setDefault(True)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(headline)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+
+    def _answer(self, value: str) -> None:
+        self.answer = value
+        self.accept()
+
+
+class UpdateReady(QDialog):
+    """The installer is downloaded and checked. When it runs is the question."""
+
+    def __init__(self, parent: QWidget | None, *, version: str,
+                 transfers: bool) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Update ready")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+
+        headline = QLabel(f"File Manager {version} is ready to install.")
+        headline.setWordWrap(True)
+
+        note = QLabel(
+            "A transfer is still running. Installing now stops it."
+            if transfers else
+            "The installer runs after this window closes and replaces this "
+            "version in place. Settings and pane positions are kept."
+        )
+        note.setWordWrap(True)
+        note.setProperty("role", "warn" if transfers else "note")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Quit and install")
+        buttons.button(QDialogButtonBox.Cancel).setText("When I quit")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        # The safe answer takes Return. Quitting is not something to arrive at
+        # by reflex while a folder is half copied.
+        buttons.button(QDialogButtonBox.Cancel).setDefault(True)
+        buttons.button(QDialogButtonBox.Ok).setAutoDefault(False)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(headline)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+
+
 def _count(value: int) -> str:
     return "1 item" if value == 1 else f"{value:,} items"
 
@@ -205,3 +290,17 @@ def confirm_delete(parent: QWidget, *, names: list[str], folder: str,
 def confirm_stop(parent: QWidget, names: list[str]) -> bool:
     """True when the user is willing to lose what is still running."""
     return StopConfirm(parent, names=names).exec() == QDialog.Accepted
+
+
+def offer_update(parent: QWidget, *, version: str, current: str, size: int) -> str:
+    """Which of download, skip or later the user chose."""
+    dialog = UpdateOffer(parent, version=version, current=current, size=size)
+    if dialog.exec() != QDialog.Accepted:
+        return UpdateOffer.LATER
+    return dialog.answer
+
+
+def confirm_install(parent: QWidget, *, version: str, transfers: bool) -> bool:
+    """True to quit and install now; False to leave it staged for the next quit."""
+    return UpdateReady(parent, version=version,
+                       transfers=transfers).exec() == QDialog.Accepted

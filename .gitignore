@@ -11,6 +11,7 @@ venv/
 build/
 dist/
 *.spec.bak
+packaging/version_info.txt
 
 # Editor / OS
 .vscode/

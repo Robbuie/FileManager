@@ -62,6 +62,12 @@ DEFAULTS: dict[str, Any] = {
     # old one rather than replace it, and that is its own piece of work.
     "refresh.network_seconds": 0.0,
 
+    # The one network call the application makes, and the two things worth
+    # remembering about it: whether to make it at all, and which version the
+    # user has already said no to.
+    "updates.check_on_launch": True,
+    "updates.skip_version": "",
+
     "window.width": 1280,
     "window.height": 760,
     "window.split": 0.5,

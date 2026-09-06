@@ -45,13 +45,12 @@ suite. See "Look and feel" below — that is not a nice-to-have, it is a spec.
 
 ## Commands
 
-The window runs; the operations that change anything on disk do not exist yet.
-
 ```
 python -m venv .venv                    # once
 .venv\Scripts\activate
 pip install -r requirements.txt
 pip install pytest                      # tests only, not shipped
+pip install -r packaging/requirements-build.txt   # building an installer
 
 pytest                                  # path, worker and pool checks
 python -m app.io.harness --help
@@ -59,6 +58,10 @@ python -m app                           # the window
 
 python tools/preview.py --path C:\Windows\System32 --out preview.png
 python tools/preview.py --all-themes --out-dir previews
+
+python packaging/build.py               # dist/: the folder, the setup exe, latest.json
+python packaging/build.py --skip-installer   # freeze only, no Inno Setup
+python packaging/icon.py                # only when the icon itself changes
 ```
 
 Verifying the io layer against a real share — the four things that matter, in
@@ -364,12 +367,38 @@ installer config live in `packaging/`.
 The repo (`Robbuie/FileManager`) stays public, because a shipped updater reading
 a private release feed would need a token baked into the installer.
 
-One lesson carried over from Redline PDF, worth honouring before the first
-release rather than after: **have the build tool build and `gh` publish, not
-both.** Letting the packager publish once per target had two instances race to
-create the same release, and the run still exited green while the update
-metadata never arrived. Whatever CI ends up here should fail outright if the
-update manifest is missing from the build output.
+One lesson carried over from Redline PDF, honoured in
+`.github/workflows/release.yml`: **the build tool builds and `gh` publishes,
+never both.** Letting the packager publish once per target had two instances
+race to create the same release, and the run still exited green while the
+update metadata never arrived. `packaging/build.py` makes no network call at
+all, and both it and the workflow fail outright if `latest.json` is missing or
+names a file that is not in `dist/`.
+
+How the pieces fit:
+
+- `packaging/entry.py` is the frozen entry point and exists for one line,
+  `multiprocessing.freeze_support()`. The pool and the transfer engine spawn
+  processes, which re-launch the executable; without that call each one
+  re-runs the application and opens another window.
+- `packaging/filemanager.spec` freezes a **folder**, not a single file. A
+  onefile build unpacks itself on every launch, and this is an application
+  opened twenty times a day.
+- `packaging/installer.iss` installs **per user**, into `%LOCALAPPDATA%`. A
+  Program Files install would put a UAC prompt in front of every update, and an
+  update that needs a password is an update that gets postponed.
+- Output filenames carry no spaces. GitHub turns a space in an asset name into
+  a dot on upload, so a manifest written before the upload would point at
+  nothing -- which is exactly how it failed in Redline PDF, and only on
+  machines running the older build.
+- `app/core/updates.py` is the shipped half: it reads `latest.json` from
+  `releases/latest/download/`, refuses any URL outside this repository's
+  releases, and verifies size and SHA-256 before anything is run. Its threads
+  are threads rather than processes because the timeout and the socket are ours
+  to close -- but the rule still holds, and none of it runs on the UI thread.
+- Bumping a version means three files: `app/__init__.py`, `pyproject.toml` and
+  `CHANGELOG.md`. The release workflow refuses a tag that disagrees with the
+  first of them.
 
 ## Scope
 
