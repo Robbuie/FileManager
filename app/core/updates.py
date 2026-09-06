@@ -211,7 +211,7 @@ def same_folder(left: str | None, right: str | None) -> bool:
 
 
 def unavailable() -> str | None:
-    """Non-None when updating cannot work at all, with the reason to show.
+    r"""Non-None when updating cannot work at all, with the reason to show.
 
     The interesting case is the third one. An update installs into the folder
     the installer owns, so a copy running from anywhere else -- the unpacked
