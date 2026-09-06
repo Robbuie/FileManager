@@ -37,12 +37,20 @@ BUILD = os.path.join(ROOT, "build")
 
 REPO = "Robbuie/FileManager"
 
-#: Where Inno Setup puts itself. Overridable with INNO_SETUP for a portable
-#: copy or an unusual drive.
+#: Where Inno Setup puts itself when nobody has said otherwise. The per-user
+#: path is the one winget uses, and it is not on PATH.
 ISCC_CANDIDATES = (
     r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
     r"C:\Program Files\Inno Setup 6\ISCC.exe",
+    os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe"),
+    os.path.join(os.environ.get("ProgramFiles(x86)", ""), "Inno Setup 6", "ISCC.exe"),
+    os.path.join(os.environ.get("ProgramFiles", ""), "Inno Setup 6", "ISCC.exe"),
 )
+
+#: Inno Setup's own uninstall key, which records where it went. Asking Windows
+#: beats guessing: the installer offers per-machine and per-user, winget picks
+#: for itself, and a guessed list is a list that is wrong on somebody's machine.
+ISCC_REGISTRY_KEY = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1"
 
 
 def version() -> str:
@@ -66,21 +74,44 @@ def run(command: list[str], *, cwd: str | None = None) -> None:
         raise SystemExit(f"failed ({result.returncode}): {command[0]}")
 
 
+def iscc_from_registry() -> str | None:
+    """Where Inno Setup says it installed itself, if it is there at all."""
+    if os.name != "nt":
+        return None
+    import winreg
+
+    views = (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY)
+    for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        for view in views:
+            try:
+                with winreg.OpenKey(root, ISCC_REGISTRY_KEY, 0,
+                                    winreg.KEY_READ | view) as key:
+                    location, _ = winreg.QueryValueEx(key, "InstallLocation")
+            except OSError:
+                continue
+            candidate = os.path.join(str(location), "ISCC.exe")
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
 def find_iscc() -> str:
+    """ISCC.exe, from the four places it can reasonably be."""
     override = os.environ.get("INNO_SETUP")
     if override:
         if not os.path.isfile(override):
             raise SystemExit(f"INNO_SETUP points at {override}, which is not a file")
         return override
-    found = shutil.which("iscc") or shutil.which("ISCC")
+    found = shutil.which("iscc") or shutil.which("ISCC") or iscc_from_registry()
     if found:
         return found
     for candidate in ISCC_CANDIDATES:
-        if os.path.isfile(candidate):
+        if candidate and os.path.isfile(candidate):
             return candidate
     raise SystemExit(
-        "Inno Setup 6 not found. Install it from https://jrsoftware.org/isdl.php "
-        "or set INNO_SETUP to ISCC.exe."
+        "Inno Setup 6 not found on PATH, in the registry, or in the usual "
+        "folders. Install it from https://jrsoftware.org/isdl.php, or set "
+        "INNO_SETUP to the full path of ISCC.exe if it is somewhere unusual."
     )
 
 
