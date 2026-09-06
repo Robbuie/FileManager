@@ -30,7 +30,11 @@
 [Setup]
 ; Never change this GUID. It is how Windows knows an install is an upgrade of
 ; this application rather than a second copy of it, and how the updater's
-; silent run lands on top of what is already there.
+; silent run lands on top of what is already there. It is also copied into
+; `app/core/updates.py` as APP_ID: the application reads InstallLocation from
+; the uninstall key Inno names after it, to tell an installed copy from one
+; running out of a build folder. Change it in one place only and updates go
+; quiet.
 AppId={{8B4A17D2-3C61-4F0E-9E5B-2A7D6C914F83}
 AppName={#AppName}
 AppVersion={#AppVersion}

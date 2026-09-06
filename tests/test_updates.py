@@ -311,3 +311,57 @@ def test_an_older_release_says_nothing_and_reports_up_to_date_on_request(monkeyp
     seen = _spin({"available": service.available, "uptodate": service.uptodate})
     service.shutdown()
     assert list(seen) == ["uptodate"]
+
+
+# ------------------------------------------------- installed, or merely built
+
+
+def _pretend(monkeypatch, *, frozen=True, windows=True, running=None, installed=None):
+    monkeypatch.setattr(updates, "frozen", lambda: frozen)
+    monkeypatch.setattr(updates, "windows", lambda: windows)
+    monkeypatch.setattr(updates, "app_folder", lambda: running)
+    monkeypatch.setattr(updates, "install_location", lambda: installed)
+
+
+def test_a_checkout_cannot_update(monkeypatch):
+    _pretend(monkeypatch, frozen=False)
+    assert updates.unavailable() == "Updates only run from an installed build."
+
+
+def test_a_frozen_build_that_was_never_installed_cannot_update(monkeypatch, tmp_path):
+    _pretend(monkeypatch, running=str(tmp_path), installed=None)
+    assert "not installed" in updates.unavailable()
+
+
+def test_a_copy_running_from_somewhere_else_cannot_update(monkeypatch, tmp_path):
+    """The `dist\\FileManager\\` folder, or a copy on a stick.
+
+    Left alone this is the worst of the three: the update downloads, installs
+    into the folder the installer owns, and the copy being used goes on being
+    the old one -- offering the same update on every launch, forever.
+    """
+    built = tmp_path / "dist" / "FileManager"
+    installed = tmp_path / "Programs" / "FileManager"
+    built.mkdir(parents=True)
+    installed.mkdir(parents=True)
+    _pretend(monkeypatch, running=str(built), installed=str(installed))
+    message = updates.unavailable()
+    assert str(built) in message and str(installed) in message
+
+
+def test_an_installed_copy_can_update(monkeypatch, tmp_path):
+    _pretend(monkeypatch, running=str(tmp_path), installed=str(tmp_path))
+    assert updates.unavailable() is None
+
+
+def test_the_installed_folder_is_matched_through_a_link(monkeypatch, tmp_path):
+    """Inno records one spelling of the path and Windows may hand back another.
+
+    A short name, a junction or a trailing separator must not read as a
+    different folder, or an ordinary install would refuse to update itself.
+    """
+    real = tmp_path / "FileManager"
+    real.mkdir()
+    assert updates.same_folder(str(real), str(real) + os.sep)
+    assert not updates.same_folder(str(real), str(tmp_path / "Other"))
+    assert not updates.same_folder(None, str(real))

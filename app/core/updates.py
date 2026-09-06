@@ -154,12 +154,84 @@ def parse(payload: object) -> Release:
     )
 
 
+#: The AppId in `packaging/installer.iss`, which is what Inno Setup names its
+#: uninstall key after. If one of them changes the other has to, and an install
+#: that no longer recognises itself stops updating rather than misbehaving.
+APP_ID = "{8B4A17D2-3C61-4F0E-9E5B-2A7D6C914F83}"
+UNINSTALL_KEY = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_ID}_is1"
+
+
+def frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def windows() -> bool:
+    return os.name == "nt"
+
+
+def app_folder() -> str | None:
+    """The folder this executable is actually running from."""
+    if not frozen():
+        return None
+    return os.path.dirname(os.path.abspath(sys.executable))
+
+
+def install_location() -> str | None:
+    """Where the installer put this application, according to Windows.
+
+    Inno Setup writes `InstallLocation` under its own uninstall key as part of
+    installing, so this is the installer's answer rather than a guess. Per-user
+    installs land in HKCU and the all-users option in HKLM; both are checked
+    because the setup allows either.
+    """
+    if not windows():
+        return None
+    import winreg
+
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(root, UNINSTALL_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, "InstallLocation")
+        except OSError:
+            continue
+        if value:
+            return os.path.normpath(str(value))
+    return None
+
+
+def same_folder(left: str | None, right: str | None) -> bool:
+    """Whether two paths name the same folder, short names and links included."""
+    if not left or not right:
+        return False
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return os.path.normcase(os.path.normpath(left)) == \
+               os.path.normcase(os.path.normpath(right))
+
+
 def unavailable() -> str | None:
-    """Non-None when updating cannot work at all, with the reason to show."""
-    if not getattr(sys, "frozen", False):
+    """Non-None when updating cannot work at all, with the reason to show.
+
+    The interesting case is the third one. An update installs into the folder
+    the installer owns, so a copy running from anywhere else -- the unpacked
+    `dist\FileManager\` folder, or a copy someone moved onto a stick -- would
+    download an update, install it somewhere it is not, and go on running the
+    old version while offering the same update on every launch. Checking the
+    running folder against what the installer recorded is what stops that, and
+    it has to be a check rather than an assumption because being frozen and
+    being installed are not the same thing.
+    """
+    if not frozen():
         return "Updates only run from an installed build."
-    if os.name != "nt":
+    if not windows():
         return "Updates only run on Windows."
+    installed = install_location()
+    if installed is None:
+        return "This copy was not installed, so there is nothing for an update to replace."
+    if not same_folder(app_folder(), installed):
+        return (f"This copy runs from {app_folder()}, but the installed one is in "
+                f"{installed}. An update would go there rather than here.")
     return None
 
 

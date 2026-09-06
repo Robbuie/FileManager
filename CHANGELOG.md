@@ -42,8 +42,12 @@ change gets an entry and a version bump.
   it. Signing is the upgrade path if this ever runs on a machine other than the
   author's, and it is written down in `app/core/updates.py` so it does not
   become an accident.
-- Updating only works from an installed build. Run from a checkout, the menu
-  entry says so rather than doing nothing.
+- Updating only works from an installed build, and the check is a real one:
+  the application compares the folder it is running from against the
+  `InstallLocation` Inno Setup recorded, so a copy started out of
+  `dist\FileManager\` or off a stick says where the installed copy is instead
+  of downloading an update that would land somewhere else and leave the old
+  version running.
 
 ## [0.6.0]
 
