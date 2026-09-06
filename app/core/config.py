@@ -53,6 +53,10 @@ DEFAULTS: dict[str, Any] = {
     "timeout.delete": 300.0,
     "timeout.drives": 10.0,
     "timeout.free_space": 10.0,
+    # Association lookups against the local registry, in a batch. Generous
+    # because a shell extension can be slow the first time it is loaded, and
+    # short of a listing because nothing is waiting on the answer.
+    "timeout.icon": 15.0,
 
     # Network paths are polled rather than watched: SMB change notification is
     # not reliable enough to trust a view to. NOT WIRED UP YET, and off until
@@ -67,6 +71,12 @@ DEFAULTS: dict[str, Any] = {
     # user has already said no to.
     "updates.check_on_launch": True,
     "updates.skip_version": "",
+
+    # Real shell icons in the listing. On, because the point of them is that a
+    # folder reads at a glance. Off is here for the day a shell extension
+    # misbehaves: it costs the pictures and nothing else, and a file manager
+    # that starts is worth more than one that looks right.
+    "icons.shell": True,
 
     "window.width": 1280,
     "window.height": 760,

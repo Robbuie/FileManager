@@ -32,9 +32,10 @@ BAD = "bad"
 class Tab:
     """One folder being looked at, with where it has been."""
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, icons=None) -> None:
         self.path = paths.normalize(path)
         self.model = ListingModel()
+        self.model.set_icons(icons)
         self.history: list[str] = [self.path]
         self.position = 0
         self.request_id: int | None = None
@@ -68,12 +69,15 @@ class Pane(QObject):
     revealRequested = Signal(str)      # put the cursor on this name, once it is there
     folderChanged = Signal(str)        # something in this folder was created or removed
 
-    def __init__(self, bridge, config, side: str, parent=None) -> None:
+    def __init__(self, bridge, config, side: str, icons=None, parent=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
         self._side = side
-        self.tabs: list[Tab] = [Tab(config.get(f"{side}.path"))]
+        # Shared with the other pane and with every tab either of them opens:
+        # the picture for a .pdf is the same on both sides of the window.
+        self.icons = icons
+        self.tabs: list[Tab] = [Tab(config.get(f"{side}.path"), icons)]
         self.index = 0
 
     # ------------------------------------------------------------------ state
@@ -289,7 +293,7 @@ class Pane(QObject):
     # ------------------------------------------------------------------- tabs
 
     def open_tab(self, path: str | None = None) -> None:
-        self.tabs.append(Tab(path or self.current.path))
+        self.tabs.append(Tab(path or self.current.path, self.icons))
         self.index = len(self.tabs) - 1
         self.tabsChanged.emit()
         self.currentChanged.emit()

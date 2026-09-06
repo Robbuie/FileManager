@@ -97,10 +97,21 @@ class ListingModel(QAbstractTableModel):
         super().__init__(parent)
         self._all: list[Entry] = []      # everything that arrived
         self._rows: list[Entry] = []     # what the filter lets through
+        self._icons = None               # set by the pane; None draws no icons
         self._has_parent = False
         self._sort_column = Column.NAME
         self._sort_order = Qt.AscendingOrder
         self._filter = ""
+
+    def set_icons(self, provider) -> None:
+        """Where the decoration comes from, or None for a model without one.
+
+        Injected rather than imported so the model stays something that can be
+        built and checked without a worker behind it, which is what its tests
+        do. `provider.icon(entry)` is called during a paint and must answer
+        from what it already has.
+        """
+        self._icons = provider
 
     @property
     def sort_column(self) -> "Column":
@@ -248,6 +259,8 @@ class ListingModel(QAbstractTableModel):
         if self.is_parent_row(row):
             if role == Qt.DisplayRole and column == Column.NAME:
                 return PARENT_NAME
+            if role == Qt.DecorationRole and column == Column.NAME:
+                return self._icons.folder_icon() if self._icons is not None else None
             if role == self.IsDirRole:
                 return True
             return None
@@ -260,6 +273,12 @@ class ListingModel(QAbstractTableModel):
             return entry.is_dir
         if role == self.EntryRole:
             return entry
+        if role == Qt.DecorationRole:
+            # Only the name column: an icon in every column is four pictures
+            # of the same file on one row.
+            if column != Column.NAME or self._icons is None:
+                return None
+            return self._icons.icon(entry)
         if role == Qt.TextAlignmentRole and column == Column.SIZE:
             return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.ToolTipRole and column == Column.SIZE and not entry.is_dir:

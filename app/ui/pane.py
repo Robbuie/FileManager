@@ -11,8 +11,16 @@ keyboard, knowing where the next keystroke lands is not decoration.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QItemSelection, QItemSelectionModel, QModelIndex, Qt, Signal
+from PySide6.QtCore import (
+    QItemSelection,
+    QItemSelectionModel,
+    QModelIndex,
+    QSize,
+    Qt,
+    Signal,
+)
 
+from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size
 from app.ui import dialogs
 from PySide6.QtWidgets import (
@@ -67,9 +75,9 @@ class PaneWidget(QFrame):
         self._drives.setToolTip("Drive")
         self._drives.activated.connect(self._on_drive_chosen)
 
-        # Arrows, not icons. Real SVG icons come with the shell integration,
-        # when there is a way to tint them from the accent; until then a glyph
-        # that follows the text colour beats a bitmap that does not.
+        # Arrows, not icons. The shell icons in the listing are the file
+        # types; chrome is a different question, and a glyph that follows the
+        # text colour through five themes beats a bitmap that does not.
         self._back = self._button("←", "Back (Alt+Left)", self._pane.go_back)
         self._forward = self._button("→", "Forward (Alt+Right)", self._pane.go_forward)
         self._up = self._button("↑", "Up (Backspace)", self._pane.go_up)
@@ -97,6 +105,11 @@ class PaneWidget(QFrame):
         self._view.setAlternatingRowColors(True)
         self._view.setWordWrap(False)
         self._view.setSortingEnabled(True)
+        # Said rather than left to the style, which picks a size from the
+        # platform and would leave the rows taller than the density asked for.
+        # A larger pixmap on a scaled display still lands in this box: it
+        # carries its own density and Qt draws it at the logical size.
+        self._view.setIconSize(QSize(ROW_ICON, ROW_ICON))
         self._view.setTabKeyNavigation(False)  # Tab belongs to the window
         self._view.verticalHeader().setVisible(False)
         self._view.horizontalHeader().setStretchLastSection(False)
@@ -150,6 +163,14 @@ class PaneWidget(QFrame):
         self._pane.spaceChanged.connect(self._space.setText)
         self._pane.revealRequested.connect(self._reveal)
         self._volumes.changed.connect(self._sync_drives)
+        if self._pane.icons is not None:
+            # A repaint, not a model signal. The view asks the model for the
+            # decoration of the rows it is about to draw and no others, so
+            # telling it to draw again is both the cheapest way to show a
+            # newly arrived icon and the only one that stays cheap at 50,000
+            # rows -- a dataChanged over the whole model would have Qt build
+            # an index per row to find out it is not on screen.
+            self._pane.icons.changed.connect(self._view.viewport().update)
 
         # Switching back to a tab must not connect its model a second time.
         self._watched: set = set()

@@ -73,6 +73,7 @@ python -m app.io.harness resolve S:\Jobs                 # letter, UNC, worker k
 python -m app.io.harness list S:\Jobs --timeout 20       # rows, first batch, rate
 python -m app.io.harness list S:\Jobs --kill-after 2000  # kill mid-listing
 python -m app.io.harness soak S:\Jobs --count 40 --interval 3 --retry
+python -m app.io.harness icons S:\Jobs                    # kinds in a folder, and their icons
 python -m app.io.harness copy S:\Jobs\big D:\scratch --conflict rename
 python -m app.io.harness move S:\Jobs\big D:\scratch --cancel-after 50000000
 ```
@@ -331,6 +332,13 @@ Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 - **Shell integration is `pywin32`, and third-party context menu entries need
   real `IContextMenu` handling** — TortoiseSVN and 7-Zip do not appear otherwise.
   UAC elevation for protected folders is part of this, not a later addition.
+- **Icons are asked for by kind, never by row.** `SHGFI_USEFILEATTRIBUTES` is
+  what makes them safe: the shell answers from the extension alone and does
+  not go near the path, so the request goes to the local worker and cannot be
+  stuck behind the share being listed. An icon request that carries a path is
+  a 50,000-round-trip listing waiting to happen, and `_shell_icon` refuses
+  one. Reading the icon out of an executable or a shortcut is the exception,
+  and has to be a per-path request against that file's own volume.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
 - **A drive letter can be present and dead at the same time.** Presence in
@@ -342,10 +350,11 @@ Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 0. Done so far: the io layer (0.2), the window with panes, tabs and navigation
    (0.3), the chrome that makes it usable -- opening files, drives, filter,
    selection, free space (0.4), single-call operations: mkdir, rename and
-   delete to the Recycle Bin (0.5), and the copy/move engine with its queue
-   (0.6). What is left before this replaces Double Commander day to day: the
-   installer, shell icons and context menu, and a transfer that outlives the
-   window.
+   delete to the Recycle Bin (0.5), the copy/move engine with its queue (0.6),
+   the installer and auto-update (0.7), and shell icons in the listing (0.8).
+   What is left before this replaces Double Commander day to day: the real
+   Explorer context menu with UAC elevation, and a transfer that outlives
+   the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

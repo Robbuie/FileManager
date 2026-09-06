@@ -32,6 +32,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
 
     from app.core.bridge import Bridge
     from app.core.config import Config
+    from app.core.icons import Icons
     from app.core.pane import Pane
     from app.core.transfers import TransferQueue
     from app.core.volumes import Volumes
@@ -51,10 +52,12 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
 
     pool = WorkerPool()
     bridge = Bridge(pool)
+    icons = Icons(bridge, config)
     volumes = Volumes(bridge, config)
-    window = MainWindow(config, Pane(bridge, config, "left"),
-                        Pane(bridge, config, "right"), volumes, TransferQueue())
+    window = MainWindow(config, Pane(bridge, config, "left", icons),
+                        Pane(bridge, config, "right", icons), volumes, TransferQueue())
     volumes.refresh()
+    icons.start()
     window.resize(width, height)
     window.show()
 

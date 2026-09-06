@@ -5,6 +5,44 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.8.0]
+
+### Added
+- Real shell icons in the listing. Every row draws the icon Windows uses for
+  its file type, so a folder reads at a glance rather than as a column of
+  names.
+- Icons are asked for by **kind**, not by row. A folder of 50,000 files
+  holding thirty extensions is thirty association lookups, and the answers are
+  kept for the rest of the session -- the second folder of the day usually
+  costs nothing. `python -m app.io.harness icons <folder>` lists a folder,
+  works out the kinds in it and reports both numbers, which is the way to see
+  that this is behaving.
+- The lookup goes to the **local** worker whatever volume the rows came from,
+  and asks the shell with `SHGFI_USEFILEATTRIBUTES` -- which answers from the
+  extension alone and does not go near the path. Icons for a listing of a
+  share that is answering slowly are not queued behind that share, because
+  nothing about them is on it.
+- A scaled display gets the 32-pixel icons and draws them at the same size in
+  the row, so the listing is sharp without the rows growing.
+- `icons.shell` in the settings file turns the whole thing off. It is on by
+  default and there for the day a shell extension misbehaves: turning it off
+  costs the pictures and nothing else.
+
+### Changed
+- `tests/conftest.py` builds one Qt application for the whole test run. Qt
+  allows one per process and will not widen it later, so leaving it to
+  collection order meant a new test could break an unrelated one by getting
+  there first.
+
+### Known limits
+- A file with an icon of its own -- an executable, a shortcut, an `.ico` --
+  draws the generic icon for its type. Reading the real one means opening the
+  file, which is a per-path request against that file's own volume rather than
+  a lookup that cannot block, and it is deliberately not in this release.
+- Overlay icons are not drawn: no shared-folder arrow, no OneDrive tick, no
+  TortoiseSVN status marks. Those come from the same shell extensions as the
+  context menu and belong with it.
+
 ## [0.7.0]
 
 ### Added

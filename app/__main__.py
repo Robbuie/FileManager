@@ -23,6 +23,7 @@ def main() -> int:
 
     from app.core.bridge import Bridge
     from app.core.config import Config
+    from app.core.icons import Icons
     from app.core.pane import Pane
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
@@ -49,8 +50,9 @@ def main() -> int:
 
     pool = WorkerPool()
     bridge = Bridge(pool)
-    left = Pane(bridge, config, "left")
-    right = Pane(bridge, config, "right")
+    icons = Icons(bridge, config)
+    left = Pane(bridge, config, "left", icons)
+    right = Pane(bridge, config, "right", icons)
     volumes = Volumes(bridge, config)
     transfers = TransferQueue()
     updates = Updates(config, __version__)
@@ -63,6 +65,10 @@ def main() -> int:
     left.refresh()
     right.refresh()
     volumes.refresh()
+    # The screen is only knowable once there is one. A scaled display gets the
+    # 32-pixel icons, which draw at the same size in the row and are the
+    # difference between a crisp listing and a soft one.
+    icons.start(scale=float(app.devicePixelRatio()))
     updates.start_if_wanted()
 
     try:

@@ -30,7 +30,16 @@ import time
 from typing import Any
 
 from app.io import paths
-from app.io.protocol import BATCH_SIZE, Entry, Op, Reply, Request, Status
+from app.io.protocol import (
+    BATCH_SIZE,
+    ICON_FILE,
+    ICON_FOLDER,
+    Entry,
+    Op,
+    Reply,
+    Request,
+    Status,
+)
 
 #: The shell, for opening a file the way Explorer does. Optional at import so
 #: the module still loads where pywin32 does not; `_open` says so rather than
@@ -38,10 +47,14 @@ from app.io.protocol import BATCH_SIZE, Entry, Op, Reply, Request, Status
 try:
     import pythoncom
     import win32con
+    import win32gui
+    import win32ui
     from win32com.shell import shell as win32shell, shellcon
 except Exception:  # noqa: BLE001 - reported by _open, like paths.win32_problem
     pythoncom = None
     win32con = None
+    win32gui = None
+    win32ui = None
     win32shell = None
     shellcon = None
 
@@ -62,6 +75,11 @@ CHECK_INTERVAL = 128
 #: to the caller: GONE is what puts a tab into "reconnecting" instead of
 #: showing an error nobody can act on.
 _GONE_WINERRORS = frozenset({51, 53, 54, 55, 59, 64, 67, 121, 1222, 1231, 1232})
+
+#: Characters that would turn an icon key into something path-shaped. The
+#: guarantee an ICON request makes is that it never touches a path, and the
+#: way that guarantee gets lost is by someone handing it one.
+_SEPARATORS = ("\\", "/", ":")
 
 
 def run(inbox: Any, outbox: Any, control: Any) -> None:
@@ -135,9 +153,7 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
             time.sleep(0.25)
         outbox.put(Reply(request.id, Status.OK, payload={"stalled": limit}))
     elif request.op is Op.ICON:
-        # Shell icon extraction lands with the shell integration work, when the
-        # payload format is decided by what the view wants to draw.
-        outbox.put(Reply(request.id, Status.ERROR, message="ICON is not implemented yet"))
+        _icon(request, outbox)
     else:
         outbox.put(Reply(request.id, Status.ERROR, message=f"unknown op {request.op!r}"))
 
@@ -379,6 +395,189 @@ def _free_space(request: Request, outbox: Any) -> None:
     outbox.put(Reply(request.id, Status.OK, payload={
         "total": usage.total, "used": usage.used, "free": usage.free,
     }))
+
+
+def _icon(request: Request, outbox: Any) -> None:
+    """Shell icons for a set of kinds, without going near a volume.
+
+    `SHGFI_USEFILEATTRIBUTES` is what makes this safe to ask for while a
+    listing of 50,000 rows is still painting: it tells the shell to answer
+    from the extension and the attributes handed in and not to look at the
+    path at all. The names below are invented for that reason. Nothing called
+    `file.pdf` needs to exist, and on a share that has stopped answering it
+    must not be looked for -- the icon for a PDF is a fact about this machine,
+    not about the folder being listed.
+
+    The cost of that is a file with an icon of its own -- an executable, a
+    shortcut, an .ico -- showing the generic icon for its type. Reading the
+    real one means opening the file, which is a per-path request against that
+    file's own volume and is deliberately not this call.
+
+    Missing keys rather than null ones: a kind the shell had nothing for is
+    left out of the answer, so a caller can tell "no icon" from "not asked".
+    """
+    keys = [str(key) for key in (request.args.get("keys") or [])]
+    size = 32 if int(request.args.get("size", 16) or 16) > 16 else 16
+    if not keys:
+        outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": {}}))
+        return
+    if win32gui is None or win32ui is None or shellcon is None:
+        outbox.put(Reply(request.id, Status.ERROR, payload={"size": size, "icons": {}},
+                         message="shell icons need pywin32 on Windows"))
+        return
+
+    _ensure_com()
+    deadline = time.monotonic() + request.timeout
+    icons: dict[str, bytes] = {}
+    for key in keys:
+        if time.monotonic() > deadline:
+            outbox.put(Reply(request.id, Status.TIMEOUT,
+                             payload={"size": size, "icons": icons},
+                             message="the shell did not answer within the deadline"))
+            return
+        pixels = _shell_icon(key, size)
+        if pixels is not None:
+            icons[key] = pixels
+    outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": icons}))
+
+
+def _shell_icon(key: str, size: int) -> bytes | None:
+    """One icon, by kind, as premultiplied BGRA.
+
+    A key is an extension with its dot, or one of the two names for the kinds
+    that are not extensions. Anything else is refused rather than passed
+    through to the shell.
+    """
+    if not key or any(ch in key for ch in _SEPARATORS):
+        return None
+    if key == ICON_FOLDER:
+        name, attributes = "folder", win32con.FILE_ATTRIBUTE_DIRECTORY
+    elif key == ICON_FILE:
+        name, attributes = "file", win32con.FILE_ATTRIBUTE_NORMAL
+    elif key.startswith("."):
+        name, attributes = "file" + key, win32con.FILE_ATTRIBUTE_NORMAL
+    else:
+        return None
+
+    flags = shellcon.SHGFI_ICON | shellcon.SHGFI_USEFILEATTRIBUTES
+    flags |= shellcon.SHGFI_LARGEICON if size > 16 else shellcon.SHGFI_SMALLICON
+    try:
+        answer = win32gui.SHGetFileInfo(name, attributes, flags)
+    except Exception:  # noqa: BLE001 - a missing association is not an error
+        return None
+    handle = _icon_handle(answer)
+    if not handle:
+        return None
+    try:
+        return _icon_pixels(handle, size)
+    finally:
+        try:
+            win32gui.DestroyIcon(handle)
+        except Exception:  # noqa: BLE001 - already gone is the outcome wanted
+            pass
+
+
+def _icon_handle(answer: Any) -> int:
+    """The HICON out of whatever shape pywin32 returned.
+
+    Documented as a two-tuple of a result and the SHFILEINFO, and returned
+    that way by every version this has been run against -- but the structure
+    itself starts with the handle, so both shapes are read rather than one
+    asserted. Guessing wrong here would leak an icon handle per row.
+    """
+    if isinstance(answer, (tuple, list)) and answer:
+        first = answer[0]
+        if isinstance(first, (tuple, list)) and first:
+            return int(first[0] or 0)
+        if len(answer) > 1 and isinstance(answer[1], (tuple, list)) and answer[1]:
+            return int(answer[1][0] or 0)
+        if isinstance(first, int) and len(answer) == 1:
+            return int(first)
+    return 0
+
+
+#: The two backgrounds an icon is composited against to recover its alpha.
+_ON_BLACK = 0x000000
+_ON_WHITE = 0xFFFFFF
+
+
+def _icon_pixels(hicon: int, size: int) -> bytes | None:
+    """An icon as premultiplied BGRA, drawn twice to work out its alpha.
+
+    `DrawIconEx` composites correctly onto whatever is already there, both for
+    a modern 32-bit icon and for a legacy one carrying only a mask. What it
+    leaves in the fourth byte afterwards is not dependable: a device bitmap
+    has no alpha channel to speak of, and reading one back gives zeroes for
+    icons that are plainly visible on screen. Deriving the alpha from a mask
+    means asking for the mask and handling both icon formats; drawing twice
+    handles both without knowing which one this is.
+
+    So the same icon is drawn once on black and once on white. A pixel that
+    came out the same on both is opaque, one that differs by the full range
+    was never painted, and everything between is the partial coverage at the
+    edges. The black pass is by definition the colour already multiplied by
+    that alpha, which is the form Qt wants to be handed.
+    """
+    expected = size * size * 4
+    on_black = _draw_icon(hicon, size, _ON_BLACK)
+    on_white = _draw_icon(hicon, size, _ON_WHITE)
+    if on_black is None or on_white is None:
+        return None
+    if len(on_black) != expected or len(on_white) != expected:
+        return None  # not the 32-bit surface this assumes; better nothing
+
+    pixels = bytearray(on_black)
+    for index in range(0, expected, 4):
+        # Any channel answers the question and red is as good as the others:
+        # the difference between the two passes is exactly what the icon did
+        # not cover.
+        alpha = 255 - (on_white[index + 2] - on_black[index + 2])
+        pixels[index + 3] = 0 if alpha < 0 else (255 if alpha > 255 else alpha)
+    return bytes(pixels)
+
+
+def _draw_icon(hicon: int, size: int, fill: int) -> bytes | None:
+    """Draw one icon onto a solid background and read the pixels back.
+
+    Every handle taken here is given back in the same call. A worker that
+    draws a few thousand icons over an afternoon and leaks one GDI object
+    each time stops being able to draw anything at all, and the way that
+    presents is a window that goes blank rather than an error anybody can
+    trace back to here.
+    """
+    screen = win32gui.GetDC(0)
+    surface = memory = bitmap = None
+    try:
+        surface = win32ui.CreateDCFromHandle(screen)
+        memory = surface.CreateCompatibleDC()
+        bitmap = win32ui.CreateBitmap()
+        bitmap.CreateCompatibleBitmap(surface, size, size)
+        memory.SelectObject(bitmap)
+        memory.FillSolidRect((0, 0, size, size), fill)
+        win32gui.DrawIconEx(memory.GetSafeHdc(), 0, 0, hicon, size, size,
+                            0, None, win32con.DI_NORMAL)
+        return bytes(bitmap.GetBitmapBits(True))
+    except Exception:  # noqa: BLE001 - a drawing failure is one missing icon
+        return None
+    finally:
+        if bitmap is not None:
+            try:
+                win32gui.DeleteObject(bitmap.GetHandle())
+            except Exception:  # noqa: BLE001
+                pass
+        if memory is not None:
+            try:
+                memory.DeleteDC()
+            except Exception:  # noqa: BLE001
+                pass
+        if surface is not None:
+            # Detached rather than deleted: the handle underneath belongs to
+            # the desktop, and deleting it takes a DC away from every process.
+            try:
+                surface.Detach()
+            except Exception:  # noqa: BLE001
+                pass
+        win32gui.ReleaseDC(0, screen)
 
 
 # --------------------------------------------------------------------------

@@ -30,10 +30,14 @@ from typing import Any
 
 from app.io import paths
 from app.io.pool import WorkerPool
-from app.io.protocol import Entry, Op, Reply, Status
+from app.io.protocol import Entry, Op, Reply, Status, icon_key
 
 _SETTLED = {Status.OK, Status.TIMEOUT, Status.CANCELLED,
             Status.DENIED, Status.GONE, Status.ERROR}
+
+#: The path an ICON request carries. Empty keys the local worker, which is
+#: where an association lookup belongs whatever volume the rows came from.
+LOCAL = ""
 
 
 @dataclass
@@ -48,6 +52,7 @@ class Outcome:
     first_batch: float | None = None
     elapsed: float = 0.0
     names: list[str] = field(default_factory=list)
+    kinds: set = field(default_factory=set)
 
 
 def _run(
@@ -57,6 +62,7 @@ def _run(
     *,
     timeout: float,
     keep_names: int = 0,
+    keep_kinds: bool = False,
     cancel_after: int = 0,
     kill_after: int = 0,
     args: dict | None = None,
@@ -90,6 +96,8 @@ def _run(
                 outcome.first_batch = time.monotonic() - started
             if keep_names:
                 outcome.names.extend(e.name for e in rows[: keep_names - len(outcome.names)])
+            if keep_kinds:
+                outcome.kinds.update(icon_key(e) for e in rows)
             if cancel_after and outcome.rows >= cancel_after:
                 cancel_after = 0
                 pool.cancel(request_id)
@@ -111,6 +119,8 @@ def _run(
                 outcome.names.extend(
                     e.name for e in reply.payload[: keep_names - len(outcome.names)]
                 )
+            if keep_kinds:
+                outcome.kinds.update(icon_key(e) for e in reply.payload)
         break
 
     outcome.elapsed = time.monotonic() - started
@@ -242,6 +252,58 @@ def cmd_open(args: argparse.Namespace) -> int:
             _report("opened", outcome.payload.get("path"))
             _report("verb", outcome.payload.get("verb") or "(default)")
         return _exit_code(outcome)
+    finally:
+        pool.shutdown()
+
+
+def cmd_icons(args: argparse.Namespace) -> int:
+    """List a folder, work out the kinds in it, and ask the shell for each.
+
+    Two commands in one because the interesting number is the ratio: a folder
+    of 50,000 rows holding thirty distinct extensions is thirty association
+    lookups, and if this reports otherwise then something is keying on the row
+    rather than the kind.
+
+    The other thing it says is which kinds came back empty. An extension the
+    shell has no icon for is not a failure -- the listing shows the generic
+    file icon for it -- but a run where nothing at all came back is pywin32
+    missing or the shell refusing, and that is worth telling apart from a
+    quiet afternoon.
+    """
+    pool = WorkerPool()
+    try:
+        listing = _run(pool, Op.LIST, args.path, timeout=args.timeout, keep_kinds=True)
+        _report_outcome(args.path, listing)
+        if listing.status is not Status.OK and not listing.kinds:
+            return _exit_code(listing)
+
+        keys = sorted(listing.kinds)
+        _report("kinds", f"{len(keys)} distinct in {listing.rows:,} rows")
+        icons = _run(pool, Op.ICON, LOCAL, timeout=args.icon_timeout,
+                     args={"keys": keys, "size": args.size})
+        payload = icons.payload if isinstance(icons.payload, dict) else {}
+        drawn = payload.get("icons") or {}
+        size = payload.get("size", args.size)
+        _report("icon status", icons.status.value)
+        if icons.message:
+            _report("message", icons.message)
+        _report("size", f"{size}x{size}")
+        _report("with icons", f"{len(drawn)} of {len(keys)}")
+        _report("elapsed", f"{icons.elapsed:.3f}s")
+
+        expected = int(size) * int(size) * 4
+        for key in keys:
+            pixels = drawn.get(key)
+            if pixels is None:
+                print(f"  {key:<12} -")
+                continue
+            # The alpha bytes are the check that matters. An icon that came
+            # back the right length but fully transparent is the failure this
+            # is most likely to have: bytes arrived, and nothing draws.
+            visible = sum(1 for value in pixels[3::4] if value)
+            size_note = "" if len(pixels) == expected else f"  (wrong length {len(pixels)})"
+            print(f"  {key:<12} {visible:>5} of {len(pixels) // 4} pixels{size_note}")
+        return _exit_code(icons)
     finally:
         pool.shutdown()
 
@@ -537,6 +599,13 @@ def build_parser() -> argparse.ArgumentParser:
     opening.set_defaults(func=cmd_open)
 
     with_path("mkdir", "create one folder").set_defaults(func=cmd_mkdir)
+
+    icons = with_path("icons", "shell icons for every kind in a folder")
+    icons.add_argument("--size", type=int, default=16, choices=[16, 32],
+                       help="16 for a normal display, 32 for a scaled one")
+    icons.add_argument("--icon-timeout", type=float, default=15.0,
+                       help="seconds for the whole batch of lookups")
+    icons.set_defaults(func=cmd_icons)
 
     renaming = with_path("rename", "rename in place; will not overwrite")
     renaming.add_argument("name", help="the new bare name, not a path")

@@ -37,10 +37,23 @@ class Op(str, Enum):
 
     LIST = "list"
     STAT = "stat"
-    ICON = "icon"
     DIR_SIZE = "dir_size"
     RESOLVE = "resolve"
     PING = "ping"
+
+    #: Shell icons for a set of kinds, `args["keys"]`, at `args["size"]`.
+    #: A kind is an extension, `ICON_FOLDER` or `ICON_FILE` -- never a path,
+    #: and that is the point. The shell is asked with SHGFI_USEFILEATTRIBUTES,
+    #: which answers from the extension alone and does not go near a volume,
+    #: so a folder of 50,000 rows on a share that is answering slowly costs
+    #: one lookup per distinct extension against the local registry rather
+    #: than 50,000 reads over SMB.
+    #:
+    #: The reply is `{"size": n, "icons": {key: bgra}}`, where `bgra` is
+    #: `n * n` pixels of premultiplied blue, green, red, alpha -- bytes,
+    #: because a handle does not cross a process boundary and an image object
+    #: is not picklable. A key the shell had nothing for is absent.
+    ICON = "icon"
 
     #: Hand a path to the shell and let Windows decide what opens it. In a
     #: worker like everything else: ShellExecute against a path on a share that
@@ -141,6 +154,36 @@ class Reply:
 #: Rows per streamed batch. Large enough that the queue is not the bottleneck,
 #: small enough that the first rows paint while the rest are still arriving.
 BATCH_SIZE = 1000
+
+#: The two icon kinds that are not an extension. A folder is not a file with no
+#: extension, and Windows does not think it is one either.
+ICON_FOLDER = "folder"
+ICON_FILE = "file"
+
+#: The sizes the shell keeps a system image list for. Anything else is one of
+#: these scaled, and looks it, so a caller picks between them rather than
+#: passing pixels and hoping.
+ICON_SIZES = (16, 32)
+
+
+def icon_key(entry: Entry) -> str:
+    """The icon kind an entry draws as.
+
+    Here rather than beside the model because it is the vocabulary of the
+    request: the worker answers in these keys and the cache is keyed on them,
+    so there is one definition of what a kind is and both ends use it.
+
+    Lowercased, because the association database does not distinguish PDF from
+    pdf and a cache that did would ask for both. A leading dot is part of a
+    name rather than an extension, which is why `.gitignore` is a file with no
+    extension and not a kind of its own.
+    """
+    if entry.is_dir:
+        return ICON_FOLDER
+    stem, dot, suffix = entry.name.rpartition(".")
+    if not dot or not stem or not suffix:
+        return ICON_FILE
+    return f".{suffix.lower()}"
 
 
 # --------------------------------------------------------------------------

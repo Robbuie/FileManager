@@ -41,6 +41,7 @@ class MainWindow(QMainWindow):
         self._config = config
         self._updates = updates
         self._panes = (left, right)
+        self._icons = left.icons
         self._volumes = volumes
         self._transfers = transfers
         self._queue_dialog: QueueDialog | None = None
@@ -143,6 +144,11 @@ class MainWindow(QMainWindow):
         unc.setChecked(bool(self._config.get("left.show_unc")))
         unc.triggered.connect(self._set_show_unc)
         view.addAction(unc)
+        shell_icons = QAction("Shell icons", self, checkable=True)
+        shell_icons.setChecked(bool(self._config.get("icons.shell")))
+        shell_icons.setEnabled(self._icons is not None)
+        shell_icons.triggered.connect(self._set_shell_icons)
+        view.addAction(shell_icons)
 
         helping = self.menuBar().addMenu("&Help")
         version = QAction(f"Version {__version__}", self)
@@ -159,6 +165,17 @@ class MainWindow(QMainWindow):
             lambda checked: self._config.set("updates.check_on_launch", bool(checked)))
         automatic.setEnabled(self._updates is not None)
         helping.addAction(automatic)
+
+    def _set_shell_icons(self, checked: bool) -> None:
+        """Turn the pictures off, or back on, without a restart.
+
+        Without a restart because of when it gets reached for: a shell
+        extension misbehaving is happening now, and a setting that only takes
+        effect next launch is no help in that moment.
+        """
+        self._config.set("icons.shell", bool(checked))
+        if self._icons is not None:
+            self._icons.reload()
 
     def _axis_menu(self, parent, title: str, labels: dict[str, str], key: str) -> None:
         """One submenu per axis of the design system.
