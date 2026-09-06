@@ -19,7 +19,7 @@ from typing import Callable
 from PySide6.QtCore import QObject, Signal
 
 from app.core.listing import ListingModel, format_size
-from app.io import paths
+from app.io import elevate, paths
 from app.io.protocol import Op, Reply, Status
 
 #: What a status line says while a listing is in flight. Named because the
@@ -32,10 +32,12 @@ BAD = "bad"
 class Tab:
     """One folder being looked at, with where it has been."""
 
-    def __init__(self, path: str, icons=None) -> None:
+    def __init__(self, path: str, icons=None, overlays=None) -> None:
         self.path = paths.normalize(path)
         self.model = ListingModel()
         self.model.set_icons(icons)
+        self.model.set_overlays(overlays)
+        self.model.set_folder(self.path)
         self.history: list[str] = [self.path]
         self.position = 0
         self.request_id: int | None = None
@@ -68,8 +70,13 @@ class Pane(QObject):
     spaceChanged = Signal(str)         # free space on this tab's volume, or ""
     revealRequested = Signal(str)      # put the cursor on this name, once it is there
     folderChanged = Signal(str)        # something in this folder was created or removed
+    #: Windows refused an operation. The plan that would run it again with
+    #: administrator rights, and the sentence describing it. Nothing happens
+    #: unless somebody answers the dialog this puts on screen.
+    elevationOffered = Signal(object, str)
 
-    def __init__(self, bridge, config, side: str, icons=None, parent=None) -> None:
+    def __init__(self, bridge, config, side: str, icons=None, overlays=None,
+                 menu=None, parent=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -77,7 +84,11 @@ class Pane(QObject):
         # Shared with the other pane and with every tab either of them opens:
         # the picture for a .pdf is the same on both sides of the window.
         self.icons = icons
-        self.tabs: list[Tab] = [Tab(config.get(f"{side}.path"), icons)]
+        self.overlays = overlays
+        # Shared for a different reason: there is one shell host, and one
+        # context menu can be open at a time whichever pane it belongs to.
+        self.menu = menu
+        self.tabs: list[Tab] = [Tab(config.get(f"{side}.path"), icons, overlays)]
         self.index = 0
 
     # ------------------------------------------------------------------ state
@@ -105,6 +116,13 @@ class Pane(QObject):
         self._abandon(tab)
 
         tab.path = target
+        tab.model.set_folder(target)
+        if self.overlays is not None:
+            # Asked again rather than remembered. A badge is exactly the thing
+            # that changes while the file does not -- a commit turns forty red
+            # marks green without an mtime moving -- so a refresh that kept
+            # them would show the state before the commit.
+            self.overlays.forget(target)
         if record and (not tab.history or tab.history[tab.position] != target):
             del tab.history[tab.position + 1:]
             tab.history.append(target)
@@ -256,6 +274,46 @@ class Pane(QObject):
                      args={"names": names, "permanent": permanent},
                      failed="the delete did not finish")
 
+    def context_menu(self, names: list[str], *, extended: bool = False) -> None:
+        """Ask the shell for the menu for a selection in this tab's folder.
+
+        Names rather than paths, and this pane's folder rather than one the
+        widget worked out: the widget knows which rows are marked, and where
+        those rows are is this layer's business as it is everywhere else.
+        """
+        if self.menu is None or not self._config.get("menu.shell"):
+            return
+        self.menu.request(self.current.path, names, extended=extended)
+
+    def elevate(self, plan: dict) -> None:
+        """Run one refused operation again, as administrator.
+
+        Only ever reached from the dialog `elevationOffered` puts on screen.
+        The reply is treated exactly like the original operation's: the folder
+        is re-listed, because what is on disk is the truth and this is a
+        second guess at changing it.
+        """
+        tab = self.current
+        self._set_status(tab, f"{elevate.describe(plan)}, as administrator", BUSY)
+
+        def handle(reply: Reply) -> None:
+            if reply.status is Status.OK:
+                if tab is self.current:
+                    self.refresh()
+                self.folderChanged.emit(tab.path)
+                return
+            if reply.status is Status.DENIED:
+                self._set_status(tab, "the request to run as administrator was "
+                                      "refused", BAD)
+                return
+            self._set_status(tab, f"as administrator: {_explain(reply)}", BAD)
+
+        self._bridge.submit(
+            Op.ELEVATE, tab.path,
+            timeout=float(self._config.get("timeout.elevate")),
+            on_reply=handle, args={"plan": plan},
+        )
+
     def _mutate(self, tab: Tab, op: Op, path: str, *, timeout: float,
                 args: dict | None = None, reveal: str | None = None,
                 failed: str = "the operation failed") -> None:
@@ -269,6 +327,13 @@ class Pane(QObject):
         def handle(reply: Reply) -> None:
             if reply.status is not Status.OK:
                 self._set_status(tab, f"{failed}: {_explain(reply)}", BAD)
+                if reply.status is Status.DENIED:
+                    # Denied in a protected folder is the one failure with a
+                    # way forward, and it is a person's decision rather than
+                    # this layer's: what goes out is an offer.
+                    plan = elevate.plan_for(op, path, args)
+                    if plan is not None:
+                        self.elevationOffered.emit(plan, elevate.describe(plan))
                 return
             if reveal:
                 tab.reveal_name = reveal
@@ -293,7 +358,7 @@ class Pane(QObject):
     # ------------------------------------------------------------------- tabs
 
     def open_tab(self, path: str | None = None) -> None:
-        self.tabs.append(Tab(path or self.current.path, self.icons))
+        self.tabs.append(Tab(path or self.current.path, self.icons, self.overlays))
         self.index = len(self.tabs) - 1
         self.tabsChanged.emit()
         self.currentChanged.emit()

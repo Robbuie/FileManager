@@ -72,6 +72,12 @@ class Bridge(QObject):
     def retry(self, path: str) -> None:
         self._pool.retry(path)
 
+    def retry_host(self) -> None:
+        """Let the shell host be spawned again after it has been restarted too
+        often. Called before every menu; see `WorkerPool.retry_host`.
+        """
+        self._pool.retry_host()
+
     def _deliver(self, reply: Reply) -> None:
         handler = (self._handlers.pop(reply.id, None)
                    if reply.status in _SETTLED else self._handlers.get(reply.id))

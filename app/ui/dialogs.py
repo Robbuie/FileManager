@@ -260,6 +260,45 @@ class UpdateReady(QDialog):
         layout.addWidget(buttons)
 
 
+class ElevateOffer(QDialog):
+    """Windows refused an operation. Offer to do exactly that one, elevated."""
+
+    def __init__(self, parent: QWidget | None, *, description: str) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Access denied")
+        self.setModal(True)
+        self.setMinimumWidth(460)
+
+        headline = QLabel("Windows refused that operation in this folder.")
+        headline.setWordWrap(True)
+
+        what = QLabel(description)
+        what.setWordWrap(True)
+        what.setProperty("role", "note")
+
+        note = QLabel(
+            "Running it as administrator asks Windows for consent and then "
+            "does this one operation. The application itself is not elevated, "
+            "and nothing else is carried over."
+        )
+        note.setWordWrap(True)
+        note.setProperty("role", "note")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Run as administrator")
+        buttons.button(QDialogButtonBox.Cancel).setText("Leave it")
+        buttons.button(QDialogButtonBox.Cancel).setDefault(True)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(headline)
+        layout.addWidget(what)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+
+
 def _count(value: int) -> str:
     return "1 item" if value == 1 else f"{value:,} items"
 
@@ -298,6 +337,11 @@ def offer_update(parent: QWidget, *, version: str, current: str, size: int) -> s
     if dialog.exec() != QDialog.Accepted:
         return UpdateOffer.LATER
     return dialog.answer
+
+
+def confirm_elevate(parent: QWidget, description: str) -> bool:
+    """True to run one refused operation again with administrator rights."""
+    return ElevateOffer(parent, description=description).exec() == QDialog.Accepted
 
 
 def confirm_install(parent: QWidget, *, version: str, transfers: bool) -> bool:

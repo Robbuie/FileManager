@@ -42,6 +42,8 @@ class MainWindow(QMainWindow):
         self._updates = updates
         self._panes = (left, right)
         self._icons = left.icons
+        self._overlays = left.overlays
+        self._shell_menu = left.menu
         self._volumes = volumes
         self._transfers = transfers
         self._queue_dialog: QueueDialog | None = None
@@ -57,6 +59,11 @@ class MainWindow(QMainWindow):
             self._splitter.addWidget(widget)
         for pane in self._panes:
             pane.folderChanged.connect(self._on_folder_changed)
+            pane.elevationOffered.connect(self._offer_elevation(pane))
+        if self._shell_menu is not None:
+            self._shell_menu.invoked.connect(self._on_shell_invoked)
+            self._shell_menu.problem.connect(
+                lambda message: self.statusBar().showMessage(message, 8000))
         for widget in self._widgets:
             widget.transferRequested.connect(self._on_transfer_requested)
         transfers.conflict.connect(self._on_conflict)
@@ -149,6 +156,20 @@ class MainWindow(QMainWindow):
         shell_icons.setEnabled(self._icons is not None)
         shell_icons.triggered.connect(self._set_shell_icons)
         view.addAction(shell_icons)
+        overlays = QAction("Icon overlays", self, checkable=True)
+        overlays.setChecked(bool(self._config.get("icons.overlays")))
+        overlays.setEnabled(self._overlays is not None)
+        overlays.setToolTip("Shared folders, OneDrive and source control badges. "
+                            "The one icon lookup that asks about a file rather "
+                            "than about its type.")
+        overlays.triggered.connect(self._set_overlays)
+        view.addAction(overlays)
+        shell_commands = QAction("Explorer context menu", self, checkable=True)
+        shell_commands.setChecked(bool(self._config.get("menu.shell")))
+        shell_commands.setEnabled(self._shell_menu is not None)
+        shell_commands.triggered.connect(
+            lambda checked: self._config.set("menu.shell", bool(checked)))
+        view.addAction(shell_commands)
 
         helping = self.menuBar().addMenu("&Help")
         version = QAction(f"Version {__version__}", self)
@@ -176,6 +197,43 @@ class MainWindow(QMainWindow):
         self._config.set("icons.shell", bool(checked))
         if self._icons is not None:
             self._icons.reload()
+
+    def _set_overlays(self, checked: bool) -> None:
+        """Turn the badges off, or back on, without a restart.
+
+        Same reasoning as the icons above, and rather more urgent: this is the
+        one thing in the listing that asks the shell about a file by name, so
+        it is the switch to reach for when a folder full of somebody's
+        source control working copy starts feeling slow.
+        """
+        self._config.set("icons.overlays", bool(checked))
+        if self._overlays is not None:
+            self._overlays.reload()
+
+    def _offer_elevation(self, pane):
+        """Windows refused something. Ask, then run that one operation elevated.
+
+        A closure per pane rather than one handler, because which pane asked
+        decides which folder gets re-listed afterwards, and the signal does
+        not carry it.
+        """
+        def offer(plan, description: str) -> None:
+            if dialogs.confirm_elevate(self, description):
+                pane.elevate(plan)
+        return offer
+
+    def _on_shell_invoked(self, verb: str, folder: str) -> None:
+        """A shell command ran. What it did is not knowable from here.
+
+        The shell does not report what a verb changed, and half of them change
+        something: an extension that commits, an archiver that writes a zip,
+        the shell's own Cut. So any pane showing that folder lists it again,
+        which is the same thing this window does after its own operations and
+        for the same reason -- the folder is the truth.
+        """
+        self._on_folder_changed(folder)
+        if verb:
+            self.statusBar().showMessage(f"ran {verb}", 4000)
 
     def _axis_menu(self, parent, title: str, labels: dict[str, str], key: str) -> None:
         """One submenu per axis of the design system.

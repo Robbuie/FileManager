@@ -5,6 +5,62 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.9.0]
+
+### Added
+- **The real Explorer context menu.** Right-click a row and the entries the
+  installed shell extensions add are there -- TortoiseSVN, 7-Zip, Open with,
+  Properties, whatever else this machine has -- under the application's own
+  verbs. Shift-right-click asks for the entries Explorer hides behind Shift.
+- The application's own operations come first, in their own words and with
+  their keys: Open, Copy F5, Move F6, Rename F2, Delete, Delete permanently,
+  New folder F7, Refresh. They are there whether or not the shell answers.
+- The shell's entries are **walked, not shown**: a separate process reads the
+  menu Windows built into plain items, and the window draws its own menu from
+  them. So the menu matches the rest of the application -- the same greys, the
+  same accent on the highlight -- rather than being a Windows menu dropped
+  into a themed window. Submenus, checked entries, disabled entries, the
+  default entry in bold and the extensions' own icons all come across.
+- **A shell host process.** Asking for a context menu means loading somebody
+  else's DLL and running their code against the selection, so it happens in a
+  process that owns nothing else. An extension that blocks on a share that has
+  gone away is killed by the pool's watchdog and costs a menu; in the window's
+  process it would freeze the application, which is the defect this whole
+  architecture exists to avoid.
+- **Running one refused operation as administrator.** A new folder, a rename
+  or a delete that Windows answers with ACCESS DENIED now offers to do that
+  one operation elevated. It starts a second process with the consent prompt,
+  which does exactly what the plan says and exits. The application itself is
+  never elevated, nothing is elevated silently, and the elevated process runs
+  the worker's own code rather than a second copy of it.
+- **Icon overlays.** The shared-folder arrow, the OneDrive tick and source
+  control status marks are drawn on the rows that carry them. This is the one
+  icon lookup that asks the shell about a file rather than about its type, so
+  it is bounded on purpose: only the rows on screen, one request per folder,
+  a short deadline, and one picture per badge-on-a-kind rather than one per
+  file -- a working copy of 400 modified files is a handful of images.
+- `View > Icon overlays` and `View > Explorer context menu` turn either of
+  them off without a restart, for the day an extension misbehaves.
+- Three harness commands, so all of it can be exercised without the window:
+  `menu <folder> [names...]` prints the menu tree with the ids and verbs and
+  will `--invoke` one of them, `overlays <folder>` reports how many rows carry
+  a badge and how many distinct pictures that cost, and
+  `elevate <action> <path>` runs one operation through the consent prompt.
+
+### Known limits
+- The menu for the background of a folder is the menu for that folder as an
+  item. It is not the shell view's own background menu, so it does not carry
+  New or Paste.
+- An entry an extension paints itself rather than naming arrives with no text
+  and is labelled from its verb. Explorer's recent-files entries are the
+  common example.
+- While a command from the menu has a dialog open, the shell entries are not
+  offered again -- the pane's own verbs still are. Queuing a second menu
+  behind that dialog is how a watchdog ends up closing it.
+- A transfer that Windows refuses is not offered elevation. Copy and move run
+  in the transfer engine rather than as a single call, and elevating one is
+  its own piece of work.
+
 ## [0.8.0]
 
 ### Added

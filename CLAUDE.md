@@ -329,9 +329,30 @@ Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 - **Destructive operations need a confirmed target before anything moves.** The
   app never picks a destination on its own and never reports what it did after
   the fact.
-- **Shell integration is `pywin32`, and third-party context menu entries need
-  real `IContextMenu` handling** — TortoiseSVN and 7-Zip do not appear otherwise.
-  UAC elevation for protected folders is part of this, not a later addition.
+- **The context menu runs somebody else's code, so it runs in its own
+  process.** `app/io/menu.py` builds the `IContextMenu`, walks the `HMENU`
+  into plain items and invokes by id; the window draws its own menu from
+  those. Two rules in there are not negotiable: an id is only ever used with
+  the token it arrived with, because the next menu numbers its commands the
+  same way; and the menu is released after an invoke or a dismissal, because a
+  live `IContextMenu` keeps a third-party DLL — and sometimes the folder —
+  open. Never build one in the window's process, whatever it would simplify.
+- **Do not queue anything behind an invoke.** A verb that opens a dialog holds
+  the host until a person answers it. A menu request queued behind that dialog
+  expires, the watchdog reads the host as wedged, and killing it closes their
+  dialog. `core/menu.py` refuses to ask while a command is open, and
+  `timeout.menu_invoke` is hours rather than seconds for the same reason.
+- **Elevation is one operation, never the application.** `app/io/elevate.py`
+  writes a plan, starts one process with the `runas` verb, and that process
+  runs the *worker's own handler* and exits. Only `elevate.ACTIONS` may be
+  elevated and the check is made on both sides. A copy of an operation that
+  only runs when elevated is a copy that is only tested when elevated.
+- **Overlays are the one exception to the rule below, and are bounded by
+  hand.** A badge is a fact about a file, so `Op.OVERLAY` carries a path and
+  goes to that file's own volume. What keeps it affordable is bookkeeping:
+  the rows on screen rather than the folder, one request per folder, a short
+  deadline, one picture per badge-on-a-kind, and the answers dropped when the
+  folder is listed again. Anything added there keeps all five.
 - **Icons are asked for by kind, never by row.** `SHGFI_USEFILEATTRIBUTES` is
   what makes them safe: the shell answers from the extension alone and does
   not go near the path, so the request goes to the local worker and cannot be
@@ -351,10 +372,10 @@ Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
    (0.3), the chrome that makes it usable -- opening files, drives, filter,
    selection, free space (0.4), single-call operations: mkdir, rename and
    delete to the Recycle Bin (0.5), the copy/move engine with its queue (0.6),
-   the installer and auto-update (0.7), and shell icons in the listing (0.8).
-   What is left before this replaces Double Commander day to day: the real
-   Explorer context menu with UAC elevation, and a transfer that outlives
-   the window.
+   the installer and auto-update (0.7), shell icons in the listing (0.8), and
+   the Explorer context menu, overlays and elevation (0.9). What is left
+   before this replaces Double Commander day to day: per-file icons for the
+   types that carry their own, and a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

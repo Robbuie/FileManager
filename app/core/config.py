@@ -57,6 +57,23 @@ DEFAULTS: dict[str, Any] = {
     # because a shell extension can be slow the first time it is loaded, and
     # short of a listing because nothing is waiting on the answer.
     "timeout.icon": 15.0,
+    # The Explorer context menu. Building it loads whichever shell extensions
+    # are installed, which is slow exactly once per extension per session and
+    # then not at all.
+    "timeout.menu": 15.0,
+    # Running one of its commands. Long, and it is not a mistake: what this
+    # waits for is a person answering a dialog somebody else's extension
+    # opened. A deadline short enough to be tidy is a deadline that closes
+    # their commit dialog for them.
+    "timeout.menu_invoke": 28800.0,
+    # Overlays, for the rows on screen. Short, because nothing waits on them
+    # and a share that is answering slowly should lose the badges rather than
+    # hold the worker.
+    "timeout.overlay": 8.0,
+    # One refused operation, run again as administrator. It covers the
+    # operation itself; the wait for the consent prompt is added on top of it
+    # in the worker.
+    "timeout.elevate": 300.0,
 
     # Network paths are polled rather than watched: SMB change notification is
     # not reliable enough to trust a view to. NOT WIRED UP YET, and off until
@@ -77,6 +94,16 @@ DEFAULTS: dict[str, Any] = {
     # misbehaves: it costs the pictures and nothing else, and a file manager
     # that starts is worth more than one that looks right.
     "icons.shell": True,
+
+    # Overlay badges on those icons -- shared folders, OneDrive, source
+    # control. The one icon request that carries a path, so it is bounded to
+    # the rows on screen and this is the switch that turns it off entirely.
+    "icons.overlays": True,
+
+    # The real Explorer context menu. Off means the pane's own verbs and
+    # nothing else, which is the answer when a shell extension misbehaves --
+    # and the reason it is a setting rather than a rebuild.
+    "menu.shell": True,
 
     "window.width": 1280,
     "window.height": 760,

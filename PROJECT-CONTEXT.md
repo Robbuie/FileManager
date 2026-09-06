@@ -108,9 +108,11 @@ filemanager/
 - **The copy engine.** Not the copying — the queue, progress, conflict
   resolution, retry, and attribute preservation around it. Where most
   hobby file managers fall over.
-- **Shell integration.** Real context menu, per-filetype shell icons, UAC
-  elevation for protected folders. `pywin32` covers this; third-party
-  context menu entries (TortoiseSVN, 7-Zip) need `IContextMenu` handling.
+- **Shell integration.** Real context menu, per-filetype shell icons, icon
+  overlays, UAC elevation for protected folders. `pywin32` covers this.
+  Third-party entries (TortoiseSVN, 7-Zip) need real `IContextMenu` handling,
+  which means loading their DLLs -- so that happens in a process of its own
+  and the window draws the menu from what is read out of it.
 - **Default folder handler.** Windows only half allows replacing Explorer.
   Registering a Directory verb mostly works; Win+E needs a remap.
 

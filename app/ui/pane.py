@@ -15,13 +15,16 @@ from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
     QModelIndex,
+    QPoint,
     QSize,
     Qt,
     Signal,
 )
+from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 
 from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size
+from app.io.protocol import MENU_SEPARATOR, MENU_SUBMENU, MenuItem
 from app.ui import dialogs
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -31,6 +34,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QTabBar,
     QTableView,
     QToolButton,
@@ -119,6 +123,8 @@ class PaneWidget(QFrame):
         # It also means single click opens where the user has told Windows that
         # is what a click does, which is the correct answer to that setting.
         self._view.activated.connect(self._on_activated)
+        self._view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._view.customContextMenuRequested.connect(self._on_context_menu)
         self._layout_columns()
         # A header defaults its indicator to *descending*, and enabling sorting
         # applies it, so a model that sorted itself ascending gets flipped the
@@ -171,6 +177,19 @@ class PaneWidget(QFrame):
             # rows -- a dataChanged over the whole model would have Qt build
             # an index per row to find out it is not on screen.
             self._pane.icons.changed.connect(self._view.viewport().update)
+
+        if self._pane.overlays is not None:
+            self._pane.overlays.changed.connect(self._view.viewport().update)
+        if self._pane.menu is not None:
+            self._pane.menu.ready.connect(self._on_shell_items)
+            self._pane.menu.unavailable.connect(self._on_shell_unavailable)
+
+        #: The menu currently on screen, and what its shell entries mean. Both
+        #: are None whenever no menu is open, which is what tells the replies
+        #: arriving from the shell host that they are too late to be drawn.
+        self._menu: QMenu | None = None
+        self._menu_slot: QAction | None = None
+        self._menu_commands: dict = {}
 
         # Switching back to a tab must not connect its model a second time.
         self._watched: set = set()
@@ -225,8 +244,7 @@ class PaneWidget(QFrame):
         thing being looked at, not nothing. The parent row is never in the
         answer, so `..` cannot be deleted by holding a key down.
         """
-        picker = self._view.selectionModel()
-        rows = {index.row() for index in picker.selectedRows()} if picker else set()
+        rows = self._selected_rows()
         if not rows:
             row = self.current_row()
             if row < 0:
@@ -264,6 +282,175 @@ class PaneWidget(QFrame):
         if dialogs.confirm_delete(self.window(), names=names,
                                   folder=self._pane.display(), permanent=permanent):
             self._pane.delete(names, permanent=permanent)
+
+    # ---------------------------------------------------------- context menu
+
+    def _on_context_menu(self, point: QPoint) -> None:
+        """The menu for what was right-clicked: this application's verbs, then
+        Explorer's.
+
+        The application's own first, and not as a matter of taste. They are the
+        operations whose keys are in the user's fingers, they are the ones that
+        run in a worker where a dead share cannot take the window down with it,
+        and they are there whether or not the shell answers. Explorer's follow
+        because the whole point of them is the entries this application will
+        never have: TortoiseSVN, 7-Zip, whatever else is installed.
+
+        Right-clicking a row that is not part of the selection moves to it
+        first, the way Explorer does. Anything else means a menu whose title
+        says one thing and whose commands act on another.
+        """
+        index = self._view.indexAt(point)
+        on_row = index.isValid() and not self._pane.current.model.is_parent_row(index.row())
+        if on_row and index.row() not in self._selected_rows():
+            self._view.setCurrentIndex(index)
+            self._view.selectionModel().clearSelection()
+        names = self.selected_names() if on_row else []
+
+        menu = QMenu(self)
+        # The help line an extension supplies is worth showing, and Qt hides
+        # action tooltips in a menu unless it is told not to.
+        menu.setToolTipsVisible(True)
+        self._menu = menu
+        self._menu_commands = {}
+        self._add_verbs(menu, names, on_row=on_row)
+        self._menu_slot = None
+        if self._pane.menu is not None and self._shell_wanted():
+            menu.addSeparator()
+            self._menu_slot = menu.addAction("Explorer commands")
+            self._menu_slot.setEnabled(False)
+            # Asked for after the menu is built rather than before it is
+            # shown. The menu appears immediately with the verbs that are
+            # always there, and the shell's entries land in it a moment later
+            # -- a menu that waits for a shell extension to load is a menu
+            # that is sometimes not there when the mouse button comes up.
+            self._pane.context_menu(names, extended=self._extended())
+
+        chosen = menu.exec(self._view.viewport().mapToGlobal(point))
+        command = self._menu_commands.get(chosen)
+        self._menu = None
+        self._menu_slot = None
+        self._menu_commands = {}
+        if self._pane.menu is None:
+            return
+        if command is None:
+            # Nothing of the shell's was chosen, so let go of it: a live
+            # IContextMenu keeps somebody else's DLL loaded and, in a few
+            # cases, holds the folder open.
+            self._pane.menu.release()
+            return
+        token, item_id = command
+        self._pane.menu.invoke(token, item_id)
+
+    def _add_verbs(self, menu: QMenu, names: list[str], *, on_row: bool) -> None:
+        """The application's own operations, in the words and keys they have
+        everywhere else. The keys are shown, not claimed: they belong to the
+        pane, which is what makes them safe to press in a text field.
+        """
+        if on_row:
+            menu.addAction("Open\tEnter", self._open_current)
+            menu.addSeparator()
+            menu.addAction("Copy\tF5",
+                           lambda: self.transferRequested.emit("copy"))
+            menu.addAction("Move\tF6",
+                           lambda: self.transferRequested.emit("move"))
+            menu.addAction("Rename\tF2", self.rename_current)
+            menu.addAction("Delete\tDel", self.delete_selection)
+            menu.addAction("Delete permanently\tShift+Del",
+                           lambda: self.delete_selection(permanent=True))
+            menu.addSeparator()
+        menu.addAction("New folder\tF7", self.new_folder)
+        menu.addAction("Refresh\tCtrl+R", self._pane.refresh)
+
+    def _on_shell_items(self, token: int, items) -> None:
+        """Put Explorer's entries into a menu that is already open.
+
+        If it is not open any more the answer is dropped and the menu is let
+        go of: the user was quicker than the shell, which is a normal thing to
+        happen and not a failure of anything.
+        """
+        if self._menu is None or self._menu_slot is None:
+            if self._pane.menu is not None:
+                self._pane.menu.release()
+            return
+        slot, self._menu_slot = self._menu_slot, None
+        self._menu.removeAction(slot)
+        if not items:
+            disabled = self._menu.addAction("No Explorer commands here")
+            disabled.setEnabled(False)
+            return
+        self._fill(self._menu, items, token)
+
+    def _on_shell_unavailable(self, message: str) -> None:
+        """Say why there are none, in the menu, without taking it over."""
+        if self._menu is None or self._menu_slot is None:
+            return
+        self._menu_slot.setText(message)
+        self._menu_slot.setEnabled(False)
+        self._menu_slot = None
+
+    def _fill(self, menu: QMenu, items, token: int) -> None:
+        """One level of the shell's menu, drawn with this application's look.
+
+        Which is the whole reason the entries are walked in the shell host
+        rather than shown by it: the same fonts, the same accent on the
+        highlight, the same corner radius as everything else in the window.
+        What it costs is the entries an extension paints itself rather than
+        naming, which arrive labelled from their verb.
+        """
+        for item in items:
+            if not isinstance(item, MenuItem):
+                continue
+            if item.kind == MENU_SEPARATOR:
+                menu.addSeparator()
+                continue
+            if item.kind == MENU_SUBMENU:
+                child = menu.addMenu(item.text)
+                child.setEnabled(item.enabled)
+                icon = _menu_icon(item)
+                if icon is not None:
+                    child.setIcon(icon)
+                self._fill(child, item.items, token)
+                continue
+            action = menu.addAction(item.text)
+            action.setEnabled(item.enabled)
+            if item.default:
+                # What a double click would have done, drawn the way Explorer
+                # draws it. The listing already opens on Enter, so this is the
+                # menu agreeing with the keyboard rather than a new promise.
+                font = action.font()
+                font.setBold(True)
+                action.setFont(font)
+            if item.checked:
+                action.setCheckable(True)
+                action.setChecked(True)
+            if item.help:
+                action.setToolTip(item.help)
+            icon = _menu_icon(item)
+            if icon is not None:
+                action.setIcon(icon)
+            # The id means nothing without its token, and nothing at all after
+            # this menu closes. Both travel together, back to the one process
+            # that can still turn them into a command.
+            self._menu_commands[action] = (token, item.id)
+
+    def _shell_wanted(self) -> bool:
+        return self._pane.menu is not None and not self._pane.menu.busy
+
+    def _extended(self) -> bool:
+        """Shift-right-click asks for the entries Explorer hides behind Shift."""
+        from PySide6.QtWidgets import QApplication
+
+        return bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
+
+    def _open_current(self) -> None:
+        row = self.current_row()
+        if row >= 0:
+            self._pane.activate(row)
+
+    def _selected_rows(self) -> set:
+        picker = self._view.selectionModel()
+        return {index.row() for index in picker.selectedRows()} if picker else set()
 
     def clear_filter(self) -> None:
         self._filter.clear()   # the model is told through textChanged
@@ -544,6 +731,26 @@ class PaneWidget(QFrame):
         button.setFocusPolicy(Qt.NoFocus)  # the listing keeps the focus
         button.clicked.connect(slot)
         return button
+
+
+def _menu_icon(item: MenuItem) -> QIcon | None:
+    """A menu entry's own picture, if it came with one.
+
+    The same premultiplied BGRA the row icons arrive as, for the same reason:
+    a bitmap handle does not cross a process boundary. An entry without one
+    draws without one, which is what most of them do.
+    """
+    if not item.icon or not item.icon_size:
+        return None
+    size = int(item.icon_size)
+    if len(item.icon) != size * size * 4:
+        return None
+    image = QImage(bytes(item.icon), size, size, size * 4,
+                   QImage.Format_ARGB32_Premultiplied).copy()
+    if image.isNull():
+        return None
+    pixmap = QPixmap.fromImage(image)
+    return None if pixmap.isNull() else QIcon(pixmap)
 
 
 def _root_label(path: str) -> str:

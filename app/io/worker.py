@@ -29,7 +29,7 @@ import signal
 import time
 from typing import Any
 
-from app.io import paths
+from app.io import elevate, paths
 from app.io.protocol import (
     BATCH_SIZE,
     ICON_FILE,
@@ -47,13 +47,17 @@ from app.io.protocol import (
 try:
     import pythoncom
     import win32con
+    import win32event
     import win32gui
+    import win32process
     import win32ui
     from win32com.shell import shell as win32shell, shellcon
 except Exception:  # noqa: BLE001 - reported by _open, like paths.win32_problem
     pythoncom = None
     win32con = None
+    win32event = None
     win32gui = None
+    win32process = None
     win32ui = None
     win32shell = None
     shellcon = None
@@ -131,6 +135,10 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _resolve(request, outbox)
     elif request.op is Op.OPEN:
         _open(request, outbox)
+    elif request.op is Op.ELEVATE:
+        _elevate(request, outbox)
+    elif request.op is Op.OVERLAY:
+        _overlays(request, outbox)
     elif request.op is Op.DRIVES:
         _drives(request, outbox)
     elif request.op is Op.FREE_SPACE:
@@ -448,6 +456,142 @@ def _icon(request: Request, outbox: Any) -> None:
                                                "the shell had no icon for any of these")))
 
 
+#: `SHGFI_OVERLAYINDEX` and the image list flags that go with it. Not in
+#: `shellcon`, which stops short of the overlay flags, so they are written out
+#: here with their values from `shellapi.h` and `commctrl.h`.
+SHGFI_OVERLAYINDEX = 0x00000040
+ILD_TRANSPARENT = 0x00000001
+
+#: An overlay index lives in the top byte of the system icon index, and the
+#: image list wants it back in the second byte. Both shifts are the API's,
+#: not a convention of this file.
+_OVERLAY_SHIFT = 24
+_OVERLAY_MASK = 0x0F
+_INDEX_MASK = 0x00FFFFFF
+_TO_OVERLAY_MASK = 8
+
+
+def _overlays(request: Request, outbox: Any) -> None:
+    """Which of these files carry a badge, and what the badge looks like.
+
+    This is the one icon request that goes near a path, and everything about
+    its shape is an attempt to keep that affordable. An overlay is a fact
+    about the file rather than about its type -- whether this folder is
+    shared, whether this file is in OneDrive, what source control thinks of
+    it -- so the handler has to be asked about the file by name, and there is
+    no version of this that answers from the extension alone.
+
+    What keeps it bounded:
+
+      * the caller asks about the rows on screen, not the folder;
+      * the answer is a picture per *kind of badge on a kind of file* rather
+        than per file, keyed on the system icon index and the overlay index,
+        so a working copy of 400 modified `.cs` files is one image;
+      * the deadline is checked between files, so a share that goes quiet
+        costs the badges and nothing else.
+
+    A file with no overlay is left out of the answer rather than carrying a
+    null. The caller draws its normal icon for those, which is what it was
+    already drawing while this was in flight.
+    """
+    names = [str(name) for name in (request.args.get("names") or [])]
+    size = 32 if int(request.args.get("size", 16) or 16) > 16 else 16
+    empty = {"size": size, "rows": {}, "images": {}}
+    if not names:
+        outbox.put(Reply(request.id, Status.OK, payload=empty))
+        return
+    if win32shell is None or win32gui is None or shellcon is None:
+        outbox.put(Reply(request.id, Status.ERROR, payload=empty,
+                         message="icon overlays need pywin32 on Windows"))
+        return
+
+    _ensure_com()
+    deadline = time.monotonic() + request.timeout
+    flags = (shellcon.SHGFI_SYSICONINDEX | SHGFI_OVERLAYINDEX
+             | (shellcon.SHGFI_LARGEICON if size > 16 else shellcon.SHGFI_SMALLICON))
+    rows: dict[str, str] = {}
+    wanted: dict[str, tuple[int, int]] = {}
+    image_list = 0
+
+    for name in names:
+        if time.monotonic() > deadline:
+            outbox.put(Reply(request.id, Status.TIMEOUT,
+                             payload={"size": size, "rows": rows, "images": {}},
+                             message="the shell did not answer within the deadline"))
+            return
+        try:
+            answer = win32shell.SHGetFileInfo(paths.join(request.path, name), 0, flags)
+        except Exception:  # noqa: BLE001 - a file that has just gone is not an error
+            continue
+        handle, index = _overlay_answer(answer)
+        overlay = (index >> _OVERLAY_SHIFT) & _OVERLAY_MASK
+        if not overlay:
+            continue
+        image_list = image_list or handle
+        key = f"{index & _INDEX_MASK}:{overlay}"
+        rows[name] = key
+        wanted.setdefault(key, (index & _INDEX_MASK, overlay))
+
+    images: dict[str, bytes] = {}
+    problems: list[str] = []
+    for key, (index, overlay) in wanted.items():
+        if time.monotonic() > deadline:
+            break
+        pixels = _overlay_image(image_list, index, overlay, size, problems)
+        if pixels is not None:
+            images[key] = pixels
+    outbox.put(Reply(request.id, Status.OK,
+                     payload={"size": size, "rows": rows, "images": images},
+                     message=problems[0] if problems and not images else ""))
+
+
+def _overlay_answer(answer: Any) -> tuple[int, int]:
+    """The system image list and the icon index out of what pywin32 returned.
+
+    Asked for with `SHGFI_SYSICONINDEX`, the call's own return value is the
+    handle of the shell's image list and the index is in the info structure.
+    Read defensively for the same reason `_icon_handle` is: guessing the shape
+    wrong here does not draw the wrong picture, it draws nothing, quietly.
+    """
+    handle = index = 0
+    if isinstance(answer, (tuple, list)) and answer:
+        if isinstance(answer[0], int):
+            handle = int(answer[0])
+        for part in answer:
+            if isinstance(part, (tuple, list)) and len(part) > 1:
+                index = int(part[1] or 0)
+                break
+    return handle, index
+
+
+def _overlay_image(image_list: int, index: int, overlay: int, size: int,
+                   problems: list[str]) -> bytes | None:
+    """The badge drawn onto its file's icon, as one picture.
+
+    Composited by the shell rather than by this application: the image list
+    draws the icon and its overlay together when asked, and where an overlay
+    sits on an icon is the shell's business. Drawing them separately would
+    mean deciding that here, and getting it slightly wrong on every row.
+    """
+    if not image_list:
+        return None
+    try:
+        handle = win32gui.ImageList_GetIcon(
+            image_list, index, ILD_TRANSPARENT | (overlay << _TO_OVERLAY_MASK))
+    except Exception as exc:  # noqa: BLE001
+        problems.append(f"the image list refused an overlay: {_describe(exc)}")
+        return None
+    if not handle:
+        return None
+    try:
+        return _icon_pixels(handle, size, problems)
+    finally:
+        try:
+            win32gui.DestroyIcon(handle)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _shell_icon(key: str, size: int, problems: list[str] | None = None) -> bytes | None:
     """One icon, by kind, as premultiplied BGRA.
 
@@ -739,6 +883,104 @@ def _shell_delete(targets: list[str], flags: int):
         return win32shell.SHFileOperation(
             (0, shellcon.FO_DELETE, joined, None, flags, None, None)
         )
+
+
+def _elevate(request: Request, outbox: Any) -> None:
+    """Run one refused operation again, as administrator.
+
+    In a worker because it is a shell call and because it blocks: the consent
+    prompt is a person reading a dialog, and the wait for it is exactly the
+    kind of wait the UI thread never does. The deadline is the operation's own
+    plus a grace for the prompt, and a worker killed while waiting leaves the
+    elevated process to finish on its own -- it is not a child of this one, so
+    nothing this application does can interrupt a delete that is already
+    running with administrator rights. That is the right way round.
+
+    Nothing is elevated that `elevate.ACTIONS` does not name, and the check is
+    made here as well as in the elevated process. One of those two is
+    redundant and neither is the one to leave out.
+    """
+    plan = request.args.get("plan")
+    if not isinstance(plan, dict) or str(plan.get("action") or "") not in elevate.ACTIONS:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message="that operation cannot be run as administrator"))
+        return
+    if win32shell is None or win32event is None or win32process is None:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message="running as administrator needs pywin32 on Windows"))
+        return
+
+    _ensure_com()
+    plan_path = elevate.write_plan(plan, request.timeout)
+    executable, prefix, directory = elevate.command()
+    try:
+        started = win32shell.ShellExecuteEx(
+            fMask=shellcon.SEE_MASK_NOCLOSEPROCESS,
+            lpVerb="runas",
+            lpFile=executable,
+            lpParameters=f'{prefix}{elevate.FLAG} "{plan_path}"',
+            lpDirectory=directory,
+            nShow=win32con.SW_HIDE,
+        )
+    except Exception as exc:  # noqa: BLE001 - the prompt was refused, or worse
+        elevate.clean_up(plan_path)
+        status = _shell_status(exc)
+        message = ("the request to run as administrator was refused"
+                   if status is Status.DENIED else _describe(exc))
+        outbox.put(Reply(request.id, status, message=message))
+        return
+
+    process = started.get("hProcess") if isinstance(started, dict) else None
+    if not process:
+        elevate.clean_up(plan_path)
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message="the elevated process did not start"))
+        return
+
+    limit = int((request.timeout + elevate.CONSENT_GRACE) * 1000)
+    try:
+        waited = win32event.WaitForSingleObject(process, limit)
+        if waited != win32event.WAIT_OBJECT_0:
+            outbox.put(Reply(request.id, Status.TIMEOUT,
+                             message="the elevated operation did not finish in time; "
+                                     "it may still be running"))
+            return
+        code = win32process.GetExitCodeProcess(process)
+    except Exception as exc:  # noqa: BLE001
+        outbox.put(Reply(request.id, Status.ERROR, message=_describe(exc)))
+        return
+    finally:
+        result = elevate.read_result(plan_path)
+        elevate.clean_up(plan_path)
+        try:
+            win32api_close(process)
+        except Exception:  # noqa: BLE001
+            pass
+
+    status = _status_named(result.get("status"), code)
+    outbox.put(Reply(request.id, status, payload=result.get("payload"),
+                     message=str(result.get("message") or
+                                 ("" if status is Status.OK else
+                                  f"the elevated operation exited with {code}"))))
+
+
+def win32api_close(handle: Any) -> None:
+    """Close a handle from `ShellExecuteEx`. Named rather than inlined because
+    forgetting it leaks a process handle per elevation, and a leak that only
+    happens when somebody is deleting from Program Files is a leak nobody
+    finds.
+    """
+    import win32api
+
+    win32api.CloseHandle(handle)
+
+
+def _status_named(name: Any, code: int) -> Status:
+    """The status the elevated process reported, or one derived from its exit code."""
+    try:
+        return Status(str(name))
+    except ValueError:
+        return Status.OK if code == 0 else Status.ERROR
 
 
 def _resolve(request: Request, outbox: Any) -> None:

@@ -24,9 +24,11 @@ Early, but installable. The headless I/O layer exists and is verified by tests,
 though it still has to be run against real network shares. The window has two
 panes, tabs, navigation, the operations that change something -- new folder,
 rename, delete -- and a copy and move engine with a proper queue. There is an
-installer and it updates itself. Shell icons, the real context menu and
-transfers that outlive the window are not done. See `PROJECT-CONTEXT.md` for
-the design and `CLAUDE.md` for the working rules.
+installer and it updates itself. Shell integration is in: the file type icons,
+the real Explorer context menu with whatever extensions are installed, icon
+overlays, and running one refused operation as administrator. Transfers that
+outlive the window are not done. See `PROJECT-CONTEXT.md` for the design and
+`CLAUDE.md` for the working rules.
 
 ## Installing
 

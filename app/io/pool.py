@@ -35,8 +35,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
-from app.io import paths, worker
-from app.io.protocol import Op, Reply, Request, Status
+from app.io import menu, paths, worker
+from app.io.protocol import MENU_HOST, Op, Reply, Request, Status
 
 ReplyHandler = Callable[[Reply], None]
 
@@ -57,6 +57,18 @@ READER_POLL = 0.2
 #: with a retry" state the tab shows.
 RESTART_LIMIT = 3
 RESTART_WINDOW = 60.0
+
+#: The requests that go to the shell host instead of to a volume's worker.
+#: Placement lives here rather than in the caller for the same reason every
+#: other placement decision does: the callers ask for a menu on a path, and
+#: which process is the right one to load somebody else's DLL in is not their
+#: question.
+#:
+#: The host is one process for every volume, not one per volume. A menu is
+#: something a person opens one of at a time, and an extension wedged on a
+#: share takes the menu down with it either way -- but only the menu, and only
+#: until the watchdog kills it.
+HOST_OPS = frozenset({Op.MENU, Op.MENU_INVOKE, Op.MENU_RELEASE})
 
 
 @dataclass
@@ -119,7 +131,7 @@ class WorkerPool:
         coming back.
         """
         resolved = paths.resolve(path)
-        key = paths.volume_key(resolved)
+        key = MENU_HOST if op in HOST_OPS else paths.volume_key(resolved)
         request = Request(
             id=next(self._ids), op=op, path=resolved,
             timeout=timeout, args=dict(args or {}),
@@ -179,6 +191,19 @@ class WorkerPool:
         with self._lock:
             self._restarts.pop(paths.volume_key(path), None)
 
+    def retry_host(self) -> None:
+        """The same, for the shell host.
+
+        Called before every menu rather than offered as a button. A volume
+        that keeps dying is worth leaving alone until somebody says otherwise,
+        because the requests behind it are a folder somebody is waiting for. A
+        shell host that keeps dying costs one process per right-click and
+        nothing else, and the alternative -- a menu that stops appearing until
+        the application is restarted -- is the worse failure by some way.
+        """
+        with self._lock:
+            self._restarts.pop(MENU_HOST, None)
+
     def status(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             return {
@@ -233,9 +258,10 @@ class WorkerPool:
         inbox = self._ctx.Queue()
         outbox = self._ctx.Queue()
         control = self._ctx.Queue()
+        entry = menu.run if key == MENU_HOST else worker.run
         process = self._ctx.Process(
-            target=worker.run, args=(inbox, outbox, control),
-            name=f"fm-io {key}", daemon=True,
+            target=entry, args=(inbox, outbox, control),
+            name=f"fm-io {key.strip() or key}", daemon=True,
         )
         process.start()
         target = _Worker(key=key, inbox=inbox, outbox=outbox,

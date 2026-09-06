@@ -98,6 +98,8 @@ class ListingModel(QAbstractTableModel):
         self._all: list[Entry] = []      # everything that arrived
         self._rows: list[Entry] = []     # what the filter lets through
         self._icons = None               # set by the pane; None draws no icons
+        self._overlays = None            # the same, for the badges on them
+        self._folder = ""                # what an overlay is asked about
         self._has_parent = False
         self._sort_column = Column.NAME
         self._sort_order = Qt.AscendingOrder
@@ -112,6 +114,30 @@ class ListingModel(QAbstractTableModel):
         from what it already has.
         """
         self._icons = provider
+
+    def set_overlays(self, provider) -> None:
+        """Where the badges come from, or None for a listing without them.
+
+        Separate from `set_icons` because they are separate requests with
+        separate costs: an icon is a fact about a type and is free after the
+        first row of its kind, an overlay is a fact about a file and is a
+        lookup per row on screen.
+        """
+        self._overlays = provider
+
+    def set_folder(self, path: str) -> None:
+        """Which folder these rows are in.
+
+        The model does not otherwise know or care -- rows are names. Overlays
+        are the exception: the shell is asked about a file, so the name has to
+        be put back together with the folder it is in, and the folder is told
+        to the model rather than worked out from anything here.
+        """
+        self._folder = path or ""
+
+    @property
+    def folder(self) -> str:
+        return self._folder
 
     @property
     def sort_column(self) -> "Column":
@@ -278,6 +304,14 @@ class ListingModel(QAbstractTableModel):
             # of the same file on one row.
             if column != Column.NAME or self._icons is None:
                 return None
+            if self._overlays is not None and self._folder:
+                # The badged picture is the file's own icon with the overlay
+                # already on it -- the shell composites them, because where a
+                # badge sits on an icon is its business. So it replaces the
+                # icon rather than being drawn over it.
+                badged = self._overlays.icon(self._folder, entry.name)
+                if badged is not None:
+                    return badged
             return self._icons.icon(entry)
         if role == Qt.TextAlignmentRole and column == Column.SIZE:
             return int(Qt.AlignRight | Qt.AlignVCenter)

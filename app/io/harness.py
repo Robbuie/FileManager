@@ -28,9 +28,18 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.io import paths
+from app.io import elevate, paths
 from app.io.pool import WorkerPool
-from app.io.protocol import Entry, Op, Reply, Status, icon_key
+from app.io.protocol import (
+    MENU_SEPARATOR,
+    MENU_SUBMENU,
+    Entry,
+    MenuItem,
+    Op,
+    Reply,
+    Status,
+    icon_key,
+)
 
 _SETTLED = {Status.OK, Status.TIMEOUT, Status.CANCELLED,
             Status.DENIED, Status.GONE, Status.ERROR}
@@ -304,6 +313,167 @@ def cmd_icons(args: argparse.Namespace) -> int:
             size_note = "" if len(pixels) == expected else f"  (wrong length {len(pixels)})"
             print(f"  {key:<12} {visible:>5} of {len(pixels) // 4} pixels{size_note}")
         return _exit_code(icons)
+    finally:
+        pool.shutdown()
+
+
+def cmd_menu(args: argparse.Namespace) -> int:
+    """Build the Explorer context menu for a selection and print it.
+
+    The command that answers the question this feature exists for: are
+    TortoiseSVN and 7-Zip actually in there. It prints the tree the window
+    would draw, with each entry's verb, so an entry that appears with no text
+    can still be told apart from one that is missing.
+
+    With `--invoke` it runs one of them, by the id printed beside it. That is
+    a real invocation of somebody's shell extension: it can open a dialog, and
+    it can change files.
+    """
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.MENU, args.path, timeout=args.timeout,
+                       args={"names": args.names, "extended": args.extended})
+        _report("path", paths.normalize(args.path))
+        _report("names", len(args.names) or "the folder itself")
+        _report("status", outcome.status.value)
+        _report("elapsed", f"{outcome.elapsed:.3f}s")
+        if outcome.message:
+            _report("message", outcome.message)
+        payload = outcome.payload if isinstance(outcome.payload, dict) else {}
+        items = list(payload.get("items") or ())
+        token = payload.get("token")
+        if outcome.status is not Status.OK:
+            return _exit_code(outcome)
+        _report("token", token)
+        _report("entries", _count_items(items))
+        _print_items(items, indent=2)
+
+        if not args.invoke:
+            release = _run(pool, Op.MENU_RELEASE, args.path, timeout=args.timeout,
+                           args={"token": token})
+            _report("released", release.status.value)
+            return _exit_code(outcome)
+
+        print(f"\ninvoking command {args.invoke}")
+        ran = _run(pool, Op.MENU_INVOKE, args.path, timeout=args.invoke_timeout,
+                   args={"token": token, "item": args.invoke})
+        _report("status", ran.status.value)
+        if isinstance(ran.payload, dict):
+            _report("verb", ran.payload.get("verb") or "-")
+        if ran.message:
+            _report("message", ran.message)
+        return _exit_code(ran)
+    finally:
+        pool.shutdown()
+
+
+def _count_items(items) -> int:
+    total = 0
+    for item in items:
+        if item.kind == MENU_SEPARATOR:
+            continue
+        total += 1 + _count_items(item.items)
+    return total
+
+
+def _print_items(items, *, indent: int) -> None:
+    """The menu as a tree, with the ids an invoke takes."""
+    pad = " " * indent
+    for item in items:
+        if not isinstance(item, MenuItem):
+            continue
+        if item.kind == MENU_SEPARATOR:
+            print(f"{pad}{'-' * 20}")
+            continue
+        marks = "".join((
+            "" if item.enabled else " [disabled]",
+            " [checked]" if item.checked else "",
+            " [default]" if item.default else "",
+            " [icon]" if item.icon else "",
+        ))
+        if item.kind == MENU_SUBMENU:
+            print(f"{pad}{item.text}{marks}")
+            _print_items(item.items, indent=indent + 2)
+            continue
+        verb = f"  ({item.verb})" if item.verb else ""
+        print(f"{pad}{item.id:>5}  {item.text}{verb}{marks}")
+
+
+def cmd_overlays(args: argparse.Namespace) -> int:
+    """List a folder and ask the shell which of its rows carry a badge.
+
+    Two commands in one, like `icons`, and for the opposite reason: the ratio
+    to watch here is how many *pictures* come back against how many rows were
+    asked about. One image for forty badged files is the design working. One
+    image per file means the key is wrong and this is as expensive as the
+    thing `CLAUDE.md` says not to build.
+    """
+    pool = WorkerPool()
+    try:
+        listing = _run(pool, Op.LIST, args.path, timeout=args.timeout,
+                       keep_names=args.rows)
+        _report_outcome(args.path, listing)
+        names = listing.names[: args.rows]
+        if not names:
+            _report("rows asked", 0)
+            return _exit_code(listing)
+
+        overlays = _run(pool, Op.OVERLAY, args.path, timeout=args.overlay_timeout,
+                        args={"names": names, "size": args.size})
+        payload = overlays.payload if isinstance(overlays.payload, dict) else {}
+        rows = payload.get("rows") or {}
+        images = payload.get("images") or {}
+        _report("rows asked", len(names))
+        _report("overlay", overlays.status.value)
+        if overlays.message:
+            _report("message", overlays.message)
+        _report("badged", f"{len(rows)} of {len(names)}")
+        _report("images", f"{len(images)} distinct")
+        _report("elapsed", f"{overlays.elapsed:.3f}s")
+        for name in names:
+            key = rows.get(name)
+            if not key:
+                continue
+            pixels = images.get(key)
+            drawn = (f"{sum(1 for value in pixels[3::4] if value)} visible pixels"
+                     if pixels else "no image")
+            print(f"  {name:<40} {key:<12} {drawn}")
+        return _exit_code(overlays)
+    finally:
+        pool.shutdown()
+
+
+def cmd_elevate(args: argparse.Namespace) -> int:
+    """Run one operation with administrator rights, prompt and all.
+
+    The only way to exercise the elevation path without the window, and worth
+    running from a console at least once: it is the one place in this
+    application where a second process is started, and the failure that
+    matters -- the consent prompt being declined -- has to come back as a
+    refusal rather than as a hang.
+    """
+    plan: dict[str, Any] = {"action": args.action, "path": args.path, "args": {}}
+    if args.action == "rename":
+        if not args.name:
+            print("rename needs --name")
+            return 2
+        plan["args"] = {"name": args.name}
+    elif args.action == "delete":
+        if not args.names:
+            print("delete needs one or more names")
+            return 2
+        plan["args"] = {"names": args.names, "permanent": args.permanent}
+    print(f"asking Windows to {elevate.describe(plan)}")
+
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.ELEVATE, args.path, timeout=args.timeout,
+                       args={"plan": plan})
+        _report_outcome(args.path, outcome, rows=False)
+        if isinstance(outcome.payload, dict):
+            for key, value in outcome.payload.items():
+                _report(key, value)
+        return _exit_code(outcome)
     finally:
         pool.shutdown()
 
@@ -606,6 +776,39 @@ def build_parser() -> argparse.ArgumentParser:
     icons.add_argument("--icon-timeout", type=float, default=15.0,
                        help="seconds for the whole batch of lookups")
     icons.set_defaults(func=cmd_icons)
+
+    menu = with_path("menu", "the Explorer context menu for a selection")
+    menu.add_argument("names", nargs="*",
+                      help="names within the folder; none means the folder itself")
+    menu.add_argument("--extended", action="store_true",
+                      help="the entries Explorer hides behind Shift")
+    menu.add_argument("--invoke", type=int, default=0, metavar="ID",
+                      help="run the command with this id; this is real, and "
+                           "the extension may open a dialog or change files")
+    menu.add_argument("--invoke-timeout", type=float, default=600.0,
+                      help="seconds to wait for a command that opens a dialog")
+    menu.set_defaults(func=cmd_menu)
+
+    overlays = with_path("overlays", "which rows carry a shell badge, and what it costs")
+    overlays.add_argument("--rows", type=int, default=40, metavar="N",
+                          help="how many rows to ask about, as a screenful would")
+    overlays.add_argument("--size", type=int, default=16, choices=[16, 32])
+    overlays.add_argument("--overlay-timeout", type=float, default=8.0)
+    overlays.set_defaults(func=cmd_overlays)
+
+    # Not `with_path`: the action reads better in front of the path, and the
+    # order of positionals is the order they are added.
+    elevating = sub.add_parser("elevate", help="run one operation as administrator")
+    elevating.add_argument("action", choices=sorted(elevate.ACTIONS))
+    elevating.add_argument("path")
+    elevating.add_argument("names", nargs="*", help="for delete: names in the folder")
+    elevating.add_argument("--timeout", type=float, default=300.0,
+                           help="seconds for the operation itself; the wait for "
+                                "the consent prompt is added to it")
+    elevating.add_argument("--name", default="", help="for rename: the new bare name")
+    elevating.add_argument("--permanent", action="store_true",
+                           help="for delete: skip the Recycle Bin")
+    elevating.set_defaults(func=cmd_elevate)
 
     renaming = with_path("rename", "rename in place; will not overwrite")
     renaming.add_argument("name", help="the new bare name, not a path")

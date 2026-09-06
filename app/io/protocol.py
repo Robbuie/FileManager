@@ -93,6 +93,52 @@ class Op(str, Enum):
     #: that is what makes it one undo.
     DELETE = "delete"
 
+    #: The Explorer context menu for a selection, as a tree of `MenuItem`.
+    #: `args["names"]` are the names in the folder at `path`; an empty list
+    #: means the menu for the folder itself. `args["extended"]` asks for the
+    #: entries Explorer hides behind Shift.
+    #:
+    #: Answered by the shell host rather than by a volume's worker, and the
+    #: reply is `{"token": id, "items": [...]}`. The token is what INVOKE
+    #: names: the shell objects behind the menu stay alive in the host until
+    #: the menu is invoked or released, because a command cannot be run
+    #: through an `IContextMenu` that has been let go of.
+    MENU = "menu"
+
+    #: Run one entry of a menu that MENU built. `args["token"]` and
+    #: `args["item"]`, the id from the tree. The host holds the only mapping
+    #: from that id to the shell's own command, which is why an invoke is a
+    #: request rather than something the window can do for itself.
+    MENU_INVOKE = "menu_invoke"
+
+    #: Let go of a menu that was built and not used -- the user pressed Escape.
+    #: Not merely tidiness: a live `IContextMenu` keeps a third-party DLL's
+    #: objects alive, and some of them hold the folder open.
+    MENU_RELEASE = "menu_release"
+
+    #: Icon overlays for `args["names"]` in the folder at `path`: the shared
+    #: folder arrow, the OneDrive tick, a source control badge.
+    #:
+    #: The one icon request that carries a path, and it has to: an overlay is
+    #: a fact about the file rather than about its type, and the handler is
+    #: asked about that file by name. So it goes to that volume's worker,
+    #: covers the rows on screen rather than the folder, and is asked for with
+    #: a short deadline -- everything ICON avoids by construction, this one
+    #: has to bound by hand.
+    #:
+    #: The reply is `{"size": n, "rows": {name: key}, "images": {key: bgra}}`.
+    #: A key is `"<system icon index>:<overlay index>"`, so two files with the
+    #: same type and the same badge share one picture: a working copy of 400
+    #: modified files is a handful of images, not 400.
+    OVERLAY = "overlay"
+
+    #: Run one operation again with administrator rights, after Windows
+    #: refused it. `args["plan"]` says which operation and on what. Nothing is
+    #: elevated silently: this is only ever sent because a person answered a
+    #: prompt, and what it elevates is one operation rather than the
+    #: application.
+    ELEVATE = "elevate"
+
     #: Fault injection, and the harness is the only thing allowed to send it.
     #: It exists because the failure this application is built around -- a call
     #: that has not returned and never will -- cannot otherwise be produced on
@@ -164,6 +210,45 @@ ICON_FILE = "file"
 #: these scaled, and looks it, so a caller picks between them rather than
 #: passing pixels and hoping.
 ICON_SIZES = (16, 32)
+
+
+#: The pool key for the shell host. Not a volume and deliberately not
+#: shaped like one: `volume_key` answers a drive letter or a server name, and
+#: nothing it can return starts with a space.
+MENU_HOST = " shell"
+
+#: What a menu entry is. `SEPARATOR` carries no text and nothing else.
+MENU_COMMAND = "command"
+MENU_SUBMENU = "submenu"
+MENU_SEPARATOR = "separator"
+
+
+@dataclass(frozen=True, slots=True)
+class MenuItem:
+    """One entry of an Explorer context menu, as something Qt can draw.
+
+    The shell builds its menu into an `HMENU` full of handles, ids that mean
+    something only to the extension that supplied them, and bitmaps. None of
+    that crosses a process boundary, so the host walks it into these: text,
+    state, a picture as bytes, and an `id` that means something only when
+    handed back with the token it came with.
+
+    `id` is the shell's own command id and is not unique across menus. It is
+    only ever used with its token, and the host refuses one that does not
+    belong to the menu still open.
+    """
+
+    id: int
+    kind: str = MENU_COMMAND
+    text: str = ""
+    enabled: bool = True
+    checked: bool = False
+    default: bool = False
+    verb: str = ""              # the extension's own name for it, when it has one
+    help: str = ""              # the line Explorer shows in its status bar
+    icon: bytes | None = None   # premultiplied BGRA, `icon_size` square
+    icon_size: int = 0
+    items: tuple["MenuItem", ...] = ()
 
 
 def icon_key(entry: Entry) -> str:
