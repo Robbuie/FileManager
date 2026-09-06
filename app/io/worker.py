@@ -421,7 +421,7 @@ def _icon(request: Request, outbox: Any) -> None:
     if not keys:
         outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": {}}))
         return
-    if win32gui is None or win32ui is None or shellcon is None:
+    if win32shell is None or win32gui is None or win32ui is None or shellcon is None:
         outbox.put(Reply(request.id, Status.ERROR, payload={"size": size, "icons": {}},
                          message="shell icons need pywin32 on Windows"))
         return
@@ -429,24 +429,38 @@ def _icon(request: Request, outbox: Any) -> None:
     _ensure_com()
     deadline = time.monotonic() + request.timeout
     icons: dict[str, bytes] = {}
+    # Why nothing came back, for the reply to carry. An empty answer that does
+    # not say why is a diagnostic dead end: an extension the shell genuinely
+    # has no icon for and a call that is not there at all look identical from
+    # the outside, and one of those is a bug in this file.
+    problems: list[str] = []
     for key in keys:
         if time.monotonic() > deadline:
             outbox.put(Reply(request.id, Status.TIMEOUT,
                              payload={"size": size, "icons": icons},
                              message="the shell did not answer within the deadline"))
             return
-        pixels = _shell_icon(key, size)
+        pixels = _shell_icon(key, size, problems)
         if pixels is not None:
             icons[key] = pixels
-    outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": icons}))
+    outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": icons},
+                     message="" if icons else (problems[0] if problems else
+                                               "the shell had no icon for any of these")))
 
 
-def _shell_icon(key: str, size: int) -> bytes | None:
+def _shell_icon(key: str, size: int, problems: list[str] | None = None) -> bytes | None:
     """One icon, by kind, as premultiplied BGRA.
 
     A key is an extension with its dot, or one of the two names for the kinds
     that are not extensions. Anything else is refused rather than passed
     through to the shell.
+
+    `SHGetFileInfo` comes from `win32com.shell.shell` and not from `win32gui`,
+    which has most of the rest of this. Worth stating because getting it wrong
+    is not a loud failure: the attribute is simply absent, the call raises, and
+    every key comes back empty -- which is exactly what an unusual folder full
+    of unregistered extensions would also look like. That is what `problems`
+    is for.
     """
     if not key or any(ch in key for ch in _SEPARATORS):
         return None
@@ -462,38 +476,47 @@ def _shell_icon(key: str, size: int) -> bytes | None:
     flags = shellcon.SHGFI_ICON | shellcon.SHGFI_USEFILEATTRIBUTES
     flags |= shellcon.SHGFI_LARGEICON if size > 16 else shellcon.SHGFI_SMALLICON
     try:
-        answer = win32gui.SHGetFileInfo(name, attributes, flags)
-    except Exception:  # noqa: BLE001 - a missing association is not an error
+        answer = win32shell.SHGetFileInfo(name, attributes, flags)
+    except Exception as exc:  # noqa: BLE001 - a missing association is not an error
+        if problems is not None:
+            problems.append(f"{key}: {_describe(exc)}")
         return None
     handle = _icon_handle(answer)
     if not handle:
+        if problems is not None:
+            problems.append(f"{key}: the shell returned no icon handle")
         return None
     try:
-        return _icon_pixels(handle, size)
+        pixels = _icon_pixels(handle, size, problems)
     finally:
         try:
             win32gui.DestroyIcon(handle)
         except Exception:  # noqa: BLE001 - already gone is the outcome wanted
             pass
+    return pixels
 
 
 def _icon_handle(answer: Any) -> int:
-    """The HICON out of whatever shape pywin32 returned.
+    """The HICON out of whatever shape pywin32 handed back.
 
-    Documented as a two-tuple of a result and the SHFILEINFO, and returned
-    that way by every version this has been run against -- but the structure
-    itself starts with the handle, so both shapes are read rather than one
-    asserted. Guessing wrong here would leak an icon handle per row.
+    Documented as a two-tuple of the API's own result and an SHFILEINFO, and
+    the SHFILEINFO starts with the handle -- so the usual shape is
+    `(result, (hIcon, ...))`. The others are read too rather than asserted
+    against, because the cost of guessing wrong is not a wrong picture: it is
+    an icon handle leaked per row, and GDI runs out quietly.
     """
+    if isinstance(answer, int):
+        return answer
     if isinstance(answer, (tuple, list)) and answer:
-        first = answer[0]
-        if isinstance(first, (tuple, list)) and first:
-            return int(first[0] or 0)
-        if len(answer) > 1 and isinstance(answer[1], (tuple, list)) and answer[1]:
-            return int(answer[1][0] or 0)
-        if isinstance(first, int) and len(answer) == 1:
-            return int(first)
-    return 0
+        for part in answer:
+            if isinstance(part, (tuple, list)) and part:
+                return int(part[0] or 0)
+        handle = getattr(answer[-1], "hIcon", None)
+        if handle is not None:
+            return int(handle or 0)
+        if len(answer) == 1 and isinstance(answer[0], int):
+            return int(answer[0])
+    return int(getattr(answer, "hIcon", 0) or 0)
 
 
 #: The two backgrounds an icon is composited against to recover its alpha.
@@ -501,7 +524,7 @@ _ON_BLACK = 0x000000
 _ON_WHITE = 0xFFFFFF
 
 
-def _icon_pixels(hicon: int, size: int) -> bytes | None:
+def _icon_pixels(hicon: int, size: int, problems: list[str] | None = None) -> bytes | None:
     """An icon as premultiplied BGRA, drawn twice to work out its alpha.
 
     `DrawIconEx` composites correctly onto whatever is already there, both for
@@ -519,12 +542,18 @@ def _icon_pixels(hicon: int, size: int) -> bytes | None:
     that alpha, which is the form Qt wants to be handed.
     """
     expected = size * size * 4
-    on_black = _draw_icon(hicon, size, _ON_BLACK)
-    on_white = _draw_icon(hicon, size, _ON_WHITE)
+    on_black = _draw_icon(hicon, size, _ON_BLACK, problems)
+    on_white = _draw_icon(hicon, size, _ON_WHITE, problems)
     if on_black is None or on_white is None:
         return None
     if len(on_black) != expected or len(on_white) != expected:
-        return None  # not the 32-bit surface this assumes; better nothing
+        # Not the 32-bit surface this assumes. Better nothing than a picture
+        # made of the wrong bytes, and said out loud rather than guessed at.
+        if problems is not None:
+            problems.append(f"a {size}x{size} icon came back as {len(on_black)} "
+                            f"bytes rather than {expected}; the desktop may not "
+                            f"be 32-bit")
+        return None
 
     pixels = bytearray(on_black)
     for index in range(0, expected, 4):
@@ -536,7 +565,8 @@ def _icon_pixels(hicon: int, size: int) -> bytes | None:
     return bytes(pixels)
 
 
-def _draw_icon(hicon: int, size: int, fill: int) -> bytes | None:
+def _draw_icon(hicon: int, size: int, fill: int,
+               problems: list[str] | None = None) -> bytes | None:
     """Draw one icon onto a solid background and read the pixels back.
 
     Every handle taken here is given back in the same call. A worker that
@@ -557,7 +587,9 @@ def _draw_icon(hicon: int, size: int, fill: int) -> bytes | None:
         win32gui.DrawIconEx(memory.GetSafeHdc(), 0, 0, hicon, size, size,
                             0, None, win32con.DI_NORMAL)
         return bytes(bitmap.GetBitmapBits(True))
-    except Exception:  # noqa: BLE001 - a drawing failure is one missing icon
+    except Exception as exc:  # noqa: BLE001 - a drawing failure is one missing icon
+        if problems is not None:
+            problems.append(f"drawing the icon failed: {_describe(exc)}")
         return None
     finally:
         if bitmap is not None:
@@ -570,13 +602,9 @@ def _draw_icon(hicon: int, size: int, fill: int) -> bytes | None:
                 memory.DeleteDC()
             except Exception:  # noqa: BLE001
                 pass
-        if surface is not None:
-            # Detached rather than deleted: the handle underneath belongs to
-            # the desktop, and deleting it takes a DC away from every process.
-            try:
-                surface.Detach()
-            except Exception:  # noqa: BLE001
-                pass
+        # `surface` wraps the desktop's own DC and is deliberately not deleted:
+        # the handle belongs to the desktop, pywin32 does not own it, and
+        # releasing it below is the whole of the cleanup it needs.
         win32gui.ReleaseDC(0, screen)
 
 

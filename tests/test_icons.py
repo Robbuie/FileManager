@@ -69,6 +69,112 @@ def test_an_empty_request_is_answered_rather_than_ignored():
     assert replies[0].payload == {"size": 16, "icons": {}}
 
 
+class FakeShell:
+    """Enough of `win32com.shell.shell` to see which module gets asked."""
+
+    def __init__(self, handle=777):
+        self.calls = []
+        self._handle = handle
+
+    def SHGetFileInfo(self, name, attributes, flags):  # noqa: N802 - the API's name
+        self.calls.append((name, attributes, flags))
+        return (1, (self._handle, 0, 0, "", ""))
+
+
+class FakeGui:
+    def __init__(self):
+        self.destroyed = []
+
+    def DestroyIcon(self, handle):  # noqa: N802 - the API's name
+        self.destroyed.append(handle)
+
+
+class FakeConst:
+    SHGFI_ICON = 0x000000100
+    SHGFI_USEFILEATTRIBUTES = 0x000000010
+    SHGFI_LARGEICON = 0x000000000
+    SHGFI_SMALLICON = 0x000000001
+    FILE_ATTRIBUTE_NORMAL = 0x80
+    FILE_ATTRIBUTE_DIRECTORY = 0x10
+
+
+@pytest.fixture
+def shell(monkeypatch):
+    """The worker with a shell, a GDI module and constants it can reach."""
+    from app.io import worker
+
+    fake = FakeShell()
+    gui = FakeGui()
+    monkeypatch.setattr(worker, "win32shell", fake)
+    monkeypatch.setattr(worker, "win32gui", gui)
+    monkeypatch.setattr(worker, "win32ui", object())
+    monkeypatch.setattr(worker, "shellcon", FakeConst)
+    monkeypatch.setattr(worker, "win32con", FakeConst)
+    monkeypatch.setattr(worker, "_icon_pixels",
+                        lambda handle, size, problems=None: b"drawn")
+    return worker, fake, gui
+
+
+def test_the_icon_comes_from_the_shell_module_not_from_win32gui(shell):
+    """`SHGetFileInfo` is in `win32com.shell.shell`. Asking `win32gui` for it
+    raises `AttributeError`, which looked exactly like a folder full of
+    extensions Windows has no icons for -- every key empty, nothing said.
+    """
+    worker, fake, gui = shell
+    assert worker._shell_icon(".pdf", 16) == b"drawn"
+    name, attributes, flags = fake.calls[0]
+    assert name == "file.pdf"
+    assert attributes == FakeConst.FILE_ATTRIBUTE_NORMAL
+    assert flags & FakeConst.SHGFI_USEFILEATTRIBUTES
+    assert flags & FakeConst.SHGFI_SMALLICON
+
+
+def test_a_folder_is_asked_for_as_a_folder(shell):
+    worker, fake, _gui = shell
+    worker._shell_icon(ICON_FOLDER, 32)
+    name, attributes, flags = fake.calls[0]
+    assert attributes == FakeConst.FILE_ATTRIBUTE_DIRECTORY
+    assert not flags & FakeConst.SHGFI_SMALLICON
+
+
+def test_every_icon_handle_is_destroyed(shell):
+    """GDI runs out quietly. A worker that leaks one handle per row stops
+    drawing anything, and it presents as a blank window rather than an error.
+    """
+    worker, _fake, gui = shell
+    for key in (".pdf", ".dwg", ICON_FOLDER):
+        worker._shell_icon(key, 16)
+    assert gui.destroyed == [777, 777, 777]
+
+
+def test_a_call_that_is_not_there_says_so_rather_than_going_quiet(monkeypatch):
+    from app.io import worker
+
+    monkeypatch.setattr(worker, "win32shell", object())   # no SHGetFileInfo
+    monkeypatch.setattr(worker, "win32gui", FakeGui())
+    monkeypatch.setattr(worker, "win32ui", object())
+    monkeypatch.setattr(worker, "shellcon", FakeConst)
+    monkeypatch.setattr(worker, "win32con", FakeConst)
+
+    problems = []
+    assert worker._shell_icon(".pdf", 16, problems) is None
+    assert problems and "AttributeError" in problems[0]
+
+    replies = []
+    worker._icon(_request(keys=[".pdf"]), _Outbox(replies))
+    assert replies[0].payload["icons"] == {}
+    assert "AttributeError" in replies[0].message
+
+
+def test_a_reply_with_icons_carries_no_complaint(shell):
+    worker, _fake, _gui = shell
+    replies = []
+    worker._icon(_request(keys=[".pdf"]), _Outbox(replies))
+    assert replies[0].status is Status.OK
+    assert replies[0].payload["icons"] == {".pdf": b"drawn"}
+    assert replies[0].message == ""
+
+
 def test_alpha_is_recovered_from_the_two_passes(monkeypatch):
     """Opaque where the two passes agree, absent where they differ by the range.
 
@@ -86,7 +192,8 @@ def test_alpha_is_recovered_from_the_two_passes(monkeypatch):
     on_white = bytes([0, 0, 255, 7] + [255, 255, 255, 7]
                      + [128, 128, 255, 7] + [0, 0, 0, 7])
     passes = {0x000000: on_black, 0xFFFFFF: on_white}
-    monkeypatch.setattr(worker, "_draw_icon", lambda hicon, size, fill: passes[fill])
+    monkeypatch.setattr(worker, "_draw_icon",
+                        lambda hicon, size, fill, problems=None: passes[fill])
 
     pixels = worker._icon_pixels(1, 2)
     assert pixels is not None
@@ -95,11 +202,14 @@ def test_alpha_is_recovered_from_the_two_passes(monkeypatch):
     assert list(pixels[2::4]) == [255, 0, 128, 0]
 
 
-def test_a_surface_that_is_not_32_bit_is_refused_rather_than_guessed(monkeypatch):
+def test_a_surface_that_is_not_32_bit_is_refused_and_says_why(monkeypatch):
     from app.io import worker
 
-    monkeypatch.setattr(worker, "_draw_icon", lambda hicon, size, fill: b"\x00" * 12)
-    assert worker._icon_pixels(1, 2) is None
+    monkeypatch.setattr(worker, "_draw_icon",
+                        lambda hicon, size, fill, problems=None: b"\x00" * 12)
+    problems = []
+    assert worker._icon_pixels(1, 2, problems) is None
+    assert problems and "32-bit" in problems[0]
 
 
 class _Outbox:
