@@ -42,6 +42,51 @@ class Op(str, Enum):
     RESOLVE = "resolve"
     PING = "ping"
 
+    #: Hand a path to the shell and let Windows decide what opens it. In a
+    #: worker like everything else: ShellExecute against a path on a share that
+    #: has gone away blocks exactly as a listing does, and the association
+    #: lookup itself can touch the file.
+    OPEN = "open"
+
+    #: The drive letters this session has, from the local session table. It
+    #: reads nothing off any volume, but it is still a filesystem call and the
+    #: UI thread does not make those.
+    DRIVES = "drives"
+
+    #: Free and total bytes for the volume a path is on. Unlike DRIVES this
+    #: does open the volume, so it carries a deadline and a failure is a blank
+    #: readout rather than an error.
+    FREE_SPACE = "free_space"
+
+    # The ops that change what is on disk. They are single calls rather than a
+    # queue, which is what makes them worker ops: a copy of 4,000 files needs
+    # pausing, per-file progress and a conflict rule, and belongs in `ops.py`
+    # when that exists. Making a folder does not.
+    #
+    # What they share is that a partial success is a real outcome -- three of
+    # five files deleted, the folder made but not the one inside it -- so each
+    # reply says what actually happened rather than only whether it worked.
+
+    #: Create one folder. The path is the folder to create, not its parent.
+    MKDIR = "mkdir"
+
+    #: Rename in place. `args["name"]` is a bare name, never a path: a rename
+    #: that can move is a move, and a move has a destination the user confirms.
+    RENAME = "rename"
+
+    #: Delete `args["names"]` from the folder at `path`, to the Recycle Bin
+    #: unless `args["permanent"]`. Several names in one request rather than one
+    #: request each, because the shell treats one call as one operation and
+    #: that is what makes it one undo.
+    DELETE = "delete"
+
+    #: Fault injection, and the harness is the only thing allowed to send it.
+    #: It exists because the failure this application is built around -- a call
+    #: that has not returned and never will -- cannot otherwise be produced on
+    #: demand, and a recovery path that has only ever been reasoned about is not
+    #: a recovery path. Nothing in `ui` or `core` may send it.
+    STALL = "stall"
+
 
 @dataclass(frozen=True, slots=True)
 class Entry:
@@ -96,3 +141,103 @@ class Reply:
 #: Rows per streamed batch. Large enough that the queue is not the bottleneck,
 #: small enough that the first rows paint while the rest are still arriving.
 BATCH_SIZE = 1000
+
+
+# --------------------------------------------------------------------------
+# Transfers.
+#
+# A separate vocabulary from the request/reply above, because a transfer is not
+# a request: it is long, it is interactive -- a conflict is a question asked
+# back -- and it outlives the folder it started from. What it shares is that
+# everything here is plain and picklable.
+# --------------------------------------------------------------------------
+
+
+class Transfer(str, Enum):
+    COPY = "copy"
+    MOVE = "move"
+
+
+class Conflict(str, Enum):
+    """What to do about a name that is already taken at the destination.
+
+    `ASK` is the default and the only one that stops. The others exist so that
+    an answer can be applied to the rest of the queue without asking again --
+    which is the difference between a usable copy of 400 files and one that
+    holds a dialog up in front of the user 400 times.
+    """
+
+    ASK = "ask"
+    SKIP = "skip"
+    OVERWRITE = "overwrite"
+    NEWER = "newer"          # overwrite only when the source is newer
+    RENAME = "rename"        # keep both; the incoming one gets "(2)"
+
+
+@dataclass(frozen=True, slots=True)
+class Job:
+    """One transfer, as the window asks for it.
+
+    `sources` are full paths and `destination` is a folder that must already
+    exist. The application never invents a destination: it is confirmed before
+    the job is made, and nothing here will create one.
+    """
+
+    id: int
+    kind: Transfer
+    sources: tuple[str, ...]
+    destination: str
+    conflict: Conflict = Conflict.ASK
+
+
+class Progress(str, Enum):
+    """What the ops process says while it works."""
+
+    SCANNING = "scanning"    # counting what is about to move
+    SCANNED = "scanned"      # totals known: {"files", "bytes"}
+    STARTED = "started"      # a job began
+    COPYING = "copying"      # {"name", "done", "total", "item_done", "item_total"}
+    CONFLICT = "conflict"    # a question; the job waits for an Answer
+    FAILED_ITEM = "item"     # one item failed; the job carries on
+    PAUSED = "paused"
+    RESUMED = "resumed"
+    DONE = "done"            # {"copied", "skipped", "failed", "cancelled"}
+
+
+@dataclass(frozen=True, slots=True)
+class Event:
+    """Something the ops process wants the window to know.
+
+    One shape for all of them: a job id, what kind of thing happened, and a
+    payload whose keys depend on the kind. A stream of differently shaped
+    messages would need a match at every hop between here and the status bar.
+    """
+
+    job: int
+    kind: Progress
+    payload: dict[str, Any] = field(default_factory=dict)
+    message: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class Answer:
+    """The reply to a `CONFLICT`, and the only message that flows back in.
+
+    `apply_to_all` is what keeps a queue moving: it turns one decision into the
+    rule for the rest of this job.
+    """
+
+    job: int
+    action: Conflict
+    apply_to_all: bool = False
+
+
+#: Bytes per read while copying. Big enough that the syscall overhead does not
+#: show over SMB, small enough that a pause or a cancel is noticed within a
+#: fraction of a second on a slow link.
+CHUNK = 1024 * 1024
+
+#: How often progress is reported, in seconds. A file-per-event stream is
+#: thousands of events for a folder of small files, and the status bar cannot
+#: read faster than a person can.
+PROGRESS_INTERVAL = 0.15

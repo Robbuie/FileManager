@@ -44,6 +44,12 @@ def rgb(colour: RGB) -> str:
     return "#%02x%02x%02x" % colour
 
 
+def unhex(value: str) -> RGB:
+    """`#1d2128` back to channels, for mixing against a theme's own greys."""
+    text = value.lstrip("#")
+    return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
+
+
 def rgba(colour: RGB, alpha: float) -> str:
     """QSS understands `rgba(r, g, b, a)` with a float alpha."""
     r, g, b = colour
@@ -81,6 +87,15 @@ def build(
     out["accent_lift"] = mix(a, _LIFT, 0.62)
     for name, alpha in ACCENT_ALPHA.items():
         out[f"accent_{name}"] = rgba(a, alpha)
+
+    # The selected row needs an *opaque* tint as well as the translucent one.
+    # Qt paints item selection from the palette, and a palette colour has no
+    # alpha to give, so the wash has to be pre-mixed against the surface it
+    # sits on. Two of them: the focused pane reads stronger than the other, so
+    # that with two panes on screen it is obvious which selection is live.
+    surface = unhex(out["bg_2"])
+    out["accent_row"] = mix(a, surface, 0.26)
+    out["accent_row_idle"] = mix(a, surface, 0.13)
 
     for key, value in DENSITIES[density_name].items():
         out[key] = f"{value:g}px" if key == "ui_font" else f"{int(value)}px"

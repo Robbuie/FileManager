@@ -21,3 +21,6 @@ desktop.ini
 # Local
 *.log
 .env
+
+# Session scratch
+Claude outputs/

@@ -26,10 +26,14 @@ suite. See "Look and feel" below — that is not a nice-to-have, it is a spec.
 - **No decorative output.** No banner comments made of box-drawing characters,
   no ASCII art, no "Done!" flourishes. Comments explain *why* something exists,
   in prose, the way the existing files do.
-- **Claude cannot test this app.** No GUI to look at, no rendering to check, no
-  network shares to reach, no 50,000-file folder to enumerate. The user is the
-  entire test loop. So: keep changes small enough to be verified in one sitting,
-  say plainly what needs to be tried, and never report a UI change as working.
+- **Claude cannot test this app, with one exception.** No network shares to
+  reach, no 50,000-file folder to enumerate, no clicking anything. The user is
+  the test loop for all of that. The exception is the *look*: `tools/preview.py`
+  renders the real window offscreen to a PNG, so a theme that did not apply or a
+  column that collapsed is visible without a screen. Use it before saying a
+  layout is right. It says nothing about whether the app behaves. So: keep
+  changes small enough to be verified in one sitting, say plainly what needs to
+  be tried, and never report a UI change as working.
   "This should now do X — worth checking against a live share" is honest;
   "fixed" is not.
 - **Claude has direct read/write access to `C:\Users\rjokr\Projects\FileManager`
@@ -41,18 +45,66 @@ suite. See "Look and feel" below — that is not a nice-to-have, it is a spec.
 
 ## Commands
 
-Not yet established — the repo is at the start of step 1 below. When the layout
-lands, this section holds the real commands (run the app, run the headless
-harness, build the installer) and stays current.
-
-Intended shape:
+The window runs; the operations that change anything on disk do not exist yet.
 
 ```
-python -m app                     # run the app
-python -m app.io.harness ...      # headless CLI against the io layer, no UI
-pytest                            # unit tests for the pure pieces
-pyinstaller packaging/app.spec    # installer build
+python -m venv .venv                    # once
+.venv\Scripts\activate
+pip install -r requirements.txt
+pip install pytest                      # tests only, not shipped
+
+pytest                                  # path, worker and pool checks
+python -m app.io.harness --help
+python -m app                           # the window
+
+python tools/preview.py --path C:\Windows\System32 --out preview.png
+python tools/preview.py --all-themes --out-dir previews
 ```
+
+Verifying the io layer against a real share — the four things that matter, in
+the order worth trying them:
+
+```
+python -m app.io.harness drives                          # enumerate, no probe
+python -m app.io.harness resolve S:\Jobs                 # letter, UNC, worker key
+python -m app.io.harness list S:\Jobs --timeout 20       # rows, first batch, rate
+python -m app.io.harness list S:\Jobs --kill-after 2000  # kill mid-listing
+python -m app.io.harness soak S:\Jobs --count 40 --interval 3 --retry
+python -m app.io.harness copy S:\Jobs\big D:\scratch --conflict rename
+python -m app.io.harness move S:\Jobs\big D:\scratch --cancel-after 50000000
+```
+
+The transfer commands run the real engine: the queue, the scan, the conflict
+rule and the cancel. `--cancel-after` is the one worth running against a share
+-- a cancel part way through a large file must leave the destination without a
+partial and the original untouched, and that is not something a screenshot can
+show.
+
+Without a share to hand, `stall` covers everything except the network itself by
+wedging a worker on purpose. It is the acceptance test for the architecture and
+runs anywhere:
+
+```
+python -m app.io.harness stall C:\Windows --timeout 3
+```
+
+What to look at rather than what to run:
+
+- `list` reports **first batch** separately from **elapsed**. If the two are
+  close on a 50k folder the listing is not streaming, whatever the total says.
+- `--kill-after` must end in a settled status within a second or two. A hang
+  there is the defect this application exists to fix, reproduced in miniature.
+- `soak` is the pull-the-cable test: start it, pull the network, watch the
+  status go GONE and the volume get marked unreachable, plug back in, and see
+  `--retry` bring it back without restarting anything.
+- `stall` must report five passes. A failure there is the architecture not
+  working, not a flaky test, and nothing downstream is worth building until it
+  is green again.
+
+The tests run anywhere, including off Windows — the session table is injected
+rather than read, and a hung worker is reproduced with SIGSTOP. That makes them
+the one part of this project that can be checked without the user watching a
+window, which is reason enough to keep them passing.
 
 ## The rule everything else follows from
 
@@ -221,6 +273,25 @@ QSS has no custom properties and no `color-mix`. Do not try to fake them.
   diff colour in a future compare view) do **not** follow the accent. They stay
   fixed and stay named, so nobody tidies them into the accent later.
 
+## Keys
+
+The Norton keymap, which is what Double Commander uses and what the user's
+hands already know. They are handled by the pane rather than as window
+shortcuts, because a window shortcut on Delete takes the key away from the path
+bar and the filter box -- and backspacing over a typo would start deleting
+files.
+
+```
+F2   rename                F5   copy to the other pane
+F7   new folder            F6   move to the other pane
+F8   delete (Recycle Bin)  Del  the same; Shift+Del is permanent
+Ins  mark and move down    Tab  the other pane
+Ctrl+R  refresh            Ctrl+Shift+R  reconnect
+Ctrl+F  filter             Ctrl+L  edit the path
+Ctrl+T / Ctrl+W  tabs      Ctrl+J  the transfer queue
+Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
+```
+
 ## Conventions
 
 - Python 3.11+, 4-space indent, type hints on anything crossing a module
@@ -242,11 +313,15 @@ QSS has no custom properties and no `color-mix`. Do not try to fake them.
 - **A killed worker leaves in-flight operations orphaned.** Whatever restarts the
   worker also has to fail the outstanding requests, or a tab waits forever on a
   reply that will never come. Restart and re-request; do not resume.
-- **Copy/move is where hobby file managers fall over,** and the hard part is not
-  the copying. It is the queue: pause and resume, per-file and total progress,
-  conflict rules (skip / overwrite / newer only / auto-rename), locked-file
-  retry, and preserving timestamps and attributes. Design the queue before
-  writing the copy loop.
+- **Copy/move is where hobby file managers fall over,** and the hard part was
+  never the copying. `app/io/ops.py` has the queue -- pause, resume, cancel,
+  conflict rules with an answer that applies to the rest, bounded retry on a
+  locked file, timestamps and attributes preserved. Two invariants in there are
+  not negotiable and are the reason it can be trusted with somebody's files:
+  **every file is written beside its target and renamed onto it**, so nothing
+  half-written ever wears the real name; and **a move deletes its source only
+  after the copy is verified by size**. Anything added to that module keeps
+  both.
 - **Destructive operations need a confirmed target before anything moves.** The
   app never picks a destination on its own and never reports what it did after
   the fact.
@@ -260,6 +335,14 @@ QSS has no custom properties and no `color-mix`. Do not try to fake them.
   the startup hang.
 
 ## Build order
+
+0. Done so far: the io layer (0.2), the window with panes, tabs and navigation
+   (0.3), the chrome that makes it usable -- opening files, drives, filter,
+   selection, free space (0.4), single-call operations: mkdir, rename and
+   delete to the Recycle Bin (0.5), and the copy/move engine with its queue
+   (0.6). What is left before this replaces Double Commander day to day: the
+   installer, shell icons and context menu, and a transfer that outlives the
+   window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,
