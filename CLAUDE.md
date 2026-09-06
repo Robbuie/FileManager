@@ -33,8 +33,8 @@ suite. See "Look and feel" below — that is not a nice-to-have, it is a spec.
   "This should now do X — worth checking against a live share" is honest;
   "fixed" is not.
 - **Claude has direct read/write access to `C:\Users\rjokr\Projects\FileManager`
-  in Cowork sessions.** Edit files in place there. (`PROJECT-CONTEXT.md` still
-  says files are handed over manually — that line is stale.)
+  in Cowork sessions.** Edit files in place there. Pushing is the user's job —
+  the session has no GitHub credentials and no `gh`.
 - **Ask before adding a dependency.** The dependency list is short on purpose
   and every addition ships inside the installer.
 - Every user-visible change gets a `CHANGELOG.md` entry and a version bump.

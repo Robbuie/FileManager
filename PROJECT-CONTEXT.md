@@ -119,8 +119,10 @@ filemanager/
 Same as redlinepdf: public GitHub repo, installer with auto-update from
 releases, built iteratively across sessions.
 
-Local path: `C:\Users\rjokr\Projects\` (Claude has no access — files are
-handed over and saved manually).
+Repo: `Robbuie/FileManager`, public. Local path
+`C:\Users\rjokr\Projects\FileManager`, which Claude reads and writes
+directly in Cowork sessions. Pushes are done by the user; the session has no
+GitHub credentials.
 
 Claude cannot run the GUI, see rendering, or reach the network shares.
 The user is the entire test loop.
