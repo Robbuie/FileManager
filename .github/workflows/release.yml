@@ -103,6 +103,28 @@ jobs:
             dist/FileManager-Setup-*.exe
             dist/latest.json
 
+      # The release page says what changed, taken from the entry that was
+      # written anyway rather than typed a second time. If the slice comes back
+      # empty -- a heading renamed, a version not in the file -- the release
+      # still goes out with the old one-liner, because a release that fails to
+      # publish over its own notes is a worse outcome than a thin release page.
+      - name: Release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          python - "$GITHUB_REF_NAME" <<'PY' > notes.md || true
+          import io, re, sys
+          version = sys.argv[1].lstrip("v")
+          text = io.open("CHANGELOG.md", encoding="utf-8").read()
+          match = re.search(r"^## \[" + re.escape(version) + r"\].*?$(.*?)(?=^## \[|\Z)",
+                            text, re.S | re.M)
+          print((match.group(1).strip() if match else ""))
+          PY
+          if [ ! -s notes.md ]; then
+            echo "File Manager ${GITHUB_REF_NAME#v} -- see CHANGELOG.md" > notes.md
+          fi
+          cat notes.md
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash
@@ -115,5 +137,5 @@ jobs:
           gh release delete "$GITHUB_REF_NAME" --yes || true
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
-            --notes "File Manager ${GITHUB_REF_NAME#v} -- see CHANGELOG.md" \
+            --notes-file notes.md \
             dist/FileManager-Setup-*.exe dist/latest.json
