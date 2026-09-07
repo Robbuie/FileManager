@@ -561,6 +561,66 @@ def test_a_menu_nobody_used_is_released(shell_menu):
     assert bridge.sent[1]["args"] == {"token": 31}
 
 
+# ------------------------------------------------------ what the pane draws
+
+
+def _items():
+    from app.io.protocol import MENU_COMMAND, MENU_SEPARATOR, MenuItem
+
+    return [
+        MenuItem(id=1, kind=MENU_COMMAND, text="Open", verb="open"),
+        MenuItem(id=0, kind=MENU_SEPARATOR),
+        MenuItem(id=2, kind=MENU_COMMAND, text="7-Zip", verb=""),
+        MenuItem(id=0, kind=MENU_SEPARATOR),
+        MenuItem(id=3, kind=MENU_COMMAND, text="Cut", verb="cut"),
+        MenuItem(id=4, kind=MENU_COMMAND, text="Rename", verb="rename"),
+        MenuItem(id=5, kind=MENU_COMMAND, text="Delete", verb="delete"),
+        MenuItem(id=0, kind=MENU_SEPARATOR),
+    ]
+
+
+def test_the_shell_entries_this_pane_already_offers_are_dropped():
+    """Open, Rename and Delete are on the menu twice otherwise, in the shell's
+    words and in this application's, meaning the same thing.
+    """
+    from app.ui.pane import SHELL_VERBS_WE_HAVE, _tidy
+
+    kept = _tidy(_items(), drop_verbs=SHELL_VERBS_WE_HAVE)
+    # The separator between them survives; the ones the drops left stranded do
+    # not. Cut stays: the clipboard is not something this pane offers.
+    assert [(item.kind, item.text) for item in kept] == [
+        ("command", "7-Zip"),
+        ("separator", ""),
+        ("command", "Cut"),
+    ]
+
+
+def test_the_gap_a_dropped_entry_leaves_is_closed_up():
+    """Two separators with nothing between them read as a menu that failed to
+    draw rather than one that was tidied.
+    """
+    from app.io.protocol import MENU_SEPARATOR
+    from app.ui.pane import SHELL_VERBS_WE_HAVE, _tidy
+
+    kept = _tidy(_items(), drop_verbs=SHELL_VERBS_WE_HAVE)
+    kinds = [item.kind for item in kept]
+    assert kinds[0] != MENU_SEPARATOR
+    assert kinds[-1] != MENU_SEPARATOR
+    assert not any(a == b == MENU_SEPARATOR for a, b in zip(kinds, kinds[1:]))
+
+
+def test_a_submenu_keeps_the_verbs_the_extension_chose():
+    """Only the top level is filtered. A verb inside somebody's submenu means
+    whatever that extension says it means.
+    """
+    from app.ui.pane import _tidy
+
+    kept = _tidy(_items(), drop_verbs=frozenset())
+    assert [item.text for item in kept if item.kind != "separator"] == [
+        "Open", "7-Zip", "Cut", "Rename", "Delete",
+    ]
+
+
 def _later() -> float:
     import time
 

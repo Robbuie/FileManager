@@ -24,7 +24,7 @@ from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 
 from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size
-from app.io.protocol import MENU_SEPARATOR, MENU_SUBMENU, MenuItem
+from app.io.protocol import MENU_COMMAND, MENU_SEPARATOR, MENU_SUBMENU, MenuItem
 from app.ui import dialogs
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -41,6 +41,22 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+#: Shell commands the pane already offers itself, by the shell's own name for
+#: them rather than by their label. A verb is stable across languages and
+#: across the wording Windows uses this year; the label is neither.
+#:
+#: The decision is here rather than in the shell host on purpose. The host
+#: reads the menu Windows built and does not edit it -- what a menu ends up
+#: showing is a question about this application's own verbs, and this is where
+#: those are. Only the top level is filtered: a verb inside somebody's submenu
+#: means what that extension says it means.
+#:
+#: Cut, Copy and Paste are deliberately not in here. The shell's Copy is the
+#: clipboard and this application's Copy is the other pane, which is why the
+#: pane's own entries say so.
+SHELL_VERBS_WE_HAVE = frozenset({"open", "delete", "rename", "refresh"})
 
 
 class PaneWidget(QFrame):
@@ -350,9 +366,9 @@ class PaneWidget(QFrame):
         if on_row:
             menu.addAction("Open\tEnter", self._open_current)
             menu.addSeparator()
-            menu.addAction("Copy\tF5",
+            menu.addAction("Copy to other pane\tF5",
                            lambda: self.transferRequested.emit("copy"))
-            menu.addAction("Move\tF6",
+            menu.addAction("Move to other pane\tF6",
                            lambda: self.transferRequested.emit("move"))
             menu.addAction("Rename\tF2", self.rename_current)
             menu.addAction("Delete\tDel", self.delete_selection)
@@ -380,7 +396,7 @@ class PaneWidget(QFrame):
             disabled = self._menu.addAction("No Explorer commands here")
             disabled.setEnabled(False)
             return
-        self._fill(self._menu, items, token)
+        self._fill(self._menu, items, token, top=True)
 
     def _on_shell_unavailable(self, message: str) -> None:
         """Say why there are none, in the menu, without taking it over."""
@@ -390,7 +406,7 @@ class PaneWidget(QFrame):
         self._menu_slot.setEnabled(False)
         self._menu_slot = None
 
-    def _fill(self, menu: QMenu, items, token: int) -> None:
+    def _fill(self, menu: QMenu, items, token: int, *, top: bool = False) -> None:
         """One level of the shell's menu, drawn with this application's look.
 
         Which is the whole reason the entries are walked in the shell host
@@ -399,9 +415,7 @@ class PaneWidget(QFrame):
         What it costs is the entries an extension paints itself rather than
         naming, which arrive labelled from their verb.
         """
-        for item in items:
-            if not isinstance(item, MenuItem):
-                continue
+        for item in _tidy(items, drop_verbs=SHELL_VERBS_WE_HAVE if top else frozenset()):
             if item.kind == MENU_SEPARATOR:
                 menu.addSeparator()
                 continue
@@ -732,6 +746,31 @@ class PaneWidget(QFrame):
         button.setFocusPolicy(Qt.NoFocus)  # the listing keeps the focus
         button.clicked.connect(slot)
         return button
+
+
+def _tidy(items, *, drop_verbs) -> list[MenuItem]:
+    """The entries to draw: the shell's, less the ones this pane already has,
+    with the gaps that leaves closed up.
+
+    Dropping an entry leaves its separator behind, and two separators with
+    nothing between them read as a menu that failed to draw rather than as one
+    that was tidied. So separators are collapsed afterwards rather than
+    decided at the same time -- which also means a menu that turns out to be
+    entirely duplicates comes back empty instead of coming back as a row of
+    lines.
+    """
+    kept: list[MenuItem] = []
+    for item in items:
+        if not isinstance(item, MenuItem):
+            continue
+        if item.kind == MENU_COMMAND and item.verb.lower() in drop_verbs:
+            continue
+        if item.kind == MENU_SEPARATOR and (not kept or kept[-1].kind == MENU_SEPARATOR):
+            continue
+        kept.append(item)
+    while kept and kept[-1].kind == MENU_SEPARATOR:
+        kept.pop()
+    return kept
 
 
 def _menu_icon(item: MenuItem) -> QIcon | None:

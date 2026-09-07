@@ -119,6 +119,9 @@ def _show_menu(window) -> None:
 
     widget = window._widgets[0]  # noqa: SLF001 - a development tool, not the app
     items = [
+        # Two of these are dropped by the pane because it offers them itself,
+        # which is the point of drawing them here.
+        MenuItem(id=8, text="Open", verb="open", default=True),
         MenuItem(id=1, text="Open with Code"),
         MenuItem(id=0, kind=MENU_SEPARATOR),
         MenuItem(id=0, kind=MENU_SUBMENU, text="7-Zip", items=(
@@ -131,13 +134,16 @@ def _show_menu(window) -> None:
             MenuItem(id=6, text="Revert", enabled=False),
         )),
         MenuItem(id=0, kind=MENU_SEPARATOR),
-        MenuItem(id=7, text="Properties", default=True),
+        MenuItem(id=9, text="Cut", verb="cut"),
+        MenuItem(id=10, text="Copy", verb="copy"),
+        MenuItem(id=11, text="Rename", verb="rename"),
+        MenuItem(id=7, text="Properties", verb="properties"),
     ]
     menu = QMenu(widget)
     menu.setToolTipsVisible(True)
     widget._add_verbs(menu, ["plan.dwg"], on_row=True)  # noqa: SLF001
     menu.addSeparator()
-    widget._fill(menu, items, 1)  # noqa: SLF001
+    widget._fill(menu, items, 1, top=True)  # noqa: SLF001
     # `popup`, not `exec`: this has to return so the image can be grabbed.
     menu.popup(widget.mapToGlobal(widget.rect().topLeft()) + QPoint(80, 120))
     return menu
