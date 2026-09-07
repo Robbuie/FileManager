@@ -12,6 +12,19 @@ change gets an entry and a version bump.
   installed shell extensions add are there -- TortoiseSVN, 7-Zip, Open with,
   Properties, whatever else this machine has -- under the application's own
   verbs. Shift-right-click asks for the entries Explorer hides behind Shift.
+- Right-clicking the background of a folder gives the folder's own menu -- New,
+  Paste, Refresh, Sort by, and the background entries a program installs --
+  which comes from the folder's view object rather than from the folder as an
+  item. They are two different menus in the shell and only one of them is what
+  a right-click on empty space means.
+- The selection menu is asked for with the flags Explorer uses, including
+  CMF_CANRENAME and CMF_ITEMMENU. Without the first there is no Rename in it,
+  and handlers written against Windows 8 and later read the second to know
+  they are being asked about an item at all.
+- Submenus are told they are opening, through IContextMenu2 or IContextMenu3.
+  Send to, Open with, New and most of what an extension puts in a submenu
+  arrive empty and fill themselves at that point, so without the handshake
+  they are arrows that open onto nothing.
 - The application's own operations come first, in their own words and with
   their keys: Open, Copy F5, Move F6, Rename F2, Delete, Delete permanently,
   New folder F7, Refresh. They are there whether or not the shell answers.
@@ -41,6 +54,12 @@ change gets an entry and a version bump.
   file -- a working copy of 400 modified files is a handful of images.
 - `View > Icon overlays` and `View > Explorer context menu` turn either of
   them off without a restart, for the day an extension misbehaves.
+- `tools\diagnose_menu.py` collects the item menu, the extended menu, the
+  folder background menu and the overlays into `Claude outputs\` in one run,
+  and the reply behind it says how many entries the shell built before
+  anything was read and why any of them were dropped. A menu that is short
+  because the shell had nothing and one that is short because the walk could
+  not read it look identical from the window.
 - Three harness commands, so all of it can be exercised without the window:
   `menu <folder> [names...]` prints the menu tree with the ids and verbs and
   will `--invoke` one of them, `overlays <folder>` reports how many rows carry
@@ -48,9 +67,6 @@ change gets an entry and a version bump.
   `elevate <action> <path>` runs one operation through the consent prompt.
 
 ### Known limits
-- The menu for the background of a folder is the menu for that folder as an
-  item. It is not the shell view's own background menu, so it does not carry
-  New or Paste.
 - An entry an extension paints itself rather than naming arrives with no text
   and is labelled from its verb. Explorer's recent-files entries are the
   common example.
