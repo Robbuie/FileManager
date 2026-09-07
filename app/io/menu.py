@@ -236,10 +236,39 @@ def _shell_menu(folder: str, names: list[str], hwnd: int) -> Any:
     shell_folder = desktop.BindToObject(pidl, None, win32shell.IID_IShellFolder)
 
     if not names:
-        return shell_folder.CreateViewObject(hwnd, win32shell.IID_IContextMenu)
+        return _interface(
+            shell_folder.CreateViewObject(hwnd, win32shell.IID_IContextMenu))
 
     children = [shell_folder.ParseDisplayName(hwnd, None, name)[1] for name in names]
-    return shell_folder.GetUIObjectOf(hwnd, children, win32shell.IID_IContextMenu, 0)
+    return _interface(
+        shell_folder.GetUIObjectOf(hwnd, children, win32shell.IID_IContextMenu, 0))
+
+
+def _interface(answer: Any) -> Any:
+    """The COM object out of whatever shape pywin32 handed back.
+
+    `GetUIObjectOf` returns a **tuple**: the reserved in/out flags and then the
+    interface, because the API's `rgfReserved` parameter is in/out and pywin32
+    returns in/out parameters alongside the result. `CreateViewObject`, next
+    door, returns the interface on its own. Nothing about the two calls hints
+    at the difference.
+
+    That cost a release. The menu was built, the tuple was handed to
+    `QueryContextMenu`, and every right-click showed one line: `'tuple' object
+    has no attribute 'QueryContextMenu'`. It is the same class of mistake as
+    `SHGetFileInfo` in `worker.py` -- a pywin32 return shape guessed at rather
+    than read -- so it is unwrapped by looking for the interface rather than by
+    indexing, and the tests hand back the real shape.
+    """
+    if not isinstance(answer, (tuple, list)):
+        return answer
+    for part in answer:
+        if hasattr(part, "QueryContextMenu"):
+            return part
+    for part in answer:
+        if not isinstance(part, int):
+            return part
+    raise OSError("the shell returned no context menu for that selection")
 
 
 def _menu_handler(shell_menu: Any) -> Any:

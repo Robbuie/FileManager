@@ -301,7 +301,10 @@ class FakeFolder:
 
     def GetUIObjectOf(self, hwnd, pidls, iid, reserved):  # noqa: N802
         self.asked.append(("items", len(pidls)))
-        return self._menu
+        # The real one returns the in/out flags *and* the interface. Returning
+        # the bare object here is what let a release ship in which every
+        # right-click said "'tuple' object has no attribute QueryContextMenu".
+        return 0, self._menu
 
     def CreateViewObject(self, hwnd, iid):  # noqa: N802
         self.asked.append(("background", 0))
@@ -342,6 +345,15 @@ def builder(monkeypatch, walker):
     monkeypatch.setattr(host, "win32shell", FakeShellModule(folder))
     monkeypatch.setattr(host, "shellcon", FakeShellcon)
     return folder, shell_menu
+
+
+def test_the_interface_is_taken_out_of_what_pywin32_returns(builder):
+    """`GetUIObjectOf` returns a tuple and `CreateViewObject` does not, and
+    nothing about the two calls hints at the difference.
+    """
+    folder, shell_menu = builder
+    assert host._interface((0, shell_menu)) is shell_menu
+    assert host._interface(shell_menu) is shell_menu
 
 
 def test_a_selection_asks_the_folder_about_those_items(builder):
