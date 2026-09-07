@@ -365,13 +365,14 @@ class PaneWidget(QFrame):
     def _on_shell_items(self, token: int, items) -> None:
         """Put Explorer's entries into a menu that is already open.
 
-        If it is not open any more the answer is dropped and the menu is let
-        go of: the user was quicker than the shell, which is a normal thing to
-        happen and not a failure of anything.
+        Both panes are connected to the one shell menu, because there is one
+        shell host and one menu on screen at a time. So this fires on the pane
+        that did not ask as well, and that pane must do *nothing*: releasing
+        here would let go of the menu the other pane is about to draw, and
+        every entry on it would then be dead when clicked. Whoever opened the
+        menu releases it when it closes.
         """
         if self._menu is None or self._menu_slot is None:
-            if self._pane.menu is not None:
-                self._pane.menu.release()
             return
         slot, self._menu_slot = self._menu_slot, None
         self._menu.removeAction(slot)
