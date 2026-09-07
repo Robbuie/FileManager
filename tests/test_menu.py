@@ -283,6 +283,155 @@ def test_menu_requests_are_keyed_on_the_host_rather_than_the_volume():
     assert MENU_HOST not in ("C:", "")
 
 
+# ------------------------------------------------------- which menu is asked for
+
+
+class FakeFolder:
+    """`IShellFolder`, as far as `_shell_menu` is concerned."""
+
+    def __init__(self, shell_menu):
+        self.asked = []
+        self._menu = shell_menu
+
+    def BindToObject(self, pidl, context, iid):  # noqa: N802 - the API's name
+        return self
+
+    def ParseDisplayName(self, hwnd, context, name, attributes=0):  # noqa: N802
+        return 0, [name.encode()], 0
+
+    def GetUIObjectOf(self, hwnd, pidls, iid, reserved):  # noqa: N802
+        self.asked.append(("items", len(pidls)))
+        return self._menu
+
+    def CreateViewObject(self, hwnd, iid):  # noqa: N802
+        self.asked.append(("background", 0))
+        return self._menu
+
+
+class FakeShellModule:
+    IID_IShellFolder = 1
+    IID_IContextMenu = 2
+    IID_IContextMenu2 = 3
+    IID_IContextMenu3 = 4
+
+    def __init__(self, folder):
+        self._folder = folder
+
+    def SHGetDesktopFolder(self):  # noqa: N802 - the API's name
+        return self._folder
+
+    def SHILCreateFromPath(self, path, flags):  # noqa: N802
+        return [b"one", b"two"], 0
+
+
+class FakeShellcon:
+    CMF_NORMAL = 0x00
+    CMF_EXPLORE = 0x04
+    CMF_CANRENAME = 0x10
+    CMF_ITEMMENU = 0x80
+    CMF_EXTENDEDVERBS = 0x100
+
+
+@pytest.fixture
+def builder(monkeypatch, walker):
+    """`_build`, with a shell that records which menu it was asked for."""
+    menus, gui = walker
+    menus[1] = [Item(text="Open", wID=host.MIN_ID)]
+    shell_menu = FakeContextMenu()
+    folder = FakeFolder(shell_menu)
+    monkeypatch.setattr(host, "win32shell", FakeShellModule(folder))
+    monkeypatch.setattr(host, "shellcon", FakeShellcon)
+    return folder, shell_menu
+
+
+def test_a_selection_asks_the_folder_about_those_items(builder):
+    folder, shell_menu = builder
+    outbox = Outbox()
+    host._build(request(Op.MENU, names=["a.txt", "b.txt"]), outbox, {"live": None})
+    assert folder.asked == [("items", 2)]
+    assert outbox.replies[0].status is Status.OK
+
+
+def test_empty_space_asks_for_the_folder_view_rather_than_the_folder(builder):
+    """The difference between the two is New and Paste. Asking for the folder
+    as an item gets a menu about the folder, which is not what a right-click
+    on the background of a listing means.
+    """
+    folder, _shell_menu = builder
+    host._build(request(Op.MENU, names=[]), Outbox(), {"live": None})
+    assert folder.asked == [("background", 0)]
+
+
+def test_a_selection_is_queried_with_the_flags_explorer_uses(builder):
+    """No CMF_CANRENAME means no Rename in the menu, and handlers written
+    against Windows 8 and later read CMF_ITEMMENU to know they are being asked
+    about an item at all.
+    """
+    _folder, shell_menu = builder
+    host._build(request(Op.MENU, names=["a.txt"]), Outbox(), {"live": None})
+    _hmenu, first, _last, flags = shell_menu.queried[0]
+    assert first == host.MIN_ID
+    assert flags & FakeShellcon.CMF_CANRENAME
+    assert flags & FakeShellcon.CMF_ITEMMENU
+    assert flags & FakeShellcon.CMF_EXPLORE
+    assert not flags & FakeShellcon.CMF_EXTENDEDVERBS
+
+
+def test_shift_asks_for_the_entries_explorer_hides(builder):
+    _folder, shell_menu = builder
+    host._build(request(Op.MENU, names=["a.txt"], extended=True), Outbox(), {"live": None})
+    assert shell_menu.queried[0][3] & FakeShellcon.CMF_EXTENDEDVERBS
+
+
+def test_the_background_menu_is_not_asked_about_an_item(builder):
+    _folder, shell_menu = builder
+    host._build(request(Op.MENU, names=[]), Outbox(), {"live": None})
+    flags = shell_menu.queried[0][3]
+    assert not flags & FakeShellcon.CMF_ITEMMENU
+
+
+def test_an_entry_that_is_dropped_says_why(builder):
+    """A menu that is short because the shell had nothing and one that is
+    short because this code could not read an entry look identical from the
+    window. Only one of them is a bug here.
+    """
+    _folder, _shell_menu = builder
+    outbox = Outbox()
+    host._build(request(Op.MENU, names=["a.txt"]), outbox, {"live": None})
+    assert outbox.replies[0].payload["skipped"] == []
+
+
+def test_a_submenu_is_told_it_is_opening(walker, monkeypatch):
+    """Send to, Open with and New arrive empty and fill themselves when the
+    shell is told the popup is opening. Without the handshake the window shows
+    an arrow that opens onto nothing.
+    """
+    menus, _gui = walker
+    monkeypatch.setattr(host, "win32con", type("C", (), {"WM_INITMENUPOPUP": 0x117}))
+    menus[1] = [Item(text="Send to", hSubMenu=2)]
+    menus[2] = []
+
+    told = []
+
+    class Handler:
+        def HandleMenuMsg(self, message, submenu, position):  # noqa: N802
+            told.append((message, submenu, position))
+            menus[2] = [Item(text="Desktop", wID=host.MIN_ID + 1)]
+
+    items = host._walk(FakeContextMenu(), 1, 0, depth=0, deadline=_later(),
+                       handler=Handler())
+    assert told == [(0x117, 2, 0)]
+    assert [child.text for child in items[0].items] == ["Desktop"]
+
+
+def test_an_extension_without_the_interface_is_the_ordinary_case(walker):
+    """`QueryInterface` refusing is not a failure: the extension finished its
+    menu during QueryContextMenu and has nothing to be told.
+    """
+    _menus, _gui = walker
+    assert host._menu_handler(FakeContextMenu()) is None
+
+
 # --------------------------------------------------------------- the core side
 
 

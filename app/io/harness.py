@@ -345,8 +345,18 @@ def cmd_menu(args: argparse.Namespace) -> int:
         if outcome.status is not Status.OK:
             return _exit_code(outcome)
         _report("token", token)
+        _report("built", f"{payload.get('positions', '?')} entries at the top level, "
+                         f"before anything was read")
         _report("entries", _count_items(items))
         _print_items(items, indent=2)
+        # What did not make it, and why. An entry that never arrives is
+        # invisible from the window, so a short menu and a menu this file
+        # mangled look the same from there.
+        dropped = list(payload.get("skipped") or ())
+        if dropped:
+            print(f"\nskipped {len(dropped)}:")
+            for note in dropped:
+                print(f"  {note}")
 
         if not args.invoke:
             release = _run(pool, Op.MENU_RELEASE, args.path, timeout=args.timeout,

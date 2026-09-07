@@ -181,11 +181,25 @@ def _build(request: Request, outbox: Any, state: dict[str, Any]) -> None:
 
     hmenu = win32gui.CreatePopupMenu()
     flags = shellcon.CMF_NORMAL | shellcon.CMF_EXPLORE
+    if names:
+        # What Explorer passes for a selection, and the entries are not the
+        # same without them: no CMF_CANRENAME means no Rename, and handlers
+        # written against Windows 8 and later look at CMF_ITEMMENU to decide
+        # whether they are being asked about an item at all.
+        flags |= shellcon.CMF_CANRENAME | shellcon.CMF_ITEMMENU
     if extended:
         flags |= shellcon.CMF_EXTENDEDVERBS
+    skipped: list[str] = []
     try:
         shell_menu.QueryContextMenu(hmenu, 0, MIN_ID, MAX_ID, flags)
-        items = _walk(shell_menu, hmenu, hwnd, depth=0, deadline=deadline)
+        # How many entries the shell put in the menu, before this file reads
+        # any of them. It is the number that says where a short menu came
+        # from: few here means the shell was asked the wrong question, many
+        # here and few in `items` means this file dropped them.
+        positions = win32gui.GetMenuItemCount(hmenu)
+        handler = _menu_handler(shell_menu)
+        items = _walk(shell_menu, hmenu, hwnd, depth=0, deadline=deadline,
+                      handler=handler, skipped=skipped)
     except Exception as exc:  # noqa: BLE001
         _destroy(hmenu)
         outbox.put(Reply(request.id, Status.ERROR, message=_describe(exc)))
@@ -194,68 +208,98 @@ def _build(request: Request, outbox: Any, state: dict[str, Any]) -> None:
     # Held, not destroyed: `InvokeCommand` needs this same object, and the
     # HMENU is what some extensions read their own state back out of.
     state["live"] = _Live(request.id, shell_menu, hmenu, folder)
+    # `skipped` is not decoration. An entry that does not arrive is invisible
+    # from the window, and the difference between "the shell had nothing" and
+    # "this file dropped it" is the difference between a menu that is short
+    # and a menu that is wrong. The harness prints them.
     outbox.put(Reply(request.id, Status.OK,
-                     payload={"token": request.id, "items": items}))
+                     payload={"token": request.id, "items": items,
+                              "skipped": skipped, "positions": positions}))
 
 
 def _shell_menu(folder: str, names: list[str], hwnd: int) -> Any:
-    """The `IContextMenu` for a selection.
+    """The `IContextMenu` for a selection, or for the folder's background.
 
-    With no names this is the menu for the folder as an item, which is what
-    Explorer shows for a folder in a listing rather than what it shows for the
-    background of an open window. The difference is real -- the background
-    menu is the shell view's, and it carries New and Paste -- and it is not
-    reached from here.
+    Two different objects, and the difference is the whole reason a
+    right-click on empty space used to be so thin. A selection asks the parent
+    folder for a menu about those items, which is what gives Open, Cut, Copy,
+    Send to, Properties and everything an extension adds for files. Empty
+    space asks the folder for its *view object*, which is a different menu
+    entirely -- New, Paste, Refresh, Sort by, and the background handlers a
+    program installs, the "Open Git Bash here" sort of entry. Asking for the
+    folder as an item, which is what this did before, gets neither.
     """
     desktop = win32shell.SHGetDesktopFolder()
-    if names:
-        pidl, _flags = win32shell.SHILCreateFromPath(folder, 0)
-        parent = (desktop.BindToObject(pidl, None, win32shell.IID_IShellFolder)
-                  if pidl else desktop)
-        children = [parent.ParseDisplayName(hwnd, None, name)[1] for name in names]
-        return parent.GetUIObjectOf(hwnd, children, win32shell.IID_IContextMenu, 0)
-
     pidl, _flags = win32shell.SHILCreateFromPath(folder, 0)
     if not pidl:
         raise OSError(f"the shell does not recognise {folder}")
-    # A root -- a drive, or the root of a share -- has no parent folder to be
-    # an item of, so the desktop is asked for it directly.
-    parent_pidl = pidl[:-1]
-    if parent_pidl:
-        parent = desktop.BindToObject(parent_pidl, None, win32shell.IID_IShellFolder)
-        return parent.GetUIObjectOf(hwnd, [pidl[-1:]], win32shell.IID_IContextMenu, 0)
-    return desktop.GetUIObjectOf(hwnd, [pidl], win32shell.IID_IContextMenu, 0)
+    shell_folder = desktop.BindToObject(pidl, None, win32shell.IID_IShellFolder)
+
+    if not names:
+        return shell_folder.CreateViewObject(hwnd, win32shell.IID_IContextMenu)
+
+    children = [shell_folder.ParseDisplayName(hwnd, None, name)[1] for name in names]
+    return shell_folder.GetUIObjectOf(hwnd, children, win32shell.IID_IContextMenu, 0)
 
 
-def _walk(shell_menu: Any, hmenu: int, hwnd: int, *,
-          depth: int, deadline: float) -> list[MenuItem]:
+def _menu_handler(shell_menu: Any) -> Any:
+    """The interface an extension wants menu messages on, if it has one.
+
+    `IContextMenu3` first and `IContextMenu2` after it, because the third is
+    the second with one more message. An extension that implements neither is
+    the ordinary case: its menu was finished during `QueryContextMenu` and
+    there is nothing to tell it.
+
+    This is what fills Send to, Open with and New. Those submenus arrive
+    empty and are populated when the shell is told they are opening, so
+    without this handshake the window shows three arrows that open onto
+    nothing -- which is exactly what Explorer would show if it skipped it.
+    """
+    for name in ("IID_IContextMenu3", "IID_IContextMenu2"):
+        iid = getattr(win32shell, name, None)
+        if iid is None:
+            continue
+        try:
+            return shell_menu.QueryInterface(iid)
+        except Exception:  # noqa: BLE001 - not implemented, which is normal
+            continue
+    return None
+
+
+def _walk(shell_menu: Any, hmenu: int, hwnd: int, *, depth: int, deadline: float,
+          handler: Any = None, skipped: list[str] | None = None) -> list[MenuItem]:
     """Read an `HMENU` into plain items, following its submenus.
 
-    Submenus are told they are opening first. Most extensions fill their
-    submenu in during `QueryContextMenu` and this changes nothing for them,
-    but the ones that build it on demand -- the shell's own Send To, among
-    others -- hand back an empty popup otherwise, and an empty submenu in the
-    window is indistinguishable from a broken one.
+    Submenus are told they are opening first, through `IContextMenu2` or
+    `IContextMenu3`. Most extensions fill their submenu in during
+    `QueryContextMenu` and this changes nothing for them, but the shell's own
+    Send to, Open with and New are built on demand and hand back an empty
+    popup otherwise -- three arrows that open onto nothing.
 
-    Everything here is defensive about a menu it did not build. An entry that
-    cannot be read is dropped rather than guessed at: a wrong label on
-    somebody else's command is worse than a missing one, because the user will
-    click it.
+    Everything here is defensive about a menu it did not build, and an entry
+    that has to be dropped says so in `skipped` rather than vanishing. A menu
+    that is short because the shell had nothing and a menu that is short
+    because this function could not read it look identical from the window,
+    and only one of them is a bug in this file.
     """
     items: list[MenuItem] = []
+    dropped = skipped if skipped is not None else []
     try:
         count = win32gui.GetMenuItemCount(hmenu)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        dropped.append(f"the menu could not be counted: {_describe(exc)}")
         return items
 
     for position in range(min(count, MAX_ITEMS)):
         if time.monotonic() > deadline:
+            dropped.append(f"the deadline passed at entry {position} of {count}")
             break
         try:
             buffer, _extras = win32gui_struct.EmptyMENUITEMINFO()
             win32gui.GetMenuItemInfo(hmenu, position, True, buffer)
             info = win32gui_struct.UnpackMENUITEMINFO(buffer)
-        except Exception:  # noqa: BLE001 - an entry that will not be read
+        except Exception as exc:  # noqa: BLE001 - an entry that will not be read
+            dropped.append(f"entry {position} could not be read: {_describe(exc)}")
             continue
 
         item_type = int(info.fType or 0)
@@ -268,29 +312,44 @@ def _walk(shell_menu: Any, hmenu: int, hwnd: int, *,
         submenu = int(info.hSubMenu or 0)
         item_id = int(info.wID or 0)
         offset = item_id - MIN_ID
+        picture = _bitmap(info.hbmpItem)
 
         if submenu:
-            _opening(shell_menu, submenu, position)
-            children = _walk(shell_menu, submenu, hwnd,
-                             depth=depth + 1, deadline=deadline) if depth < MAX_DEPTH else []
-            if not text and not children:
+            if depth >= MAX_DEPTH:
+                dropped.append(f"{text or 'a submenu'} is deeper than {MAX_DEPTH} levels")
                 continue
+            _opening(handler, submenu, position)
+            children = _walk(shell_menu, submenu, hwnd, depth=depth + 1,
+                             deadline=deadline, handler=handler, skipped=dropped)
+            if not text and not children:
+                dropped.append(f"an unnamed and empty submenu at entry {position}")
+                continue
+            if not children:
+                dropped.append(f"{text}: the submenu came back empty")
             items.append(MenuItem(
                 id=0, kind=MENU_SUBMENU, text=text or "More",
                 enabled=not (state & MFS_GRAYED) and bool(children),
-                icon=_bitmap(info.hbmpItem), icon_size=_ICON_SIZE if info.hbmpItem else 0,
+                icon=picture[0] if picture else None,
+                icon_size=picture[1] if picture else 0,
                 items=tuple(children),
             ))
             continue
 
         if not MIN_ID <= item_id <= MAX_ID:
-            continue  # not one of the shell's own commands
+            # Not one of the commands this QueryContextMenu handed out, so its
+            # number is an offset into somebody else's numbering.
+            dropped.append(f"{text or 'an entry'} at {position} has id {item_id}, "
+                           f"outside {MIN_ID}-{MAX_ID}")
+            continue
+
         verb = _command_string(shell_menu, offset, _GCS_VERB)
-        if not text and item_type & MFT_OWNERDRAW:
-            # An entry the extension paints itself. Its verb is the only name
-            # it has given us, and a named entry that works beats a blank one.
-            text = verb.replace("_", " ").strip() or "(unnamed command)"
         if not text:
+            # An entry the extension paints itself, or one whose string the
+            # menu would not give up. Its verb is the only name it has given
+            # us, and a named entry that works beats a dropped one.
+            text = verb.replace("_", " ").strip()
+        if not text:
+            dropped.append(f"entry {position} (id {item_id}) has neither text nor a verb")
             continue
         items.append(MenuItem(
             id=item_id,
@@ -301,28 +360,27 @@ def _walk(shell_menu: Any, hmenu: int, hwnd: int, *,
             default=bool(state & MFS_DEFAULT),
             verb=verb,
             help=_command_string(shell_menu, offset, _GCS_HELP),
-            icon=_bitmap(info.hbmpItem),
-            icon_size=_ICON_SIZE if info.hbmpItem else 0,
+            icon=picture[0] if picture else None,
+            icon_size=picture[1] if picture else 0,
         ))
+    if count > MAX_ITEMS:
+        dropped.append(f"{count - MAX_ITEMS} entries past the first {MAX_ITEMS}")
     return items
 
 
-def _opening(shell_menu: Any, submenu: int, position: int) -> None:
-    """Tell an extension its submenu is being opened, if it wants to know.
+def _opening(handler: Any, submenu: int, position: int) -> None:
+    """Tell an extension its submenu is being opened.
 
-    `IContextMenu2` is how a menu that is built on demand gets told, and an
-    extension that does not implement it is the normal case rather than a
-    problem -- hence the whole thing being a guarded query.
+    The message and its arguments are the ones a menu loop would send: the
+    submenu's handle in `wParam`, its position in the low word of `lParam`.
+    An extension that does not implement `IContextMenu2` never gets here,
+    which is the normal case rather than a problem.
     """
-    if win32shell is None or win32con is None:
-        return
-    try:
-        handler = shell_menu.QueryInterface(win32shell.IID_IContextMenu2)
-    except Exception:  # noqa: BLE001 - it does not want to know
+    if handler is None or win32con is None:
         return
     try:
         handler.HandleMenuMsg(win32con.WM_INITMENUPOPUP, submenu, position)
-    except Exception:  # noqa: BLE001 - and it may still refuse
+    except Exception:  # noqa: BLE001 - it may still refuse, and that is its right
         pass
 
 
@@ -410,10 +468,6 @@ def _destroy(hmenu: int) -> None:
 _GCS_VERB = 4
 _GCS_HELP = 5
 
-#: What a menu bitmap is assumed to be. Shell menu bitmaps are 16 pixels
-#: square in practice; one that is not is dropped rather than stretched.
-_ICON_SIZE = 16
-
 _WINDOW_CLASS = "FileManagerShellMenuHost"
 
 
@@ -494,34 +548,45 @@ def _command_string(shell_menu: Any, offset: int, kind: int) -> str:
     return _clean(value).replace("&", "")
 
 
-def _bitmap(handle: Any) -> bytes | None:
-    """A menu item's own picture, as premultiplied BGRA, or nothing.
+def _bitmap(handle: Any) -> tuple[bytes, int] | None:
+    """A menu entry's own picture, as premultiplied BGRA and its size.
+
+    The size is read off the bitmap rather than assumed. Menu bitmaps are 16
+    pixels square on a normal display and larger on a scaled one, and an
+    assumption of 16 turned every icon on a high-DPI machine into nothing at
+    all -- which looks exactly like an extension that supplies no icon.
 
     Shell menu bitmaps are 32-bit and already premultiplied, which is the
     format Qt wants and the reason this is a read rather than the two-pass
-    drawing the row icons need. A bitmap of another depth or another size is
-    dropped: the entry still works, it simply has no picture, and that is a
-    much better outcome than a smear of the wrong bytes next to somebody's
-    "Delete" command.
+    drawing the row icons need. Anything else -- a legacy 24-bit bitmap, a
+    non-square one, or `HBMMENU_CALLBACK`, which is a marker rather than a
+    handle -- is dropped. The entry still works and simply has no picture,
+    which is a much better outcome than a smear of the wrong bytes next to
+    somebody's "Delete" command.
     """
     handle = int(handle or 0)
-    if not handle or win32ui is None:
+    if handle <= 0 or win32ui is None:
         return None
-    expected = _ICON_SIZE * _ICON_SIZE * 4
     try:
         bitmap = win32ui.CreateBitmapFromHandle(handle)
+        info = bitmap.GetInfo()
+        width = int(info.get("bmWidth") or 0)
+        height = int(info.get("bmHeight") or 0)
+        depth = int(info.get("bmBitsPixel") or 0)
+        if width != height or not 8 <= width <= 64 or depth != 32:
+            return None
         pixels = bytes(bitmap.GetBitmapBits(True))
     except Exception:  # noqa: BLE001
         return None
-    if len(pixels) != expected:
+    if len(pixels) != width * height * 4:
         return None
     if not any(pixels[3::4]):
-        # No alpha anywhere: a legacy bitmap with no transparency to speak of.
-        # Drawn opaque rather than invisible.
-        return bytes(bytearray(
+        # No alpha anywhere: a bitmap drawn without one. Opaque rather than
+        # invisible.
+        pixels = bytes(bytearray(
             value if index % 4 != 3 else 255 for index, value in enumerate(pixels)
         ))
-    return pixels
+    return pixels, width
 
 
 def _clean(text: Any) -> str:
