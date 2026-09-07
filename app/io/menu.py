@@ -198,6 +198,12 @@ def _build(request: Request, outbox: Any, state: dict[str, Any]) -> None:
         # here and few in `items` means this file dropped them.
         positions = win32gui.GetMenuItemCount(hmenu)
         handler = _menu_handler(shell_menu)
+        # The top-level menu is told it is opening as well, not only the
+        # submenus. A menu loop sends WM_INITMENUPOPUP for the popup it is
+        # about to show before anything else, and an extension that does its
+        # last work there -- deciding what is enabled, filling in a submenu it
+        # owns -- gets nothing otherwise.
+        _opening(handler, hmenu, 0)
         items = _walk(shell_menu, hmenu, hwnd, depth=0, deadline=deadline,
                       handler=handler, skipped=skipped)
     except Exception as exc:  # noqa: BLE001
@@ -354,7 +360,10 @@ def _walk(shell_menu: Any, hmenu: int, hwnd: int, *, depth: int, deadline: float
                 dropped.append(f"an unnamed and empty submenu at entry {position}")
                 continue
             if not children:
-                dropped.append(f"{text}: the submenu came back empty")
+                dropped.append(f"{text}: the submenu came back empty, so it is "
+                               f"drawn disabled"
+                               + (" (the shell had already disabled it)"
+                                  if state & MFS_GRAYED else ""))
             items.append(MenuItem(
                 id=0, kind=MENU_SUBMENU, text=text or "More",
                 enabled=not (state & MFS_GRAYED) and bool(children),
