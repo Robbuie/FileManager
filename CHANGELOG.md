@@ -7,9 +7,6 @@ change gets an entry and a version bump.
 
 ## [0.10.0]
 
-0.9.0 was never tagged, so this release carries the Explorer context menu,
-overlays and elevation as well as everything below.
-
 ### Added
 - **Tabs are a feature rather than a list.** They have existed since 0.3 and
   almost nothing reached them. Now: the session is written out and restored so
