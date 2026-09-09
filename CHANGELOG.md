@@ -64,6 +64,14 @@ overlays and elevation as well as everything below.
   could not be dragged past the width of the favourites and a window asked for
   820 pixels came back 1596 wide. A layout writes its widget's minimumSize
   property by default, and that property beats any size hint.
+- **Clicking into a pane did not make it the active one.** Only the Tab key
+  did, so after clicking into the other pane's listing every command that
+  begins with "this pane" acted on the one before it: Ctrl+D saved the wrong
+  folder, F5 copied the wrong way, Ctrl+L edited the wrong path bar, and the
+  accent border said so the whole time. A `QFrame` never takes focus itself --
+  its listing or its path bar does -- so the pane's own `focusInEvent` fired
+  for Tab, which moves focus explicitly, and for nothing else. The window now
+  follows the application's focus into whichever pane holds it.
 
 ## [0.9.0]
 

@@ -88,6 +88,14 @@ class MainWindow(QMainWindow):
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
         self._build_menus()
+        # Which pane is active follows the *focus*, not this widget's own.
+        # A `QFrame` never takes focus itself -- its listing or its path bar
+        # does -- so `focusInEvent` on the pane fires for the Tab key, which
+        # moves focus explicitly, and never for a mouse click. That left the
+        # active pane stuck wherever Tab last put it: Ctrl+D saved the other
+        # pane's folder, F5 copied the wrong way, and the accent border said
+        # so the whole time.
+        QApplication.instance().focusChanged.connect(self._on_focus_changed)
         if self._favorites is not None:
             # Rebuilt rather than patched. The list is a dozen entries and
             # the alternative is a diff against a menu.
@@ -656,6 +664,21 @@ class MainWindow(QMainWindow):
 
     def _on_pane_activated(self, widget: PaneWidget) -> None:
         self._set_active(self._widgets.index(widget))
+
+    def _on_focus_changed(self, old, new) -> None:
+        """Follow the keyboard into whichever pane now holds it.
+
+        Anything that is not in a pane -- a dialog, the menu bar, the transfer
+        queue -- leaves the active pane where it was, which is what somebody
+        who opens a dialog and closes it again expects.
+        """
+        if new is None:
+            return
+        for index, widget in enumerate(self._widgets):
+            if widget is new or widget.isAncestorOf(new):
+                if index != self._active:
+                    self._set_active(index)
+                return
 
     def _set_active(self, index: int) -> None:
         self._active = index
