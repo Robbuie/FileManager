@@ -225,6 +225,19 @@ class Pane(QObject):
         """
         return paths.parent(self.current.path)
 
+    def crumbs(self, path: str | None = None) -> list[tuple[str, str]]:
+        """This tab's path as `(label, path)` from the root down.
+
+        Here for the reason `parent_path` is: splitting a path is path
+        arithmetic and the widget does not do any. The widget is handed a list
+        of labels and the places they go, and renders that.
+
+        Takes a path so the bar can be built from what is being *displayed* --
+        which is the UNC or the letter depending on this tab's preference --
+        rather than from the resolved form the pane works in.
+        """
+        return paths.crumbs(self.current.path if path is None else path)
+
     def go_up(self) -> None:
         above = self.parent_path()
         if above:

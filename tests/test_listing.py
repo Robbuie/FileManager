@@ -10,7 +10,16 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
 
-from app.core.listing import Column, ListingModel, format_size, split_name  # noqa: E402
+from app.core.listing import (  # noqa: E402
+    AGE_STEPS,
+    Column,
+    ListingModel,
+    age_step,
+    format_age,
+    format_size,
+    split_name,
+)
+from app.theme.tokens import AGE_ALPHA  # noqa: E402
 from app.io.protocol import Entry  # noqa: E402
 
 
@@ -302,3 +311,124 @@ def test_an_entry_is_findable_by_name_whatever_its_case(model):
     filled(model, ["Drawings"])
     assert model.entry_named("drawings").name == "Drawings"
     assert model.entry_named("missing") is None
+
+
+# ------------------------------------------------------------------- the age
+
+NOW = 1_700_000_000.0
+HOUR = 3600.0
+DAY = HOUR * 24
+
+
+@pytest.mark.parametrize("ago, shown", [
+    (30, "now"),
+    (HOUR / 4, "15m"),
+    (HOUR * 5, "5h"),
+    (DAY * 1.5, "1d"),
+    (DAY * 9, "9d"),
+    (DAY * 60, "2M"),
+    (DAY * 800, "2y"),
+])
+def test_an_age_reads_in_three_characters(ago, shown):
+    assert format_age(NOW - ago, NOW) == shown
+
+
+def test_a_file_dated_in_the_future_is_a_clock_not_a_negative_age():
+    """A share whose clock is ahead is a real thing and reporting it as
+    `-3h` would be a bug report. The Modified column still says what the
+    share claims."""
+    assert format_age(NOW + DAY, NOW) == "now"
+    assert age_step(NOW + DAY, NOW) == "fresh"
+
+
+def test_no_mtime_gets_no_age_and_no_chip():
+    assert format_age(0.0, NOW) == ""
+    assert age_step(0.0, NOW) is None
+
+
+@pytest.mark.parametrize("ago, step", [
+    (HOUR, "fresh"),
+    (DAY * 3, "recent"),
+    (DAY * 20, "month"),
+    (DAY * 40, None),
+    (DAY * 900, None),
+])
+def test_the_chip_has_three_steps_and_then_stops(ago, step):
+    assert age_step(NOW - ago, NOW) == step
+
+
+def test_every_step_the_model_produces_has_a_tint_to_draw_it_with():
+    """The rule about time lives here and the rule about colour lives in
+    `app.theme.tokens`, so that neither layer imports the other. This is what
+    holds them together: a step with no tint draws no chip and raises
+    nothing, which is the kind of thing that ships."""
+    assert {name for _, name in AGE_STEPS} == set(AGE_ALPHA)
+
+
+def test_the_age_column_sorts_newest_first_when_it_sorts_up(model):
+    """Ascending age is the smallest age, which is the largest mtime. Sorting
+    it like the date would put the oldest thing in the folder at the top of a
+    column headed "how long ago"."""
+    model.begin(has_parent=False)
+    model.add([entry("old", mtime=NOW - DAY * 30),
+               entry("new", mtime=NOW - HOUR),
+               entry("middle", mtime=NOW - DAY * 2)])
+    model.sort(int(Column.AGE), Qt.AscendingOrder)
+    names = [model.data(model.index(row, Column.NAME))
+             for row in range(model.rowCount())]
+    assert names == ["new", "middle", "old"]
+
+
+# ------------------------------------------------------------ the size bars
+
+def test_the_size_bar_scales_against_the_largest_file(model):
+    model.begin(has_parent=False)
+    model.add([entry("big", size=1000), entry("small", size=250)])
+    model.finish()
+    shares = {model.data(model.index(row, Column.NAME)):
+              model.data(model.index(row, Column.SIZE), ListingModel.SizeShareRole)
+              for row in range(model.rowCount())}
+    assert shares == {"big": 1.0, "small": 0.25}
+
+
+def test_a_folder_gets_no_bar_even_once_it_has_been_measured(model):
+    """A folder total can be orders of magnitude past anything in the folder.
+    On the same scale every real file becomes no bar at all, so the number is
+    kept and the comparison -- which is what would be the lie -- is not."""
+    class Sizes:
+        def known(self, folder, name):
+            return "4.0 G"
+
+    model.set_sizes(Sizes())
+    model.set_folder("C:\\Jobs")
+    model.begin(has_parent=False)
+    model.add([entry("archive", is_dir=True), entry("note", size=90)])
+    model.finish()
+    rows = {model.data(model.index(row, Column.NAME)): row
+            for row in range(model.rowCount())}
+    assert model.data(model.index(rows["archive"], Column.SIZE)) == "4.0 G"
+    assert model.data(model.index(rows["archive"], Column.SIZE),
+                      ListingModel.SizeShareRole) is None
+    assert model.data(model.index(rows["note"], Column.SIZE),
+                      ListingModel.SizeShareRole) == 1.0
+
+
+def test_the_scale_follows_the_filter(model):
+    """The bar compares this file with what is on screen. Hiding the largest
+    file and leaving every other bar at the width it had reads as nothing
+    having changed."""
+    model.begin(has_parent=False)
+    model.add([entry("huge", size=1000), entry("keep", size=100)])
+    model.finish()
+    assert model.size_scale == 1000
+    model.set_filter("keep")
+    assert model.size_scale == 100
+
+
+def test_a_listing_of_nothing_but_folders_has_no_scale_and_asks_for_no_bars(model):
+    model.begin(has_parent=False)
+    model.add([entry("one", is_dir=True), entry("two", is_dir=True)])
+    model.finish()
+    assert model.size_scale == 0
+    assert model.data(model.index(0, Column.SIZE),
+                      ListingModel.SizeShareRole) is None

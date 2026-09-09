@@ -16,6 +16,7 @@ from __future__ import annotations
 from app.theme.tokens import (
     ACCENT_ALPHA,
     ACCENTS,
+    AGE_ALPHA,
     DEFAULTS,
     DENSITIES,
     SHAPE,
@@ -97,8 +98,27 @@ def build(
     out["accent_row"] = mix(a, surface, 0.26)
     out["accent_row_idle"] = mix(a, surface, 0.13)
 
+    # The age chip. Derived from the theme's own `good` rather than from the
+    # accent, for the reason AGE_ALPHA gives -- and derived rather than listed
+    # per theme so a new theme gets a working chip from its greens alone.
+    #
+    # The text is `good` pulled most of the way to the theme's primary text
+    # colour, which is what makes one rule work on a dark ground and a light
+    # one: on dark it lightens, on paper it darkens, and it stays the same hue.
+    good = unhex(out["good"])
+    ink = unhex(out["txt_0"])
+    for name, alpha in AGE_ALPHA.items():
+        out[f"age_{name}"] = rgba(good, alpha)
+    out["age_text"] = mix(good, ink, 0.70)
+
     for key, value in DENSITIES[density_name].items():
         out[key] = f"{value:g}px" if key == "ui_font" else f"{int(value)}px"
+
+    # The column headers. Derived from the density's own size rather than
+    # listed as a fourth number per density, so a header can never end up
+    # larger than the rows it is labelling.
+    ui = float(DENSITIES[density_name]["ui_font"])
+    out["head_font"] = f"{max(9.0, ui - 2.5):g}px"
 
     out["theme_name"] = theme_name
     out["accent_name"] = accent_name

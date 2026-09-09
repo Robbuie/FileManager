@@ -92,9 +92,30 @@ def test_clicking_into_the_other_panes_listing_makes_it_the_active_one(window):
 
 
 def test_the_path_bar_counts_as_being_in_that_pane(window):
-    window._widgets[1]._path.setFocus(Qt.MouseFocusReason)
+    """The field is behind the breadcrumb now, so this goes through the same
+    door Ctrl+L does. It is still the same question: a pane whose path is
+    being edited is the pane the window should think is active."""
+    window._widgets[1].focus_path()
     QApplication.processEvents()
     assert window._current_pane().current.path == RIGHT
+
+
+def test_clicking_a_crumb_in_the_other_pane_makes_it_the_active_one(window):
+    """A borderless control takes no focus, and the window works out the
+    active pane from where the focus went -- so every one of them has to say
+    it was used, or it walks a pane while the keyboard still talks to the
+    other. Same failure as the reported bug, different first cause."""
+    widget = window._widgets[1]
+    widget._crumbs.navigate.emit("D:\\Archive\\2025")
+    QApplication.processEvents()
+    assert window._current_pane() is window._panes[1]
+
+
+def test_the_nav_buttons_claim_their_pane_too(window):
+    """Up in the pane that is not active must not walk the one that is."""
+    window._widgets[1]._up.click()
+    QApplication.processEvents()
+    assert window._current_pane() is window._panes[1]
 
 
 def test_the_tab_strip_counts_too(window):

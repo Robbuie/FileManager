@@ -53,6 +53,14 @@ class MainWindow(QMainWindow):
         metrics = sheet.metrics(config.get("density"))
         self._widgets = (PaneWidget(left, volumes, metrics, favorites),
                          PaneWidget(right, volumes, metrics, favorites))
+        # The panes paint two things the sheet cannot express -- the chrome
+        # icons and the rows -- so they need the same token set the sheet was
+        # rendered from. Handed down rather than fetched, so a pane cannot end
+        # up painted from a different render than the one it is styled by.
+        tokens = sheet.tokens(config.get("theme"), config.get("accent"),
+                              config.get("density"))
+        for widget in self._widgets:
+            widget.apply_tokens(tokens)
 
         self._splitter = QSplitter(Qt.Horizontal)
         for widget in self._widgets:
@@ -491,7 +499,7 @@ class MainWindow(QMainWindow):
         self.apply_theme()
 
     def apply_theme(self) -> None:
-        sheet.apply(
+        tokens = sheet.apply(
             QApplication.instance(),
             theme=self._config.get("theme"),
             accent=self._config.get("accent"),
@@ -500,6 +508,7 @@ class MainWindow(QMainWindow):
         metrics = sheet.metrics(self._config.get("density"))
         for widget in self._widgets:
             widget.apply_metrics(metrics)
+            widget.apply_tokens(tokens)
         self._set_active(self._active)
 
     def _on_folder_changed(self, path: str) -> None:

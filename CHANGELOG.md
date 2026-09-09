@@ -5,6 +5,89 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.11.0]
+
+The chrome. No feature moved and no shortcut changed -- what changed is that
+almost nothing keeps its one-pixel border, and the weight that is left went
+where it means something.
+
+### Added
+- **The path is a row of places rather than a line of text.** Every folder
+  above this one is a target, so up two and along one is a click instead of
+  Backspace, Backspace, scroll, double click. A UNC share is one crumb --
+  `\\server\share` -- because a server on its own is not somewhere a pane can
+  be, and a path too deep to fit is elided from the middle, keeping the two
+  ends that are worth keeping. Ctrl+L, or a click on the bar's empty space,
+  still swaps in the plain editable field; Enter or Escape swaps it back.
+  Anyone who types paths keeps typing paths.
+- **An Age column.** How long ago, in three characters: `2h`, `3d`, `27d`,
+  `9M`. The Modified column already says exactly when, which is sixteen
+  characters to read; this says how long ago, which is the question actually
+  being asked of a folder after a build or a sync. Tinted in three steps for
+  today, this week and this month, and plain past that -- a fourth colour
+  would say what the text already says, and in most folders most rows are old.
+  The tint is always a second signal and never the only one, so the column
+  reads the same in the high contrast theme.
+- **A size bar** under each figure, two pixels tall, as wide as that file is
+  against the largest file in the listing. Finding what is big in a folder
+  stops being arithmetic done by eye down a column of numbers. Files only: a
+  folder measured with Space keeps its total and gets no bar, because a folder
+  total can be orders of magnitude past anything in the folder and on that
+  scale every real file would draw as nothing.
+- **A filter button** in each pane's controls, beside refresh. Ctrl+F already
+  did this and stays the fast way; the button is how anyone finds out it
+  exists.
+
+### Changed
+- **The listing is flat.** No zebra stripes, no gridlines, no border around
+  the table -- two devices doing the job of row spacing, inside a container
+  that was already drawn. A row lights up under the mouse instead, and the
+  selected row is a rounded band inset from the edges rather than a rectangle
+  bleeding into them. One hairline is kept, under the column headers, because
+  the rows below it scroll and it does not.
+- **The active pane is a bar down its left edge**, not a rectangle around
+  everything. A rectangle competes with the listing inside it; two pixels of
+  accent against a hairline does not. Both states are drawn at the same widths
+  so nothing shifts by a pixel when focus moves.
+- **Tabs are pills.** No trapezoids and no boxes: the one in front is filled
+  and carries the accent as a rule under it.
+- **The nav controls are borderless.** The drive letter, three arrows, refresh
+  and filter were six outlined rectangles in a row before any of their content
+  was read. They are icons now, lit by the mouse rather than outlined at rest.
+- **The arrows are drawn rather than typed.** Back, forward, up, refresh and
+  filter are painted from coordinates on a 24 by 24 grid at one stroke weight,
+  so they match each other and follow the theme. A text arrow follows the
+  colour but is drawn by whichever font answered, at whatever weight and size
+  it felt like. Nothing new ships in the installer for this -- no QtSvg, no
+  resource file.
+- **Scrollbars are thin and have no trough**, the column headers are small
+  upper case in the muted grey, the drive picker is a quiet chip rather than a
+  combo box, and the favourites read as a row of places rather than a second
+  tab strip.
+- Two derived tints were added to the token set for the age chip, and one
+  larger radius for containers. **No grey and no accent changed**, so Redline
+  PDF and DWG Viewer are still the same family.
+
+### Fixed
+- **A borderless control in a pane did not make that pane the active one.**
+  Every one of them takes no focus so the listing keeps the keyboard, and the
+  window works out the active pane from where the focus went -- so a control
+  that never takes focus is a control the window cannot see being used.
+  Clicking Up, a crumb, a favourite or the drive picker in the pane that was
+  not active walked that pane while every keystroke still went to the other
+  one. That is 0.10's bug with a different first cause, and each of those four
+  now says it was used.
+
+### Known limits
+- The chevrons between crumbs are separators. Making one open its folder's
+  siblings means listing that folder, which is a worker request with its own
+  timeout and cancel rather than a piece of chrome, and it belongs with the
+  navigation rail.
+- The navigation rail -- places, drives with capacity and their UNC, favourites
+  in named groups -- is deliberately not in this release. A click in it has to
+  land in one pane, which is the rule the Fixed entry above is about, and that
+  deserves its own version rather than riding along with a restyle.
+
 ## [0.10.0]
 
 ### Added

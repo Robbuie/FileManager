@@ -342,5 +342,34 @@ def leaf(path: str) -> str:
     return tail if sep and tail else text
 
 
+def crumbs(path: str) -> list[tuple[str, str]]:
+    """A path as `(label, path)` from the root down, for a breadcrumb bar.
+
+    Built by walking `parent` rather than by splitting on separators, so the
+    two agree by construction: every crumb is somewhere `parent` says is above
+    the last one, and the root is whatever `parent` refuses to go above. That
+    is what makes `\\\\server\\share` one crumb rather than two empty ones
+    followed by a server that is not a place a pane can be.
+
+    Pure string work, and deliberately so -- this is called on every
+    navigation and is drawn in the UI's own process. Nothing here asks a
+    volume anything.
+    """
+    text = normalize(path)
+    if not text:
+        return []
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    while text and text not in seen:
+        seen.add(text)
+        out.append((leaf(text) or text, text))
+        up = parent(text)
+        if up is None:
+            break
+        text = up
+    out.reverse()
+    return out
+
+
 def same_volume(a: str, b: str, *, mapping: Mapping[str, str] | None = None) -> bool:
     return volume_key(a, mapping=mapping) == volume_key(b, mapping=mapping)

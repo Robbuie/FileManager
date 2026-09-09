@@ -26,8 +26,10 @@ from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size, split_name
 from app.io.protocol import MENU_COMMAND, MENU_SEPARATOR, MENU_SUBMENU, MenuItem
-from app.ui import dialogs
+from app.ui import dialogs, glyphs
+from app.ui.breadcrumb import Breadcrumb
 from app.ui.favorites import FavoritesBar
+from app.ui.rows import RowDelegate
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -115,19 +117,34 @@ class PaneWidget(QFrame):
         self._drives.setProperty("role", "drives")
         self._drives.setFocusPolicy(Qt.NoFocus)
         self._drives.setToolTip("Drive")
+        self._drives.activated.connect(self._claim)
         self._drives.activated.connect(self._on_drive_chosen)
 
-        # Arrows, not icons. The shell icons in the listing are the file
-        # types; chrome is a different question, and a glyph that follows the
-        # text colour through five themes beats a bitmap that does not.
-        self._back = self._button("←", "Back (Alt+Left)", self._pane.go_back)
-        self._forward = self._button("→", "Forward (Alt+Right)", self._pane.go_forward)
-        self._up = self._button("↑", "Up (Backspace)", self._pane.go_up)
-        self._reload = self._button("↻", "Refresh (Ctrl+R)", self._pane.refresh)
+        # Drawn icons, not text glyphs. Both follow the theme; only one of
+        # them is the same weight and size as the other four, because a text
+        # arrow is whatever the font that answered decided it was. See
+        # `app/ui/glyphs.py`. The pictures are put on in `apply_tokens`, which
+        # is also where they are replaced when the theme changes.
+        self._back = self._nav("back", "Back (Alt+Left)", self._pane.go_back)
+        self._forward = self._nav("forward", "Forward (Alt+Right)", self._pane.go_forward)
+        self._up = self._nav("up", "Up (Backspace)", self._pane.go_up)
+        self._reload = self._nav("refresh", "Refresh (Ctrl+R)", self._pane.refresh)
+        self._sift = self._nav("filter", "Filter this folder (Ctrl+F)",
+                               self.toggle_filter)
+
+        # Two widgets for one slot. The breadcrumb is what is normally there;
+        # the field is behind it, and Ctrl+L or a click on the bar's empty
+        # space swaps them. Anybody who types paths keeps typing paths, and
+        # everybody else gets every folder above this one as a target.
+        self._crumbs = Breadcrumb()
+        self._crumbs.navigate.connect(self._claim)
+        self._crumbs.navigate.connect(self._pane.navigate)
+        self._crumbs.editRequested.connect(self.focus_path)
 
         self._path = QLineEdit()
         self._path.setClearButtonEnabled(False)
         self._path.returnPressed.connect(self._on_path_entered)
+        self._path.hide()
 
         # The filter is hidden until asked for. A filter box that is always
         # there is a box that eventually has something left in it, and a folder
@@ -144,7 +161,17 @@ class PaneWidget(QFrame):
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._view.setShowGrid(False)
-        self._view.setAlternatingRowColors(True)
+        # Off. Stripes and a grid are two devices doing the job of row
+        # spacing, and the pair of them is the strongest single signal of
+        # software from another decade. What replaces them is air, a hover
+        # that follows the mouse, and a selection with a shape.
+        self._view.setAlternatingRowColors(False)
+        # The hover needs the mouse's position between clicks, which a view
+        # does not track by default.
+        self._view.setMouseTracking(True)
+        self._rows = RowDelegate(self._view)
+        self._view.setItemDelegate(self._rows)
+        self._view.entered.connect(self._on_row_entered)
         self._view.setWordWrap(False)
         self._view.setSortingEnabled(True)
         # Said rather than left to the style, which picks a size from the
@@ -189,8 +216,10 @@ class PaneWidget(QFrame):
         controls.addWidget(self._drives)
         for widget in (self._back, self._forward, self._up):
             controls.addWidget(widget)
+        controls.addWidget(self._crumbs, 1)
         controls.addWidget(self._path, 1)
         controls.addWidget(self._reload)
+        controls.addWidget(self._sift)
 
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
@@ -206,6 +235,7 @@ class PaneWidget(QFrame):
         if favorites is not None:
             self._bar = FavoritesBar(
                 favorites, wanted=bool(pane.config.get("favorites.bar")))
+            self._bar.chosen.connect(self._claim)
             self._bar.chosen.connect(self._on_favorite)
             self._bar.addRequested.connect(self.addFavoriteRequested)
             self._bar.manageRequested.connect(self.manageFavoritesRequested)
@@ -272,6 +302,7 @@ class PaneWidget(QFrame):
         self._watch_selection()
 
         self.apply_metrics(metrics)
+        self._sync_crumbs(self._pane.current.path)
         self._sync_tabs()
         self._sync_drives()
         self._sync_status(*self._current_status())
@@ -289,16 +320,80 @@ class PaneWidget(QFrame):
         header.setDefaultSectionSize(metrics["row_h"])
         header.setMinimumSectionSize(metrics["row_h"])
 
+    def apply_tokens(self, tokens: dict[str, str]) -> None:
+        """Take the colours the sheet was just rendered from.
+
+        Two things in a pane are painted rather than styled -- the chrome icons
+        and the rows -- and both have to come from the same render as the sheet
+        or the window ends up half in one theme. So the window hands down the
+        tokens it applied rather than each of them asking `app.theme` again.
+        """
+        ratio = float(self.devicePixelRatioF() or 1.0)
+        for button, name in ((self._back, "back"), (self._forward, "forward"),
+                             (self._up, "up"), (self._reload, "refresh"),
+                             (self._sift, "filter")):
+            button.setIcon(glyphs.icon(
+                name, colour=tokens["txt_1"], muted=tokens["txt_2"], ratio=ratio))
+        self._rows.apply_tokens(tokens)
+        self._view.viewport().update()
+
     def set_active(self, active: bool) -> None:
         self.setProperty("active", "true" if active else "false")
+        # The selection is painted, not styled, so the delegate has to be told
+        # as well -- it draws the live pane's wash stronger than the other's.
+        self._rows.set_live(active)
+        self._view.viewport().update()
         # A property a stylesheet selects on only takes effect on a repolish.
         self.style().unpolish(self)
         self.style().polish(self)
+
+    def _claim(self, *_ignored) -> None:
+        """This pane was used, whether or not anything took focus.
+
+        The window decides the active pane from `QApplication.focusChanged`,
+        which is right for everything that can hold focus and blind to
+        everything that cannot -- the nav buttons, the crumbs, the favourites,
+        the drive picker. Each of those says so here instead.
+        """
+        self.activated.emit(self)
+
+    def _on_row_entered(self, index) -> None:
+        self._rows.set_hovered_row(index)
+        self._view.viewport().update()
+
+    def _clear_hover(self) -> None:
+        if self._rows.hovered_row != -1:
+            self._rows.set_hovered_row(-1)
+            self._view.viewport().update()
+
+    def toggle_filter(self) -> None:
+        """The filter button. Shows the box, or clears and hides it again."""
+        if self._filter.isVisible():
+            self.clear_filter()
+        else:
+            self.focus_filter()
+
+    def _sync_crumbs(self, text: str) -> None:
+        """Rebuild the bar from what is being displayed.
+
+        The split is `core.Pane`'s -- this widget does no path arithmetic -- and
+        it is done on the displayed text rather than the resolved path, so the
+        bar shows the letter or the UNC according to the tab's own preference.
+        """
+        self._crumbs.set_crumbs(self._pane.crumbs(text))
+
+    def _show_crumbs(self) -> None:
+        """Put the bar back after the field has had its turn."""
+        self._path.hide()
+        self._crumbs.show()
 
     def focus_listing(self) -> None:
         self._view.setFocus(Qt.OtherFocusReason)
 
     def focus_path(self) -> None:
+        """Ctrl+L, and a click on the bar's empty space. Swap in the field."""
+        self._crumbs.hide()
+        self._path.show()
         self._path.setFocus(Qt.ShortcutFocusReason)
         self._path.selectAll()
 
@@ -565,6 +660,13 @@ class PaneWidget(QFrame):
             # presses to stop something.
             self._pane.stop_measuring()
             return
+        if key == Qt.Key_Escape and self._path.isVisible():
+            # Out of the field and back to the bar, leaving the path alone.
+            # Before the filter, because the field is the thing in front.
+            self._path.setText(self._pane.current.path)
+            self._show_crumbs()
+            self._view.setFocus(Qt.OtherFocusReason)
+            return
         if key == Qt.Key_Escape and self._filter.isVisible():
             self.clear_filter()
             return
@@ -610,10 +712,18 @@ class PaneWidget(QFrame):
         text = self._path.text().strip()
         if text:
             self._pane.navigate(text)
+        self._show_crumbs()
         self._view.setFocus(Qt.OtherFocusReason)
 
     def _on_path_changed(self, text: str) -> None:
         self._path.setText(text)
+        self._sync_crumbs(text)
+        # Navigating from anywhere else -- a crumb, a favourite, a double
+        # click -- puts the bar back, so the field is never left open showing
+        # somewhere the pane has already left.
+        if self._path.isVisible() and not self._path.hasFocus():
+            self._show_crumbs()
+        self._clear_hover()
         # A search is about the rows on screen, and these are about to be
         # different rows.
         self._clear_search()
@@ -730,7 +840,11 @@ class PaneWidget(QFrame):
         """
         header = self._view.horizontalHeader()
         header.setSectionResizeMode(int(Column.NAME), QHeaderView.Stretch)
-        for column, width in ((Column.EXT, 70), (Column.SIZE, 100), (Column.MODIFIED, 140)):
+        # Modified is the one that cannot be trimmed: it holds a fixed sixteen
+        # characters, and a date cut off at the hour is worse than no date.
+        # The other three give way to it, and to the name.
+        for column, width in ((Column.EXT, 52), (Column.SIZE, 92),
+                              (Column.AGE, 46), (Column.MODIFIED, 138)):
             header.setSectionResizeMode(int(column), QHeaderView.Interactive)
             header.resizeSection(int(column), width)
 
@@ -1226,6 +1340,27 @@ class PaneWidget(QFrame):
         button.setText(text)
         button.setToolTip(tip)
         button.setFocusPolicy(Qt.NoFocus)  # the listing keeps the focus
+        button.clicked.connect(slot)
+        return button
+
+    def _nav(self, glyph: str, tip: str, slot) -> QToolButton:
+        """A borderless chrome button. The picture arrives with the tokens.
+
+        Claims the pane before it does anything. These take no focus -- the
+        listing keeps it, which is the whole point of `NoFocus` here -- and
+        the window works out the active pane from where the focus went. So a
+        control that never takes focus is a control the window cannot see
+        being used, and clicking Up in the pane that is not active would walk
+        that pane while every keystroke still went to the other one. That is
+        the 0.10 bug with a different first cause, and every borderless
+        control in a pane has to answer it.
+        """
+        button = QToolButton()
+        button.setProperty("role", "nav")
+        button.setToolTip(tip)
+        button.setIconSize(QSize(16, 16))
+        button.setFocusPolicy(Qt.NoFocus)
+        button.clicked.connect(self._claim)
         button.clicked.connect(slot)
         return button
 

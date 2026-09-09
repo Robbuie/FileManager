@@ -142,6 +142,24 @@ ACCENT_ALPHA: dict[str, float] = {
     "glow": 0.80,   # focus ring
 }
 
+#: Alpha for each step of the age chip, strongest for the freshest.
+#:
+#: A semantic set, not an accent tint: how recently a file changed has nothing
+#: to do with which colour the picker is on, and tying it to the accent would
+#: make "changed today" mean something different in every theme. It derives
+#: from the theme's own `good` instead, so it stays legible in all five without
+#: a literal being written anywhere.
+#: The keys are the step names `app.core.listing.age_step` returns. They are
+#: the join between a rule about time and a rule about colour, which live in
+#: different layers on purpose -- `tests/test_listing.py` pins that every name
+#: one produces has a tint here, because a mismatch draws no chip and raises
+#: nothing.
+AGE_ALPHA: dict[str, float] = {
+    "fresh": 0.22,    # under a day
+    "recent": 0.13,   # under a week
+    "month": 0.085,   # under a month
+}
+
 # --------------------------------------------------------------------------
 # Density. The same metrics at three sizes. Row height matters more here than
 # anywhere in the other two applications: it is the thing being looked at
@@ -191,6 +209,10 @@ DENSITY_LABELS: dict[str, str] = {
 SHAPE: dict[str, str] = {
     "radius": "7px",
     "radius_sm": "5px",
+    # The pane and the listing. Bigger than a control's on purpose: a
+    # container and the buttons inside it drawn at the same corner read as
+    # one flat object, which is most of what "blocky" means.
+    "radius_lg": "10px",
     "font": '"Segoe UI", Inter, system-ui, sans-serif',
     "mono": '"Cascadia Mono", Consolas, monospace',
 }

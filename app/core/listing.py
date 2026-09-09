@@ -39,10 +39,11 @@ class Column(IntEnum):
     NAME = 0
     EXT = 1
     SIZE = 2
-    MODIFIED = 3
+    AGE = 3
+    MODIFIED = 4
 
 
-HEADERS = ("Name", "Ext", "Size", "Modified")
+HEADERS = ("Name", "Ext", "Size", "Age", "Modified")
 
 
 def format_size(size: int) -> str:
@@ -96,6 +97,67 @@ def format_time(mtime: float) -> str:
         return ""
 
 
+#: Seconds behind each step of the age chip, and what that step is called.
+#: Past the last one a file gets no chip at all -- a fourth colour would say
+#: what the text already says, and in most folders most rows are past a month.
+#:
+#: The names are the other half of `app.theme.tokens.AGE_ALPHA`. The rule about
+#: time is here because it is a rule about files; the tint is there because it
+#: is a rule about colour. Neither layer should have to import the other, so
+#: what holds them together is a test.
+AGE_STEPS: tuple[tuple[float, str], ...] = (
+    (60 * 60 * 24, "fresh"),
+    (60 * 60 * 24 * 7, "recent"),
+    (60 * 60 * 24 * 30, "month"),
+)
+
+
+def format_age(mtime: float, now: float | None = None) -> str:
+    """How long ago, in three characters.
+
+    The Modified column already says exactly when. This says how long ago,
+    which is the question actually being asked of a folder after a build or a
+    sync -- and it is answerable at a glance in a way six digits are not.
+
+    A file dated in the future is a share whose clock disagrees with this
+    machine, which happens, so it is reported as `now` rather than as a
+    negative age. The date column still shows what the share claims.
+    """
+    if not mtime:
+        return ""
+    seconds = max(0.0, (time.time() if now is None else now) - mtime)
+    if seconds < 60:
+        return "now"
+    minutes = seconds / 60
+    if minutes < 60:
+        return f"{int(minutes)}m"
+    hours = minutes / 60
+    if hours < 24:
+        return f"{int(hours)}h"
+    days = hours / 24
+    if days < 30:
+        return f"{int(days)}d"
+    if days < 365:
+        return f"{int(days / 30)}M"
+    return f"{int(days / 365)}y"
+
+
+def age_step(mtime: float, now: float | None = None) -> str | None:
+    """Which strength of the age chip this file gets, or None for no chip.
+
+    Three steps and then nothing. Past a month the colour would be a fourth
+    grey saying what the text already says, and in most folders most rows are
+    past a month -- a chip on all of them is a chip on none of them.
+    """
+    if not mtime:
+        return None
+    seconds = max(0.0, (time.time() if now is None else now) - mtime)
+    for limit, name in AGE_STEPS:
+        if seconds < limit:
+            return name
+    return None
+
+
 #: What separates one pattern from the next in a selection or filter string.
 PATTERN_SEPARATOR = ";"
 
@@ -141,6 +203,12 @@ class ListingModel(QAbstractTableModel):
 
     IsDirRole = Qt.UserRole + 1
     EntryRole = Qt.UserRole + 2
+    #: Which age strength this row gets, or None. Read by the delegate rather
+    #: than recomputed there, so the rule lives in one place.
+    AgeStepRole = Qt.UserRole + 3
+    #: This file's size as a fraction of the largest file in the listing, or
+    #: None for a folder and for a listing with nothing to scale against.
+    SizeShareRole = Qt.UserRole + 4
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -154,6 +222,11 @@ class ListingModel(QAbstractTableModel):
         self._sort_column = Column.NAME
         self._sort_order = Qt.AscendingOrder
         self._filter = ""
+        #: The largest file in `_rows`, for the size bars. Computed on demand
+        #: and thrown away whenever the list changes -- one pass over a list
+        #: already in memory is cheap, and doing it per batch during a
+        #: streaming listing would not be.
+        self._scale: int | None = None
 
     def set_icons(self, provider) -> None:
         """Where the decoration comes from, or None for a model without one.
@@ -201,6 +274,20 @@ class ListingModel(QAbstractTableModel):
         return self._folder
 
     @property
+    def size_scale(self) -> int:
+        """The largest file in the listing, or 0 if there is nothing to scale.
+
+        Files only. A folder measured with Space can be orders of magnitude
+        larger than anything in the folder, and putting it on the same scale
+        would draw every real file as no bar at all -- which is why a measured
+        folder keeps its total and gets no bar.
+        """
+        if self._scale is None:
+            self._scale = max(
+                (e.size for e in self._rows if not e.is_dir), default=0)
+        return self._scale
+
+    @property
     def sort_column(self) -> "Column":
         return self._sort_column
 
@@ -225,6 +312,7 @@ class ListingModel(QAbstractTableModel):
         self._rows = []
         self._filter = ""
         self._has_parent = has_parent
+        self._scale = None
         self.endResetModel()
 
     def add(self, entries: Sequence[Entry]) -> None:
@@ -237,6 +325,7 @@ class ListingModel(QAbstractTableModel):
         start = len(self._rows) + self._offset
         self.beginInsertRows(QModelIndex(), start, start + len(visible) - 1)
         self._rows.extend(visible)
+        self._scale = None
         self.endInsertRows()
 
     def finish(self) -> None:
@@ -404,11 +493,15 @@ class ListingModel(QAbstractTableModel):
         if role == Qt.TextAlignmentRole:
             # A header that does not sit over its own column reads as a
             # different column, which on a size column is actively misleading.
-            align = Qt.AlignRight if section == Column.SIZE else Qt.AlignLeft
+            align = (Qt.AlignRight if section in (Column.SIZE, Column.AGE)
+                     else Qt.AlignLeft)
             return int(align | Qt.AlignVCenter)
         if role != Qt.DisplayRole:
             return None
-        return HEADERS[section]
+        # Upper case here rather than in HEADERS, which is the name of the
+        # column and is what a menu or a settings file would want to say. This
+        # is only how the strip above the rows is set.
+        return HEADERS[section].upper()
 
     def data(self, index: QModelIndex, role=Qt.DisplayRole):
         if not index.isValid():
@@ -446,7 +539,14 @@ class ListingModel(QAbstractTableModel):
                 if badged is not None:
                     return badged
             return self._icons.icon(entry)
-        if role == Qt.TextAlignmentRole and column == Column.SIZE:
+        if role == self.AgeStepRole:
+            return age_step(entry.mtime) if column == Column.AGE else None
+        if role == self.SizeShareRole:
+            if column != Column.SIZE or entry.is_dir or not entry.size:
+                return None
+            largest = self.size_scale
+            return (entry.size / largest) if largest else None
+        if role == Qt.TextAlignmentRole and column in (Column.SIZE, Column.AGE):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.ToolTipRole and column == Column.SIZE and not entry.is_dir:
             return f"{entry.size:,} bytes"
@@ -467,6 +567,8 @@ class ListingModel(QAbstractTableModel):
                 if counted is not None:
                     return counted
             return "<DIR>"
+        if column == Column.AGE:
+            return format_age(entry.mtime)
         if column == Column.MODIFIED:
             return format_time(entry.mtime)
         return None
@@ -494,6 +596,12 @@ class ListingModel(QAbstractTableModel):
                 return entry.size
             if column == Column.MODIFIED:
                 return entry.mtime
+            if column == Column.AGE:
+                # Age ascending is the newest first, which is mtime
+                # descending. Sorting age the same way as the date would put
+                # the oldest thing in the folder at the top of a column
+                # labelled "how long ago", which is backwards.
+                return -entry.mtime
             if column == Column.EXT:
                 return split_name(entry)[1].lower()
             return entry.name.lower()
@@ -525,3 +633,4 @@ class ListingModel(QAbstractTableModel):
         self._rows = list(self._all) if not self._filter else [
             e for e in self._all if self._passes(e)
         ]
+        self._scale = None
