@@ -105,6 +105,12 @@ What to look at rather than what to run:
   working, not a flaky test, and nothing downstream is worth building until it
   is green again.
 
+`pytest` bare and `python -m pytest` have to behave the same, and by default
+they do not: the interpreter puts the working directory on the path and pytest
+does not, so a bare run cannot import `app` at all. `pythonpath = ["."]` in
+`pyproject.toml` is what makes the two agree, and the release workflow runs the
+bare form -- so removing that line breaks the build and nothing else.
+
 The tests run anywhere, including off Windows — the session table is injected
 rather than read, and a hung worker is reproduced with SIGSTOP. That makes them
 the one part of this project that can be checked without the user watching a

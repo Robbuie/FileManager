@@ -13,3 +13,9 @@ Repository = "https://github.com/Robbuie/FileManager"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repository root, so `app` imports. Not a convenience: pytest puts the
+# *test file's* own directory on the path, not the root, so a bare `pytest`
+# cannot see the package at all -- `python -m pytest` only works because the
+# interpreter adds the working directory itself. The workflow runs the bare
+# form, so the two have to agree, and this is the line that makes them.
+pythonpath = ["."]
