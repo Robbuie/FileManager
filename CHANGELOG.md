@@ -5,6 +5,55 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.10.0]
+
+0.9.0 was never tagged, so this release carries the Explorer context menu,
+overlays and elevation as well as everything below.
+
+### Added
+- **Tabs are a feature rather than a list.** They have existed since 0.3 and
+  almost nothing reached them. Now: the session is written out and restored so
+  the tabs come back where they were; a middle click opens a folder in a tab
+  behind and closes a tab in the strip; Ctrl+Shift+T duplicates one;
+  Ctrl+Enter or the row menu opens the folder under the cursor in a new one;
+  Ctrl+Tab and Alt+1 to Alt+9 move between them; the tab strip has a menu with
+  duplicate, close others and close to the right; and there is a Tabs menu to
+  find all of it in.
+- **Locked tabs.** A locked tab keeps its folder: navigating away from it
+  opens a new tab at the target rather than refusing to move, so the tab
+  pinned to a job folder stays there while a double click still goes
+  somewhere. It refuses to close, close-others spares it, and its name is
+  drawn in brackets.
+- **Favorites.** Ctrl+D saves the folder on screen under a name you confirm,
+  the Favorites menu goes back to any of them, and `Manage favorites` renames,
+  reorders and removes. One list for both panes, because a favourite is a
+  place rather than a side of the window. It is written out as it changes
+  rather than at exit.
+- **Quick search.** Typing in the listing jumps to a name -- prefix first,
+  then anything containing what was typed, wrapping, and continuing from
+  where the cursor already is so a second letter narrows the answer. F3 steps
+  forward, Shift+F3 back, Backspace shortens, Esc stops. What was typed shows
+  at the front of the status line and says so when nothing matches.
+- **Folder sizes on demand.** Space counts what is under the marked folders,
+  or the one under the cursor, and puts the total in the size column.
+  Ctrl+Shift+Space does every folder in the listing. One walk at a time across
+  the whole window, because a walk holds that volume's worker; Escape
+  withdraws them; an answer is dropped when its folder is listed again; and a
+  walk that ran out of time keeps what it counted and marks it with a
+  trailing plus. Sorting by size puts counted folders in order by what they
+  hold.
+- **Selecting a group.** Num+ and Num- mark or unmark everything matching a
+  pattern, Num* inverts, Alt+Num+ takes the rest of the files of the kind
+  under the cursor, Ctrl+A selects all. Ctrl+=, Ctrl+- and Ctrl+8 do the same
+  on a keyboard with no numeric pad. A pattern is a glob when it has * or ? in
+  it and a substring otherwise, and several can be given at once separated by
+  a semicolon: `*.dwg;*.dxf`.
+
+### Fixed
+- Dragging a tab in the strip reordered the widget and not the pane, so
+  afterwards every index -- the one a click selected, the one a close button
+  reported -- named a different tab than the one under it.
+
 ## [0.9.0]
 
 ### Added

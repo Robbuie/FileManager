@@ -273,3 +273,52 @@ def test_a_stored_index_past_the_end_lands_on_a_real_tab():
                      "left.tabs": [{"path": "C:\\A"}], "left.tab": 9})
     core = Pane(FakeBridge(), config, "left")
     assert core.index == 0
+
+
+# ---------------------------------------------------- the assumption underneath
+#
+# The pane is connected to both of `QTabBar`'s ordering signals, and which one
+# arrives first decides whether the fix-up works. `tabMoved` first means
+# `move_tab` sees the order as it was and the `currentChanged` that follows is
+# already satisfied; the other way round, `select_tab` would move the pane to
+# whatever sat at the target index in the *old* order and `move_tab` would then
+# preserve the wrong tab. Reversed, both features look fine in isolation and
+# the pane quietly shows the wrong folder after a drag -- so the order is
+# asserted rather than assumed.
+
+
+def test_qt_still_reports_a_moved_tab_before_it_reports_the_selection():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QTabBar
+
+    assert QApplication.instance() is not None
+    bar = QTabBar()
+    for name in ("A", "B", "C"):
+        bar.addTab(name)
+    bar.setCurrentIndex(0)
+
+    order = []
+    bar.currentChanged.connect(lambda index: order.append("currentChanged"))
+    bar.tabMoved.connect(lambda source, target: order.append("tabMoved"))
+    bar.moveTab(0, 2)
+
+    assert order == ["tabMoved", "currentChanged"]
+    assert bar.currentIndex() == 2
+
+
+def test_the_pane_agrees_with_the_bar_after_a_drag():
+    """The two signals played back in the order Qt sends them, against a real
+    pane -- which is the whole of what a drag does to it.
+    """
+    pytest.importorskip("PySide6")
+    core = Pane(FakeBridge(), Config({"left.path": "C:\\Jobs"}), "left")
+    core.open_tab("C:\\A")
+    core.open_tab("C:\\B")
+    core.select_tab(0)                      # C:\Jobs is in front
+
+    core.move_tab(0, 2)                     # tabMoved, then
+    core.select_tab(2)                      # currentChanged with the bar's index
+
+    assert [tab.path for tab in core.tabs] == ["C:\\A", "C:\\B", "C:\\Jobs"]
+    assert core.index == 2
+    assert core.current.path == "C:\\Jobs"

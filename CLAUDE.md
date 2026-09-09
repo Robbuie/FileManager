@@ -298,9 +298,35 @@ F8   delete (Recycle Bin)  Del  the same; Shift+Del is permanent
 Ins  mark and move down    Tab  the other pane
 Ctrl+R  refresh            Ctrl+Shift+R  reconnect
 Ctrl+F  filter             Ctrl+L  edit the path
-Ctrl+T / Ctrl+W  tabs      Ctrl+J  the transfer queue
+Ctrl+J  the transfer queue Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
+
+Tabs
+Ctrl+T  new                Ctrl+W  close
+Ctrl+Shift+T  duplicate    Ctrl+Shift+W  close the others
+Ctrl+Tab / Ctrl+Shift+Tab  next, previous
+Alt+1 .. Alt+9  by number  Ctrl+Shift+L  lock this one
+Ctrl+Enter  the folder under the cursor, in a new tab
+middle click  a folder in a tab behind; a tab in the strip, closed
+
+Finding and marking
+type a name  jump to it    F3 / Shift+F3  the next, the previous match
+Space   count what is under the marked folders
+Ctrl+Shift+Space  count every folder in the listing
+Num +   select a group     Num -   unselect a group     Num *  invert
+Alt+Num +/-  the rest of the files of this kind
+Ctrl+A / Ctrl+Shift+A  all, none
+Ctrl+= / Ctrl+- / Ctrl+8  the group keys on a keyboard with no pad
 ```
+
+The selection and search keys are the pane's for the same reason the function
+keys are. `Ctrl+A` as a window shortcut takes select-all away from the path bar
+and the filter box; a bare `+` is either the keypad key or a character being
+typed into a quick search, and only the widget holding the search can tell
+those apart -- it does it by insisting the keypad ones carry `KeypadModifier`.
+Two of them have to be intercepted *before* the view rather than allowed to
+bubble to the pane: `QAbstractItemView` answers a printable key with its own
+`keyboardSearch` and `Space` by toggling the selection.
 
 ## Conventions
 
@@ -378,10 +404,12 @@ Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
    (0.3), the chrome that makes it usable -- opening files, drives, filter,
    selection, free space (0.4), single-call operations: mkdir, rename and
    delete to the Recycle Bin (0.5), the copy/move engine with its queue (0.6),
-   the installer and auto-update (0.7), shell icons in the listing (0.8), and
-   the Explorer context menu, overlays and elevation (0.9). What is left
-   before this replaces Double Commander day to day: per-file icons for the
-   types that carry their own, and a transfer that outlives the window.
+   the installer and auto-update (0.7), shell icons in the listing (0.8), the
+   Explorer context menu, overlays and elevation (0.9), and the working
+   comforts -- tabs that persist and lock, favourites, quick search, folder
+   sizes on demand, selecting a group (0.10). What is left before this
+   replaces Double Commander day to day: per-file icons for the types that
+   carry their own, and a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,
