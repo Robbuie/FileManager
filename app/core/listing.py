@@ -227,6 +227,33 @@ class ListingModel(QAbstractTableModel):
     def is_parent_row(self, row: int) -> bool:
         return self._has_parent and row == 0
 
+    def find(self, text: str, *, start: int = 0, forward: bool = True) -> int:
+        """The row a quick search lands on, or -1.
+
+        Two passes, in this order: names that *start* with what was typed,
+        then names that merely contain it. Prefix first because that is what
+        typing three letters into a file list means -- and separated into two
+        passes rather than ranked in one, so a folder called `drawings` is
+        never passed over in favour of one called `old-drawings` that happens
+        to sit above it.
+
+        The search wraps, and `start` is where it begins rather than where it
+        stops: typing continues from where the cursor already is, which is what
+        makes a second keystroke narrow the answer instead of restarting it.
+        """
+        wanted = (text or "").lower()
+        if not wanted or not self._rows:
+            return -1
+        step = 1 if forward else -1
+        count = len(self._rows)
+        first = max(0, min(count - 1, start - self._offset))
+        order = [(first + step * n) % count for n in range(count)]
+        for match in (str.startswith, str.__contains__):
+            for index in order:
+                if match(self._rows[index].name.lower(), wanted):
+                    return index + self._offset
+        return -1
+
     def summary(self) -> str:
         folders = sum(1 for e in self._all if e.is_dir)
         files = len(self._all) - folders

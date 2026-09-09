@@ -20,7 +20,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QTimer
 from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 
 from app.core.icons import ROW_ICON
@@ -58,6 +58,12 @@ from PySide6.QtWidgets import (
 #: clipboard and this application's Copy is the other pane, which is why the
 #: pane's own entries say so.
 SHELL_VERBS_WE_HAVE = frozenset({"open", "delete", "rename", "refresh"})
+
+#: Milliseconds of not typing before a quick search forgets what was typed.
+#: Long enough to think about the next letter of a long name, short enough
+#: that coming back to the keyboard starts a new search rather than extending
+#: one nobody remembers making.
+SEARCH_FORGETS_AFTER = 1500
 
 
 class PaneWidget(QFrame):
@@ -154,6 +160,12 @@ class PaneWidget(QFrame):
         self._view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._view.customContextMenuRequested.connect(self._on_context_menu)
         self._view.viewport().installEventFilter(self)
+        # The view too, and for the keyboard. `QAbstractItemView` answers a
+        # printable key with `keyboardSearch`, its own prefix jump, which never
+        # reaches this widget and cannot say what it matched or that it matched
+        # nothing. Intercepting before the view is the only place the search
+        # can be this application's.
+        self._view.installEventFilter(self)
         self._layout_columns()
         # A header defaults its indicator to *descending*, and enabling sorting
         # applies it, so a model that sorted itself ascending gets flipped the
@@ -219,6 +231,16 @@ class PaneWidget(QFrame):
         self._menu: QMenu | None = None
         self._menu_slot: QAction | None = None
         self._menu_commands: dict = {}
+
+        #: What has been typed into the listing so far, and the timer that
+        #: forgets it. A quick search that never expires means the letters
+        #: typed a minute ago are still narrowing the next one.
+        self._search = ""
+        self._search_state = "idle"
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(SEARCH_FORGETS_AFTER)
+        self._search_timer.timeout.connect(self._clear_search)
 
         # Switching back to a tab must not connect its model a second time.
         self._watched: set = set()
@@ -556,6 +578,9 @@ class PaneWidget(QFrame):
 
     def _on_path_changed(self, text: str) -> None:
         self._path.setText(text)
+        # A search is about the rows on screen, and these are about to be
+        # different rows.
+        self._clear_search()
         # Navigating clears the model's filter; the box has to agree with it.
         if self._filter.text():
             self._filter.blockSignals(True)
@@ -700,6 +725,7 @@ class PaneWidget(QFrame):
         self._render_status()
 
     def _sync_current(self) -> None:
+        self._clear_search()
         model = self._pane.current.model
         self._view.setModel(model)
         self._layout_columns()
@@ -740,6 +766,12 @@ class PaneWidget(QFrame):
         user works; the folder totals sit behind it and stay put.
         """
         text, state = self._summary
+        if self._search:
+            # In front of everything, because it is the thing that changes as
+            # the user types and the thing they are looking at the line for.
+            found = "" if self._search_state != "bad" else "  (no match)"
+            text = f"search: {self._search}{found}  ·  {text}"
+            state = self._search_state if self._search_state == "bad" else state
         picker = self._view.selectionModel()
         rows = {index.row() for index in picker.selectedRows()} if picker else set()
         model = self._pane.current.model
@@ -775,6 +807,104 @@ class PaneWidget(QFrame):
 
         button.clicked.connect(close)
         return button
+
+    # ------------------------------------------------------------ quick search
+
+    def _on_search_key(self, event) -> bool:
+        """Answer a key on behalf of the quick search. True means it was ours.
+
+        Only the keys the search actually uses are taken. Everything else --
+        the arrows, Enter, the function keys, Delete -- reaches the view and
+        then this widget exactly as before, so a live search does not quietly
+        change what the rest of the keyboard does.
+        """
+        key = event.key()
+        if key == Qt.Key_F3:
+            if not self._search:
+                return False
+            self._step_search(-1 if event.modifiers() & Qt.ShiftModifier else 1)
+            return True
+        if not self._search:
+            if not self._is_search_key(event):
+                return False
+            self._set_search(event.text())
+            return True
+        if key == Qt.Key_Escape:
+            self._clear_search()
+            return True
+        if key == Qt.Key_Backspace:
+            # Shortens the search rather than leaving the folder. Leaving is
+            # what Backspace does the rest of the time, and losing the folder
+            # to one mistyped letter is not what anybody meant by it.
+            self._set_search(self._search[:-1])
+            return True
+        if self._is_search_key(event):
+            self._set_search(self._search + event.text())
+            return True
+        return False
+
+    def _is_search_key(self, event) -> bool:
+        """Whether a keystroke is somebody typing a name.
+
+        A printable character with no Ctrl or Alt held. Shift is allowed
+        through because it is how capitals and most punctuation are typed, and
+        the search is case-insensitive anyway. Space is deliberately excluded:
+        it is the folder-size key, and a name with a space in it is reachable
+        by typing past it.
+        """
+        text = event.text()
+        if not text or not text.isprintable() or text == " ":
+            return False
+        return not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
+
+    def _set_search(self, text: str) -> None:
+        if not text:
+            self._clear_search()
+            return
+        self._search = text
+        self._search_timer.start()
+        model = self._pane.current.model
+        # From the row the cursor is on, so a second letter narrows the answer
+        # rather than restarting the walk.
+        row = model.find(text, start=max(0, self.current_row()))
+        self._search_state = "idle" if row >= 0 else "bad"
+        if row >= 0:
+            self._go_to(row)
+        self._render_status()
+
+    def _step_search(self, direction: int) -> None:
+        """The next match, or the previous one. Wraps, because the model does."""
+        model = self._pane.current.model
+        start = self.current_row() + direction
+        row = model.find(self._search, start=max(0, start), forward=direction > 0)
+        self._search_timer.start()
+        self._search_state = "idle" if row >= 0 else "bad"
+        if row >= 0:
+            self._go_to(row)
+        self._render_status()
+
+    def _clear_search(self) -> None:
+        if not self._search:
+            return
+        self._search = ""
+        self._search_state = "idle"
+        self._search_timer.stop()
+        self._render_status()
+
+    def _go_to(self, row: int) -> None:
+        """Put the cursor on a row without marking it.
+
+        The cursor, not a selection, for the reason the first row of a folder
+        is not selected: what is marked is what an operation acts on, and
+        typing three letters is not a decision to act on anything.
+        """
+        model = self._view.model()
+        picker = self._view.selectionModel()
+        if model is None or picker is None or not 0 <= row < model.rowCount():
+            return
+        index = model.index(row, 0)
+        picker.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
+        self._view.scrollTo(index)
 
     # --------------------------------------------------------------- the tabs
 
@@ -842,12 +972,16 @@ class PaneWidget(QFrame):
             self._pane.open_tab(path, background=background)
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
-        """Middle click: close a tab, or open a folder in one behind.
+        """The two gestures the widgets underneath would otherwise answer
+        themselves: a middle click, and typing in the listing.
 
-        On release rather than press, so a middle click that started on one
-        row and finished on another does nothing -- the same rule a browser
-        follows, and for the same reason.
+        Middle click is taken on release rather than press, so one that
+        started on one row and finished on another does nothing -- the same
+        rule a browser follows, and for the same reason.
         """
+        if watched is self._view and event.type() == QEvent.KeyPress and \
+                self._on_search_key(event):
+            return True
         if event.type() == QEvent.MouseButtonRelease and \
                 event.button() == Qt.MiddleButton:
             if watched is self._tabs:

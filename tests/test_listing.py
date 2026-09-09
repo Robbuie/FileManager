@@ -140,3 +140,85 @@ def test_a_row_can_be_found_by_name_whatever_its_case(model):
     assert model.row_of("zebra") == 1
     assert model.row_of("NOTES.TXT") == 2
     assert model.row_of("absent") == -1
+
+
+# --------------------------------------------------------------- quick search
+#
+# The jump that happens when somebody types into the listing. Qt's own
+# `keyboardSearch` is not used, so the behaviour has to be stated here: what a
+# prefix beats, where a second keystroke carries on from, and what wrapping
+# means.
+
+
+def filled(model, names, has_parent=False):
+    model.begin(has_parent=has_parent)
+    model.add([entry(name) for name in names])
+    model.finish()
+    return model
+
+
+def test_a_prefix_beats_a_name_that_merely_contains_it(model):
+    """Two passes rather than one ranked pass, so a folder called `drawings`
+    is never passed over for `old-drawings` that happens to sort above it.
+    """
+    filled(model, ["old-drawings", "drawings"])
+    assert model.data(model.index(model.find("draw"), Column.NAME)) == "drawings"
+
+
+def test_it_falls_back_to_a_name_that_contains_what_was_typed(model):
+    filled(model, ["site-plan.dwg", "notes.txt"])
+    assert model.data(model.index(model.find("plan"), Column.NAME)) == "site-plan"
+
+
+def test_it_does_not_care_about_case(model):
+    filled(model, ["Drawings"])
+    assert model.find("dRaW") == 0
+
+
+def test_it_carries_on_from_where_the_cursor_is(model):
+    """What makes a second keystroke narrow the answer instead of restarting
+    the walk."""
+    filled(model, ["a1", "a2", "a3"])
+    assert model.find("a", start=1) == 1
+    assert model.find("a", start=2) == 2
+
+
+def test_it_wraps(model):
+    filled(model, ["a1", "b1"])
+    assert model.find("a", start=1) == 0
+
+
+def test_it_wraps_backwards_too(model):
+    """`start` is where the walk begins, not a row it skips -- stepping past
+    the current match is the caller's job, and `_step_search` does it by
+    passing the row it wants to start at."""
+    filled(model, ["a1", "b1", "a2"])          # sorts to a1, a2, b1
+    assert model.find("a", start=2, forward=False) == 1
+    assert model.find("a", start=0, forward=False) == 0
+
+
+def test_nothing_matching_is_minus_one_rather_than_a_row(model):
+    filled(model, ["a1", "b1"])
+    assert model.find("zz") == -1
+
+
+def test_the_parent_row_is_never_the_answer(model):
+    """`..` is not an entry, so it cannot be typed to and cannot be landed on
+    -- and the row numbers it shifts everything by still have to come back
+    right."""
+    filled(model, ["a.txt", "other"], has_parent=True)
+    assert model.find(".") == 1
+
+
+def test_an_empty_search_matches_nothing(model):
+    filled(model, ["a1"])
+    assert model.find("") == -1
+
+
+def test_a_filtered_out_row_cannot_be_found(model):
+    """The search is over what is on screen. A filter that hides a name and a
+    search that jumps to it would be two features disagreeing about what the
+    folder contains."""
+    filled(model, ["keep-me", "hide-me"])
+    model.set_filter("keep")
+    assert model.find("hide") == -1

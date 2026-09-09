@@ -99,7 +99,7 @@ class MainWindow(QMainWindow):
         # somebody looks the second time.
         self.statusBar().showMessage(
             "F5 copies  ·  F6 moves  ·  F7 new folder  ·  F2 renames  ·  "
-            "Del recycles",
+            "Del recycles  ·  type a name to jump to it",
             20000,
         )
 
@@ -196,6 +196,15 @@ class MainWindow(QMainWindow):
         self._action(go, "Copy path", "Ctrl+Shift+C", self._copy_path)
 
         view = self.menuBar().addMenu("&View")
+        # Both are the pane's own keys, shown rather than claimed. Quick search
+        # has no key to claim at all -- it starts when somebody types a letter
+        # into the listing -- so the entry says so and does nothing.
+        typed = self._hint(view, "Quick search\tType a name", lambda: None)
+        typed.setEnabled(False)
+        typed.setToolTip("Typing in the listing jumps to a name. F3 finds the "
+                         "next match, Shift+F3 the previous, Esc stops.")
+        self._hint(view, "Find next\tF3", lambda: None).setEnabled(False)
+        view.addSeparator()
         self._action(view, "Filter", "Ctrl+F", lambda: self._current_widget().focus_filter())
         self._action(view, "Clear filter", "Ctrl+Shift+F",
                      lambda: self._current_widget().clear_filter())

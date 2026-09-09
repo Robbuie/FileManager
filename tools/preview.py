@@ -33,6 +33,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
 
     from app.core.bridge import Bridge
     from app.core.config import Config
+    from app.core.favorites import Favorites
     from app.core.icons import Icons
     from app.core.overlays import Overlays
     from app.core.pane import Pane
@@ -57,9 +58,14 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     icons = Icons(bridge, config)
     overlays = Overlays(bridge, config)
     volumes = Volumes(bridge, config)
+    # Two invented entries, for the same reason the menu preview invents shell
+    # commands: what is being looked at is the shape of the menu, and that has
+    # nothing to do with which folders this machine has.
+    config.set("favorites", [{"name": "Jobs", "path": path},
+                             {"name": "Drawings", "path": path}])
     window = MainWindow(config, Pane(bridge, config, "left", icons, overlays),
                         Pane(bridge, config, "right", icons, overlays),
-                        volumes, TransferQueue())
+                        volumes, TransferQueue(), None, Favorites(config))
     volumes.refresh()
     icons.start()
     overlays.start()
