@@ -39,6 +39,21 @@ DEFAULTS: dict[str, Any] = {
     "left.show_unc": False,
     "right.show_unc": False,
 
+    # The tabs each pane had when the window last closed, and which of them
+    # was in front. A list of `{"path": ..., "locked": ...}` rather than a
+    # list of strings so a lock survives a restart with the tab it belongs to.
+    # `left.path` above stays as the fallback for a first run and for a
+    # session that comes back empty.
+    "left.tabs": [],
+    "right.tabs": [],
+    "left.tab": 0,
+    "right.tab": 0,
+
+    # Saved locations. A list of `{"name": ..., "path": ...}`; the name is
+    # what the menu shows and the path is what it navigates to. Shared by both
+    # panes, because a favourite is a place rather than a side of the window.
+    "favorites": [],
+
     # Deadlines. Seconds without progress before a request is given up on and
     # its worker restarted.
     "timeout.listing": 20.0,

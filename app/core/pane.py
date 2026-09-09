@@ -28,12 +28,23 @@ BUSY = "busy"
 IDLE = "idle"
 BAD = "bad"
 
+#: How many tabs one pane will hold. Not a limitation anybody will meet by
+#: working; it is there so a key held down, or a stored session someone has
+#: edited, cannot produce a strip with a thousand entries in it.
+MAX_TABS = 40
+
 
 class Tab:
     """One folder being looked at, with where it has been."""
 
-    def __init__(self, path: str, icons=None, overlays=None) -> None:
+    def __init__(self, path: str, icons=None, overlays=None, *,
+                 locked: bool = False) -> None:
         self.path = paths.normalize(path)
+        #: A locked tab keeps its folder. Navigating away from one opens a new
+        #: tab at the target rather than refusing to move, which is what makes
+        #: it useful: the tab you always want on the job folder stays there
+        #: while a double click still goes somewhere.
+        self.locked = locked
         self.model = ListingModel()
         self.model.set_icons(icons)
         self.model.set_overlays(overlays)
@@ -53,11 +64,11 @@ class Tab:
 
     @property
     def can_go_back(self) -> bool:
-        return self.position > 0
+        return not self.locked and self.position > 0
 
     @property
     def can_go_forward(self) -> bool:
-        return self.position < len(self.history) - 1
+        return not self.locked and self.position < len(self.history) - 1
 
 
 class Pane(QObject):
@@ -88,8 +99,39 @@ class Pane(QObject):
         # Shared for a different reason: there is one shell host, and one
         # context menu can be open at a time whichever pane it belongs to.
         self.menu = menu
-        self.tabs: list[Tab] = [Tab(config.get(f"{side}.path"), icons, overlays)]
-        self.index = 0
+        self.tabs: list[Tab] = self._restore()
+        self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
+                         len(self.tabs) - 1)
+
+    def _restore(self) -> list["Tab"]:
+        """The tabs this pane had when the window last closed.
+
+        Anything malformed in the stored list is dropped rather than repaired.
+        A settings file is not a schema, the cost of a bad entry is one tab
+        that does not come back, and the alternative is a pane that fails to
+        build because somebody hand-edited their config.
+        """
+        stored = self._config.get(f"{self._side}.tabs")
+        tabs: list[Tab] = []
+        if isinstance(stored, list):
+            for item in stored[:MAX_TABS]:
+                if isinstance(item, str):
+                    item = {"path": item}
+                if not isinstance(item, dict):
+                    continue
+                path = item.get("path")
+                if not isinstance(path, str) or not path:
+                    continue
+                tabs.append(Tab(path, self.icons, self.overlays,
+                                locked=bool(item.get("locked"))))
+        if not tabs:
+            tabs.append(Tab(self._config.get(f"{self._side}.path"),
+                            self.icons, self.overlays))
+        return tabs
+
+    def session(self) -> list[dict]:
+        """What to write out so the tabs come back. Paths, not models."""
+        return [{"path": tab.path, "locked": tab.locked} for tab in self.tabs]
 
     # ------------------------------------------------------------------ state
 
@@ -113,7 +155,12 @@ class Pane(QObject):
     def navigate(self, path: str, *, record: bool = True) -> None:
         tab = self.current
         target = paths.normalize(path)
-        self._abandon(tab)
+        if tab.locked and target != tab.path:
+            # Not a refusal: the whole value of a locked tab is that the
+            # folder is still one double click away from being opened, just
+            # not from being lost.
+            self.open_tab(target)
+            return
 
         tab.path = target
         tab.model.set_folder(target)
@@ -128,13 +175,24 @@ class Pane(QObject):
             tab.history.append(target)
             tab.position = len(tab.history) - 1
 
-        tab.model.begin(has_parent=paths.parent(target) is not None)
+        self._list(tab, announce=True)
+
+    def _list(self, tab: Tab, *, announce: bool = False) -> None:
+        """Ask for the rows of whatever folder a tab is on.
+
+        Separate from `navigate` because a background tab lists without the
+        pane's path bar, status line or drive picker changing -- those belong
+        to whatever is on screen, and a tab opened behind is not it.
+        """
+        self._abandon(tab)
+        tab.model.begin(has_parent=paths.parent(tab.path) is not None)
         self._set_status(tab, "listing", BUSY)
-        self.pathChanged.emit(self.display(target))
+        if announce:
+            self.pathChanged.emit(self.display(tab.path))
         self.tabsChanged.emit()
 
         tab.request_id = self._bridge.submit(
-            Op.LIST, target,
+            Op.LIST, tab.path,
             timeout=float(self._config.get("timeout.listing")),
             on_reply=self._replier(tab),
         )
@@ -142,8 +200,17 @@ class Pane(QObject):
     def refresh(self) -> None:
         self.navigate(self.current.path, record=False)
 
+    def parent_path(self) -> str | None:
+        """The folder above this tab's, or None at a root.
+
+        Here rather than in the widget because it is path arithmetic, which
+        the widget does not do -- the same rule that keeps `..` meaningful
+        without the model holding a fake row for it.
+        """
+        return paths.parent(self.current.path)
+
     def go_up(self) -> None:
-        above = paths.parent(self.current.path)
+        above = self.parent_path()
         if above:
             self.navigate(above)
 
@@ -357,15 +424,40 @@ class Pane(QObject):
 
     # ------------------------------------------------------------------- tabs
 
-    def open_tab(self, path: str | None = None) -> None:
-        self.tabs.append(Tab(path or self.current.path, self.icons, self.overlays))
-        self.index = len(self.tabs) - 1
+    def open_tab(self, path: str | None = None, *, background: bool = False,
+                 locked: bool = False) -> None:
+        """A new tab, here or beside the current one.
+
+        `background` is what a middle click means: the folder is opened without
+        the pane leaving what is on screen, so a handful of folders can be
+        queued up in one pass down a listing.
+        """
+        if len(self.tabs) >= MAX_TABS:
+            return
+        tab = Tab(path or self.current.path, self.icons, self.overlays,
+                  locked=locked)
+        self.tabs.append(tab)
         self.tabsChanged.emit()
+        if background:
+            # Listed anyway. A background tab that is empty until it is looked
+            # at makes switching to it feel slower than opening it did.
+            self._list(tab)
+            return
+        self.index = len(self.tabs) - 1
         self.currentChanged.emit()
-        self.navigate(self.tabs[self.index].path, record=False)
+        self.navigate(tab.path, record=False)
+
+    def duplicate_tab(self, index: int | None = None) -> None:
+        """A second tab on the same folder, which is how a copy within one
+        tree gets set up without losing the place already found."""
+        source = self.tabs[index] if index is not None and 0 <= index < len(self.tabs) \
+            else self.current
+        self.open_tab(source.path)
 
     def close_tab(self, index: int) -> None:
         if len(self.tabs) <= 1 or not 0 <= index < len(self.tabs):
+            return
+        if self.tabs[index].locked:
             return
         self._abandon(self.tabs[index])
         del self.tabs[index]
@@ -376,10 +468,78 @@ class Pane(QObject):
         self.currentChanged.emit()
         self._announce(self.current)
 
+    def close_others(self, index: int) -> None:
+        """Everything but this one, locked tabs excepted.
+
+        Locked tabs survive because that is what the lock is for: this is the
+        command most likely to be reached for by accident, and the tab somebody
+        pinned to a job folder is the one they would least like to lose to it.
+        """
+        if not 0 <= index < len(self.tabs):
+            return
+        keep = self.tabs[index]
+        self._close_all(lambda tab: tab is keep or tab.locked)
+
+    def close_to_right(self, index: int) -> None:
+        if not 0 <= index < len(self.tabs):
+            return
+        keep = set(id(tab) for tab in self.tabs[:index + 1])
+        self._close_all(lambda tab: id(tab) in keep or tab.locked)
+
+    def move_tab(self, source: int, target: int) -> None:
+        """Follow a drag in the strip.
+
+        Without this the widget's order and this list's order disagree after a
+        drag, and every index after it -- the one a click selects, the one a
+        close button reports -- names a different tab than the one under it.
+        """
+        if source == target:
+            return
+        if not (0 <= source < len(self.tabs) and 0 <= target < len(self.tabs)):
+            return
+        current = self.current
+        self.tabs.insert(target, self.tabs.pop(source))
+        self.index = self.tabs.index(current)
+        self.tabsChanged.emit()
+
     def select_tab(self, index: int) -> None:
         if not 0 <= index < len(self.tabs) or index == self.index:
             return
         self.index = index
+        self.currentChanged.emit()
+        self._announce(self.current)
+
+    def cycle_tab(self, step: int) -> None:
+        """The next tab along, wrapping. One tab is not a special case."""
+        if len(self.tabs) > 1:
+            self.select_tab((self.index + step) % len(self.tabs))
+
+    def set_locked(self, index: int, locked: bool) -> None:
+        if not 0 <= index < len(self.tabs):
+            return
+        self.tabs[index].locked = bool(locked)
+        self.tabsChanged.emit()
+        if index == self.index:
+            # Back and forward are disabled on a locked tab, and the widget
+            # reads that off the status.
+            self._announce(self.current)
+
+    def toggle_lock(self, index: int | None = None) -> None:
+        target = self.index if index is None else index
+        if 0 <= target < len(self.tabs):
+            self.set_locked(target, not self.tabs[target].locked)
+
+    def _close_all(self, keep) -> None:
+        survivors = [tab for tab in self.tabs if keep(tab)]
+        if len(survivors) == len(self.tabs) or not survivors:
+            return
+        current = self.current
+        for tab in self.tabs:
+            if tab not in survivors:
+                self._abandon(tab)
+        self.tabs = survivors
+        self.index = survivors.index(current) if current in survivors else 0
+        self.tabsChanged.emit()
         self.currentChanged.emit()
         self._announce(self.current)
 

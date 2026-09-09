@@ -113,14 +113,49 @@ class MainWindow(QMainWindow):
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
         files.addSeparator()
-        self._action(files, "New tab", "Ctrl+T", lambda: self._current_pane().open_tab())
-        self._action(files, "Close tab", "Ctrl+W",
-                     lambda: self._current_pane().close_tab(self._current_pane().index))
-        files.addSeparator()
-        files.addSeparator()
         self._action(files, "Transfers", "Ctrl+J", self._show_queue)
         files.addSeparator()
         self._action(files, "Quit", "Ctrl+Q", self.close)
+
+        tabs = self.menuBar().addMenu("&Tabs")
+        self._action(tabs, "New tab", "Ctrl+T", lambda: self._current_pane().open_tab())
+        self._action(tabs, "Duplicate tab", "Ctrl+Shift+T",
+                     lambda: self._current_pane().duplicate_tab())
+        # A hint, not a shortcut: the key belongs to the pane, which knows
+        # the path bar has focus and that a new tab is not what Ctrl+Enter
+        # means there.
+        self._hint(tabs, "Open folder in new tab\tCtrl+Enter",
+                   lambda: self._current_widget().open_in_new_tab(background=False))
+        tabs.addSeparator()
+        self._action(tabs, "Close tab", "Ctrl+W",
+                     lambda: self._current_pane().close_tab(self._current_pane().index))
+        self._action(tabs, "Close other tabs", "Ctrl+Shift+W",
+                     lambda: self._current_pane().close_others(
+                         self._current_pane().index))
+        tabs.addSeparator()
+        self._action(tabs, "Next tab", "Ctrl+Tab",
+                     lambda: self._current_pane().cycle_tab(1))
+        self._action(tabs, "Previous tab", "Ctrl+Shift+Tab",
+                     lambda: self._current_pane().cycle_tab(-1))
+        lock = self._action(tabs, "Lock this tab", "Ctrl+Shift+L",
+                            lambda: self._current_pane().toggle_lock())
+        lock.setToolTip("A locked tab keeps its folder. Opening one from it "
+                        "opens a new tab instead.")
+        tabs.addSeparator()
+        # Alt rather than Ctrl for the numbers: Ctrl+1 through Ctrl+9 are what
+        # a future column or view mode would want, and Alt+n is what a browser
+        # already trained these fingers on.
+        for position in range(1, 10):
+            entry = QAction(f"Tab {position}", self)
+            entry.setShortcut(QKeySequence(f"Alt+{position}"))
+            entry.setShortcutContext(Qt.WindowShortcut)
+            entry.triggered.connect(
+                lambda _checked=False, n=position - 1:
+                self._current_pane().select_tab(n))
+            tabs.addAction(entry)
+            # Only the first three are worth a line in the menu; the rest are
+            # keys that work without a menu entry advertising each one.
+            entry.setVisible(position <= 3)
 
         go = self.menuBar().addMenu("&Go")
         self._action(go, "Up", "Backspace", lambda: self._current_pane().go_up())
@@ -481,5 +516,7 @@ class MainWindow(QMainWindow):
         self._config.set("window.height", self.height())
         for side, pane in zip(("left", "right"), self._panes):
             self._config.set(f"{side}.path", pane.current.path)
+            self._config.set(f"{side}.tabs", pane.session())
+            self._config.set(f"{side}.tab", pane.index)
         self._config.save()
         super().closeEvent(event)

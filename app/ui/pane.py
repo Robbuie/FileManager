@@ -20,6 +20,7 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
+from PySide6.QtCore import QEvent
 from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 
 from app.core.icons import ROW_ICON
@@ -85,6 +86,17 @@ class PaneWidget(QFrame):
         self._tabs.setDrawBase(False)
         self._tabs.currentChanged.connect(self._pane.select_tab)
         self._tabs.tabCloseRequested.connect(self._pane.close_tab)
+        # Without this the strip's order and the pane's disagree after a drag,
+        # and every index afterwards -- the one a click selects, the one a
+        # close button reports -- names a different tab than the one under it.
+        self._tabs.tabMoved.connect(self._pane.move_tab)
+        self._tabs.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._tabs.customContextMenuRequested.connect(self._on_tab_menu)
+        # Middle click closes a tab and opens a folder in one behind. Both are
+        # filtered rather than handled in a subclass: a QTabBar subclass would
+        # be a class to find, and the behaviour belongs with the rest of this
+        # widget's input.
+        self._tabs.installEventFilter(self)
 
         # The drive picker. It lists what the session table says exists and
         # probes nothing, so it opens instantly even with a mapped server that
@@ -141,6 +153,7 @@ class PaneWidget(QFrame):
         self._view.activated.connect(self._on_activated)
         self._view.setContextMenuPolicy(Qt.CustomContextMenu)
         self._view.customContextMenuRequested.connect(self._on_context_menu)
+        self._view.viewport().installEventFilter(self)
         self._layout_columns()
         # A header defaults its indicator to *descending*, and enabling sorting
         # applies it, so a model that sorted itself ascending gets flipped the
@@ -365,6 +378,11 @@ class PaneWidget(QFrame):
         """
         if on_row:
             menu.addAction("Open\tEnter", self._open_current)
+            row = self.current_row()
+            entry = self._pane.current.model.entry(row) if row >= 0 else None
+            if entry is not None and entry.is_dir:
+                menu.addAction("Open in new tab\tCtrl+Enter",
+                               lambda: self._open_row_in_tab(row, background=False))
             menu.addSeparator()
             menu.addAction("Copy to other pane\tF5",
                            lambda: self.transferRequested.emit("copy"))
@@ -499,6 +517,12 @@ class PaneWidget(QFrame):
             self._mark_and_advance()
             return
 
+        if key in (Qt.Key_Return, Qt.Key_Enter) and \
+                event.modifiers() & Qt.ControlModifier and \
+                not self._path.hasFocus() and not self._filter.hasFocus():
+            self.open_in_new_tab(background=False)
+            return
+
         if self._path.hasFocus() or self._filter.hasFocus():
             super().keyPressEvent(event)
             return
@@ -581,9 +605,22 @@ class PaneWidget(QFrame):
                 self._tabs.addTab("")
             closable = len(self._pane.tabs) > 1
             for index, tab in enumerate(self._pane.tabs):
-                self._tabs.setTabText(index, tab.label)
-                self._tabs.setTabToolTip(index, self._pane.display(tab.path))
+                # Brackets rather than an icon for the lock. Status in this
+                # application is text and colour, and a bracketed name reads as
+                # held in place at any density without a bitmap to scale.
+                self._tabs.setTabText(index,
+                                      f"[{tab.label}]" if tab.locked else tab.label)
+                tip = self._pane.display(tab.path)
+                if tab.locked:
+                    tip += "\nLocked. Opening a folder here opens a new tab."
+                self._tabs.setTabToolTip(index, tip)
                 existing = self._tabs.tabButton(index, QTabBar.RightSide)
+                if tab.locked and existing is not None:
+                    # A locked tab refuses to close, so it does not offer to.
+                    self._tabs.setTabButton(index, QTabBar.RightSide, None)
+                    existing = None
+                if tab.locked:
+                    continue
                 if closable and existing is None:
                     self._tabs.setTabButton(index, QTabBar.RightSide,
                                             self._close_button())
@@ -738,6 +775,92 @@ class PaneWidget(QFrame):
 
         button.clicked.connect(close)
         return button
+
+    # --------------------------------------------------------------- the tabs
+
+    def _on_tab_menu(self, point: QPoint) -> None:
+        """The menu for one tab, or for the empty part of the strip.
+
+        Which tab was clicked is asked of the bar rather than remembered,
+        because tabs are movable and every command here takes an index.
+        """
+        index = self._tabs.tabAt(point)
+        menu = QMenu(self)
+        menu.addAction("New tab\tCtrl+T", self._pane.open_tab)
+        if index >= 0:
+            tab = self._pane.tabs[index]
+            menu.addAction("Duplicate tab\tCtrl+Shift+T",
+                           lambda: self._pane.duplicate_tab(index))
+            menu.addSeparator()
+            lock = menu.addAction("Locked", lambda: self._pane.toggle_lock(index))
+            lock.setCheckable(True)
+            lock.setChecked(tab.locked)
+            lock.setToolTip("A locked tab keeps its folder. Opening one from "
+                            "here opens a new tab instead.")
+            menu.addSeparator()
+            close = menu.addAction("Close tab\tCtrl+W",
+                                   lambda: self._pane.close_tab(index))
+            close.setEnabled(not tab.locked and len(self._pane.tabs) > 1)
+            others = menu.addAction("Close other tabs",
+                                    lambda: self._pane.close_others(index))
+            right = menu.addAction("Close tabs to the right",
+                                   lambda: self._pane.close_to_right(index))
+            others.setEnabled(self._closable_besides(index))
+            right.setEnabled(any(not t.locked
+                                 for t in self._pane.tabs[index + 1:]))
+        menu.setToolTipsVisible(True)
+        menu.exec(self._tabs.mapToGlobal(point))
+
+    def _closable_besides(self, index: int) -> bool:
+        return any(position != index and not tab.locked
+                   for position, tab in enumerate(self._pane.tabs))
+
+    def open_in_new_tab(self, *, background: bool = True) -> None:
+        """The folder under the cursor, in a tab of its own.
+
+        A file has no folder to open, so it is passed over rather than
+        refused with a message -- the gesture is a middle click, and a middle
+        click that produces a dialog is a middle click nobody makes twice.
+        """
+        row = self.current_row()
+        if row < 0:
+            return
+        self._open_row_in_tab(row, background=background)
+
+    def _open_row_in_tab(self, row: int, *, background: bool) -> None:
+        model = self._pane.current.model
+        if model.is_parent_row(row):
+            above = self._pane.parent_path()
+            if above:
+                self._pane.open_tab(above, background=background)
+            return
+        entry = model.entry(row)
+        if entry is None or not entry.is_dir:
+            return
+        path = self._pane.row_path(row)
+        if path:
+            self._pane.open_tab(path, background=background)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
+        """Middle click: close a tab, or open a folder in one behind.
+
+        On release rather than press, so a middle click that started on one
+        row and finished on another does nothing -- the same rule a browser
+        follows, and for the same reason.
+        """
+        if event.type() == QEvent.MouseButtonRelease and \
+                event.button() == Qt.MiddleButton:
+            if watched is self._tabs:
+                index = self._tabs.tabAt(event.position().toPoint())
+                if index >= 0:
+                    self._pane.close_tab(index)
+                    return True
+            elif watched is self._view.viewport():
+                index = self._view.indexAt(event.position().toPoint())
+                if index.isValid():
+                    self._open_row_in_tab(index.row(), background=True)
+                    return True
+        return super().eventFilter(watched, event)
 
     def _button(self, text: str, tip: str, slot) -> QToolButton:
         button = QToolButton()
