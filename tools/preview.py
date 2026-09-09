@@ -37,6 +37,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     from app.core.icons import Icons
     from app.core.overlays import Overlays
     from app.core.pane import Pane
+    from app.core.sizes import FolderSizes
     from app.core.transfers import TransferQueue
     from app.core.volumes import Volumes
     from app.io.pool import WorkerPool
@@ -63,9 +64,12 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     # nothing to do with which folders this machine has.
     config.set("favorites", [{"name": "Jobs", "path": path},
                              {"name": "Drawings", "path": path}])
-    window = MainWindow(config, Pane(bridge, config, "left", icons, overlays),
-                        Pane(bridge, config, "right", icons, overlays),
-                        volumes, TransferQueue(), None, Favorites(config))
+    sizes = FolderSizes(bridge, config)
+    window = MainWindow(
+        config,
+        Pane(bridge, config, "left", icons, overlays, None, sizes),
+        Pane(bridge, config, "right", icons, overlays, None, sizes),
+        volumes, TransferQueue(), None, Favorites(config))
     volumes.refresh()
     icons.start()
     overlays.start()

@@ -37,7 +37,7 @@ MAX_TABS = 40
 class Tab:
     """One folder being looked at, with where it has been."""
 
-    def __init__(self, path: str, icons=None, overlays=None, *,
+    def __init__(self, path: str, icons=None, overlays=None, sizes=None, *,
                  locked: bool = False) -> None:
         self.path = paths.normalize(path)
         #: A locked tab keeps its folder. Navigating away from one opens a new
@@ -48,6 +48,7 @@ class Tab:
         self.model = ListingModel()
         self.model.set_icons(icons)
         self.model.set_overlays(overlays)
+        self.model.set_sizes(sizes)
         self.model.set_folder(self.path)
         self.history: list[str] = [self.path]
         self.position = 0
@@ -87,7 +88,7 @@ class Pane(QObject):
     elevationOffered = Signal(object, str)
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
-                 menu=None, parent=None) -> None:
+                 menu=None, sizes=None, parent=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -99,6 +100,10 @@ class Pane(QObject):
         # Shared for a different reason: there is one shell host, and one
         # context menu can be open at a time whichever pane it belongs to.
         self.menu = menu
+        # Shared for the third reason: a folder walk holds a volume's worker,
+        # so the queue that runs one at a time has to be the same queue for
+        # every tab in the window rather than one per pane.
+        self.sizes = sizes
         self.tabs: list[Tab] = self._restore()
         self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
                          len(self.tabs) - 1)
@@ -122,11 +127,11 @@ class Pane(QObject):
                 path = item.get("path")
                 if not isinstance(path, str) or not path:
                     continue
-                tabs.append(Tab(path, self.icons, self.overlays,
+                tabs.append(Tab(path, self.icons, self.overlays, self.sizes,
                                 locked=bool(item.get("locked"))))
         if not tabs:
             tabs.append(Tab(self._config.get(f"{self._side}.path"),
-                            self.icons, self.overlays))
+                            self.icons, self.overlays, self.sizes))
         return tabs
 
     def session(self) -> list[dict]:
@@ -170,6 +175,10 @@ class Pane(QObject):
             # marks green without an mtime moving -- so a refresh that kept
             # them would show the state before the commit.
             self.overlays.forget(target)
+        if self.sizes is not None:
+            # Same reasoning, and more so: a folder's size is precisely what
+            # changes without the folder itself changing.
+            self.sizes.forget(target)
         if record and (not tab.history or tab.history[tab.position] != target):
             del tab.history[tab.position + 1:]
             tab.history.append(target)
@@ -341,6 +350,35 @@ class Pane(QObject):
                      args={"names": names, "permanent": permanent},
                      failed="the delete did not finish")
 
+    def measure(self, names: list[str]) -> None:
+        """Count what is under the named folders in this one.
+
+        Folders only. A file's size is already in the listing, and asking a
+        worker to walk one would be a round trip for a number on screen.
+        """
+        if self.sizes is None:
+            return
+        tab = self.current
+        folders = [name for name in names
+                   if (entry := tab.model.entry_named(name)) is not None
+                   and entry.is_dir]
+        if folders:
+            self.sizes.request(tab.path, folders)
+
+    def measure_all(self) -> None:
+        """Every folder in this one. Deliberately a separate command.
+
+        Deliberately, because it is the expensive one: on a share this is a
+        walk per folder, one after another, and it should be something asked
+        for rather than something that happens because a folder was opened.
+        """
+        tab = self.current
+        self.measure(tab.model.folder_names())
+
+    def stop_measuring(self) -> None:
+        if self.sizes is not None:
+            self.sizes.cancel()
+
     def context_menu(self, names: list[str], *, extended: bool = False) -> None:
         """Ask the shell for the menu for a selection in this tab's folder.
 
@@ -435,7 +473,7 @@ class Pane(QObject):
         if len(self.tabs) >= MAX_TABS:
             return
         tab = Tab(path or self.current.path, self.icons, self.overlays,
-                  locked=locked)
+                  self.sizes, locked=locked)
         self.tabs.append(tab)
         self.tabsChanged.emit()
         if background:

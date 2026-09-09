@@ -43,6 +43,7 @@ def main() -> int:
     from app.core.menu import ShellMenu
     from app.core.overlays import Overlays
     from app.core.pane import Pane
+    from app.core.sizes import FolderSizes
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
     from app.core.volumes import Volumes
@@ -73,8 +74,11 @@ def main() -> int:
     # One shell menu for the window, not one per pane: there is one shell host
     # behind it and one menu on screen at a time whichever pane it belongs to.
     shell_menu = ShellMenu(bridge, config)
-    left = Pane(bridge, config, "left", icons, overlays, shell_menu)
-    right = Pane(bridge, config, "right", icons, overlays, shell_menu)
+    # One queue for the window: a folder walk holds that volume's worker, so
+    # running one at a time has to mean one at a time across every tab.
+    sizes = FolderSizes(bridge, config)
+    left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes)
+    right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes)
     volumes = Volumes(bridge, config)
     transfers = TransferQueue()
     updates = Updates(config, __version__)

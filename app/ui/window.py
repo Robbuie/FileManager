@@ -199,6 +199,11 @@ class MainWindow(QMainWindow):
         # Both are the pane's own keys, shown rather than claimed. Quick search
         # has no key to claim at all -- it starts when somebody types a letter
         # into the listing -- so the entry says so and does nothing.
+        self._hint(view, "Folder size\tSpace",
+                   lambda: self._current_widget().measure_selection())
+        self._action(view, "Size of every folder here", "Ctrl+Shift+Space",
+                     lambda: self._current_widget().measure_all())
+        view.addSeparator()
         typed = self._hint(view, "Quick search\tType a name", lambda: None)
         typed.setEnabled(False)
         typed.setToolTip("Typing in the listing jumps to a name. F3 finds the "

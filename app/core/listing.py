@@ -56,6 +56,28 @@ def format_size(size: int) -> str:
     return f"{value:,.1f} P"
 
 
+#: The multipliers `format_size` writes, for reading one of its strings back.
+_UNITS = {"B": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3,
+          "T": 1024 ** 4, "P": 1024 ** 5}
+
+
+def parse_size(text: str | None) -> int:
+    """Bytes from something `format_size` produced, or 0.
+
+    Approximate by construction -- `4.2 G` lost its exact value when it was
+    formatted -- and that is fine for the one thing it is for, which is putting
+    folders in order by size. Anything that needs the real number asks for it.
+    """
+    if not text:
+        return 0
+    body = text.rstrip("+").strip().replace(",", "")
+    number, _, unit = body.partition(" ")
+    try:
+        return int(float(number) * _UNITS[unit.strip() or "B"])
+    except (ValueError, KeyError):
+        return 0
+
+
 def count_of(value: int, noun: str) -> str:
     """`2 files`, `1 file`, and nothing at all for none of them.
 
@@ -99,6 +121,7 @@ class ListingModel(QAbstractTableModel):
         self._rows: list[Entry] = []     # what the filter lets through
         self._icons = None               # set by the pane; None draws no icons
         self._overlays = None            # the same, for the badges on them
+        self._sizes = None               # recursive folder sizes, once asked for
         self._folder = ""                # what an overlay is asked about
         self._has_parent = False
         self._sort_column = Column.NAME
@@ -124,6 +147,17 @@ class ListingModel(QAbstractTableModel):
         lookup per row on screen.
         """
         self._overlays = provider
+
+    def set_sizes(self, provider) -> None:
+        """Where a folder's recursive size comes from, or None for a model
+        that only ever says `<DIR>`.
+
+        Injected like the other two, and for the same reason: the model stays
+        something that can be built and checked without a worker behind it.
+        `provider.known(folder, name)` is called during a paint and answers
+        from what it already has or not at all.
+        """
+        self._sizes = provider
 
     def set_folder(self, path: str) -> None:
         """Which folder these rows are in.
@@ -223,6 +257,22 @@ class ListingModel(QAbstractTableModel):
             if entry.name.lower() == wanted:
                 return index + self._offset
         return -1
+
+    def entry_named(self, name: str) -> Entry | None:
+        """The entry a name belongs to, or None.
+
+        Case-insensitive like `row_of`, and for the same reason: Windows is.
+        """
+        wanted = name.lower()
+        for entry in self._rows:
+            if entry.name.lower() == wanted:
+                return entry
+        return None
+
+    def folder_names(self) -> list[str]:
+        """Every folder on screen. What the filter lets through, not what
+        arrived -- a command aimed at the listing acts on the listing."""
+        return [entry.name for entry in self._rows if entry.is_dir]
 
     def is_parent_row(self, row: int) -> bool:
         return self._has_parent and row == 0
@@ -354,7 +404,13 @@ class ListingModel(QAbstractTableModel):
         if column == Column.SIZE:
             # A folder's size is a separate, lazy request. Showing a blank
             # would read as zero bytes, which is worse than saying nothing.
-            return "<DIR>" if entry.is_dir else format_size(entry.size)
+            if not entry.is_dir:
+                return format_size(entry.size)
+            if self._sizes is not None and self._folder:
+                counted = self._sizes.known(self._folder, entry.name)
+                if counted is not None:
+                    return counted
+            return "<DIR>"
         if column == Column.MODIFIED:
             return format_time(entry.mtime)
         return None
@@ -373,6 +429,12 @@ class ListingModel(QAbstractTableModel):
 
         def key(entry: Entry):
             if column == Column.SIZE:
+                # A folder that has been counted sorts by what it holds. One
+                # that has not sorts as nothing, which keeps the uncounted
+                # ones together instead of scattering them through the
+                # answer at whatever their directory entry claims.
+                if entry.is_dir:
+                    return self._counted(entry.name)
                 return entry.size
             if column == Column.MODIFIED:
                 return entry.mtime
@@ -383,6 +445,17 @@ class ListingModel(QAbstractTableModel):
         self._all.sort(key=key, reverse=reverse)
         self._all.sort(key=lambda e: not e.is_dir)
         self._apply_filter()
+
+    def _counted(self, name: str) -> int:
+        """The bytes behind a folder's size cell, for sorting. 0 if unknown.
+
+        Parsed back out of the text rather than held twice. The alternative is
+        a second dictionary that has to be kept in step with the first, and a
+        sort key is not worth that.
+        """
+        if self._sizes is None or not self._folder:
+            return 0
+        return parse_size(self._sizes.known(self._folder, name))
 
     # ---------------------------------------------------------------- filter
 

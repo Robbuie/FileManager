@@ -221,6 +221,12 @@ class PaneWidget(QFrame):
 
         if self._pane.overlays is not None:
             self._pane.overlays.changed.connect(self._view.viewport().update)
+        if self._pane.sizes is not None:
+            # A repaint rather than a model signal, for the reason the icons
+            # give: the view asks the model about the rows it is drawing and
+            # no others, which is what stays cheap at 50,000 rows.
+            self._pane.sizes.changed.connect(self._view.viewport().update)
+            self._pane.sizes.changed.connect(self._render_status)
         if self._pane.menu is not None:
             self._pane.menu.ready.connect(self._on_shell_items)
             self._pane.menu.unavailable.connect(self._on_shell_unavailable)
@@ -415,6 +421,11 @@ class PaneWidget(QFrame):
             menu.addAction("Delete permanently\tShift+Del",
                            lambda: self.delete_selection(permanent=True))
             menu.addSeparator()
+        if on_row and self._pane.sizes is not None:
+            counted = menu.addAction("Folder size\tSpace", self.measure_selection)
+            counted.setToolTip("Walk what is under it and put the total in the "
+                               "size column.")
+            menu.addSeparator()
         menu.addAction("New folder\tF7", self.new_folder)
         menu.addAction("Refresh\tCtrl+R", self._pane.refresh)
 
@@ -529,6 +540,13 @@ class PaneWidget(QFrame):
         function keys are checked for explicitly.
         """
         key = event.key()
+        if key == Qt.Key_Escape and self._pane.sizes is not None \
+                and self._pane.sizes.busy:
+            # Before the filter, because a walk of a tree over SMB is the more
+            # expensive thing to be stuck with and Escape is what a person
+            # presses to stop something.
+            self._pane.stop_measuring()
+            return
         if key == Qt.Key_Escape and self._filter.isVisible():
             self.clear_filter()
             return
@@ -766,6 +784,11 @@ class PaneWidget(QFrame):
         user works; the folder totals sit behind it and stay put.
         """
         text, state = self._summary
+        sizes = self._pane.sizes
+        if sizes is not None and sizes.busy:
+            outstanding = sizes.busy
+            text = (f"counting {outstanding:,} folder(s)  ·  {text}"
+                    if outstanding > 1 else f"counting  ·  {text}")
         if self._search:
             # In front of everything, because it is the thing that changes as
             # the user types and the thing they are looking at the line for.
@@ -807,6 +830,21 @@ class PaneWidget(QFrame):
 
         button.clicked.connect(close)
         return button
+
+    # ----------------------------------------------------------- folder sizes
+
+    def measure_selection(self) -> None:
+        """Count what is under the marked folders, or the one under the cursor.
+
+        The same fallback the operations use, and for the same reason:
+        pressing a key with nothing marked means the thing being looked at.
+        """
+        names = self.selected_names()
+        if names:
+            self._pane.measure(names)
+
+    def measure_all(self) -> None:
+        self._pane.measure_all()
 
     # ------------------------------------------------------------ quick search
 
@@ -979,9 +1017,15 @@ class PaneWidget(QFrame):
         started on one row and finished on another does nothing -- the same
         rule a browser follows, and for the same reason.
         """
-        if watched is self._view and event.type() == QEvent.KeyPress and \
-                self._on_search_key(event):
-            return True
+        if watched is self._view and event.type() == QEvent.KeyPress:
+            # Space, before the view: `QAbstractItemView` answers it by
+            # toggling the selection, so a key press that never reaches this
+            # widget would mark a row instead of counting it.
+            if event.key() == Qt.Key_Space and not event.modifiers():
+                self.measure_selection()
+                return True
+            if self._on_search_key(event):
+                return True
         if event.type() == QEvent.MouseButtonRelease and \
                 event.button() == Qt.MiddleButton:
             if watched is self._tabs:
