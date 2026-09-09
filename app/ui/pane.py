@@ -24,7 +24,7 @@ from PySide6.QtCore import QEvent, QTimer
 from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 
 from app.core.icons import ROW_ICON
-from app.core.listing import Column, count_of, format_size
+from app.core.listing import Column, count_of, format_size, split_name
 from app.io.protocol import MENU_COMMAND, MENU_SEPARATOR, MENU_SUBMENU, MenuItem
 from app.ui import dialogs
 from PySide6.QtWidgets import (
@@ -831,6 +831,128 @@ class PaneWidget(QFrame):
         button.clicked.connect(close)
         return button
 
+    # -------------------------------------------------------------- selecting
+
+    def _on_selection_key(self, event) -> bool:
+        """Answer a key on behalf of the selection commands. True means ours.
+
+        Taken here rather than as window shortcuts for two reasons. Ctrl+A as
+        a window shortcut takes select-all away from the path bar and the
+        filter box, which is the failure the function keys are kept off the
+        window for. And a bare `+` is either the keypad key that selects a
+        group or a character somebody is typing into a quick search -- only
+        the widget holding the search can tell those apart, and it does it by
+        insisting the keypad ones carry `KeypadModifier`.
+        """
+        key = event.key()
+        modifiers = event.modifiers()
+        control = bool(modifiers & Qt.ControlModifier)
+        shift = bool(modifiers & Qt.ShiftModifier)
+        alt = bool(modifiers & Qt.AltModifier)
+        pad = bool(modifiers & Qt.KeypadModifier)
+
+        if key == Qt.Key_A and control and not alt:
+            self.select_all(on=not shift)
+            return True
+
+        if pad and not control and not alt:
+            # The Norton keys, on the pad and bare.
+            if key == Qt.Key_Plus:
+                self.ask_and_select(on=True)
+                return True
+            if key == Qt.Key_Minus:
+                self.ask_and_select(on=False)
+                return True
+            if key == Qt.Key_Asterisk:
+                self.invert_selection()
+                return True
+            return False
+
+        if pad and alt and not control:
+            # The rest of the files of the kind under the cursor.
+            if key in (Qt.Key_Plus, Qt.Key_Minus):
+                self.select_same_extension(on=key == Qt.Key_Plus)
+                return True
+            return False
+
+        if control and not alt:
+            # A keyboard with no numeric pad. Ctrl+8 is where the asterisk
+            # lives on the row above, which is what makes it the invert.
+            if key in (Qt.Key_Plus, Qt.Key_Equal):
+                self.ask_and_select(on=True)
+                return True
+            if key == Qt.Key_Minus:
+                self.ask_and_select(on=False)
+                return True
+            if key in (Qt.Key_Asterisk, Qt.Key_8):
+                self.invert_selection()
+                return True
+        return False
+
+    def select_matching(self, pattern: str, *, on: bool = True) -> None:
+        """Mark, or unmark, every row whose name answers to a pattern."""
+        if not pattern:
+            return
+        self._apply_selection(self._pane.current.model.rows_matching(pattern), on=on)
+
+    def select_same_extension(self, *, on: bool = True) -> None:
+        """The rest of the files of the kind under the cursor.
+
+        The row under the cursor rather than the marked rows, because this is
+        the command for "and all the other drawings" and the cursor is what
+        names the kind. A folder has no extension, so it does nothing.
+        """
+        model = self._pane.current.model
+        entry = model.entry(self.current_row())
+        if entry is None or entry.is_dir:
+            return
+        suffix = split_name(entry)[1]
+        if not suffix:
+            return
+        self._apply_selection(model.rows_with_extension(suffix), on=on)
+
+    def select_all(self, *, on: bool = True) -> None:
+        self._apply_selection(self._pane.current.model.all_rows(), on=on)
+
+    def invert_selection(self) -> None:
+        model = self._pane.current.model
+        marked = self._selected_rows()
+        rows = model.all_rows()
+        self._apply_selection([row for row in rows if row in marked], on=False)
+        self._apply_selection([row for row in rows if row not in marked], on=True)
+
+    def ask_and_select(self, *, on: bool = True) -> None:
+        """The pattern dialog behind the two group commands."""
+        pattern = dialogs.ask_pattern(
+            self.window(),
+            title="Select" if on else "Unselect",
+            label=("Mark everything matching" if on
+                   else "Unmark everything matching"),
+            ok_text="Select" if on else "Unselect",
+        )
+        if pattern:
+            self.select_matching(pattern, on=on)
+
+    def _apply_selection(self, rows, *, on: bool) -> None:
+        """Mark or unmark a set of rows in as few calls as Qt will take.
+
+        Coalesced into runs rather than sent one row at a time. At 50,000 rows
+        a selection command that emits a range per row is seconds of the view
+        rebuilding its selection, and this is the folder size this application
+        is built around.
+        """
+        picker = self._view.selectionModel()
+        model = self._view.model()
+        if picker is None or model is None or not rows:
+            return
+        flag = QItemSelectionModel.Select if on else QItemSelectionModel.Deselect
+        span = QItemSelection()
+        last = model.columnCount() - 1
+        for start, end in _runs(sorted(rows)):
+            span.select(model.index(start, 0), model.index(end, last))
+        picker.select(span, flag | QItemSelectionModel.Rows)
+        self._render_status()
+
     # ----------------------------------------------------------- folder sizes
 
     def measure_selection(self) -> None:
@@ -1024,6 +1146,8 @@ class PaneWidget(QFrame):
             if event.key() == Qt.Key_Space and not event.modifiers():
                 self.measure_selection()
                 return True
+            if self._on_selection_key(event):
+                return True
             if self._on_search_key(event):
                 return True
         if event.type() == QEvent.MouseButtonRelease and \
@@ -1047,6 +1171,22 @@ class PaneWidget(QFrame):
         button.setFocusPolicy(Qt.NoFocus)  # the listing keeps the focus
         button.clicked.connect(slot)
         return button
+
+
+def _runs(rows) -> list[tuple[int, int]]:
+    """Consecutive row numbers, as `(first, last)` pairs.
+
+    A sorted list in, contiguous blocks out. Selecting 40,000 rows is then a
+    handful of ranges rather than 40,000 of them, which is the difference
+    between a command that feels instant and one that redraws for seconds.
+    """
+    blocks: list[tuple[int, int]] = []
+    for row in rows:
+        if blocks and row == blocks[-1][1] + 1:
+            blocks[-1] = (blocks[-1][0], row)
+        else:
+            blocks.append((row, row))
+    return blocks
 
 
 def _tidy(items, *, drop_verbs) -> list[MenuItem]:

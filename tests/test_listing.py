@@ -222,3 +222,83 @@ def test_a_filtered_out_row_cannot_be_found(model):
     filled(model, ["keep-me", "hide-me"])
     model.set_filter("keep")
     assert model.find("hide") == -1
+
+
+# ---------------------------------------------------------- selecting a group
+#
+# The rows a selection command acts on. Rows rather than names, with the parent
+# row's offset already in them, because that is what the widget hands to Qt --
+# and `..` is never among them, because a selection holding it would offer it
+# to the next operation.
+
+
+def test_a_pattern_with_a_star_matches_the_whole_name(model):
+    filled(model, ["plan.dwg", "plan.dxf", "notes.txt"])
+    rows = model.rows_matching("*.dwg")
+    assert [model.entry(row).name for row in rows] == ["plan.dwg"]
+
+
+def test_a_pattern_without_a_wildcard_matches_part_of_a_name(model):
+    filled(model, ["site-plan.dwg", "notes.txt"])
+    assert [model.entry(row).name for row in model.rows_matching("plan")] == \
+        ["site-plan.dwg"]
+
+
+def test_several_patterns_at_once(model):
+    """What makes `*.dwg;*.dxf` one answer to "select the drawings"."""
+    filled(model, ["a.dwg", "b.dxf", "c.txt"])
+    names = [model.entry(row).name for row in model.rows_matching("*.dwg;*.dxf")]
+    assert names == ["a.dwg", "b.dxf"]
+
+
+def test_the_parent_row_is_never_selected(model):
+    filled(model, ["one", "two"], has_parent=True)
+    assert model.rows_matching("*") == [1, 2]
+    assert model.all_rows() == [1, 2]
+
+
+def test_a_pattern_can_leave_the_folders_out(model):
+    model.begin(has_parent=False)
+    model.add([entry("build", is_dir=True), entry("build.log")])
+    model.finish()
+    rows = model.rows_matching("build*", files_only=True)
+    assert [model.entry(row).name for row in rows] == ["build.log"]
+
+
+def test_the_same_kind_is_files_of_one_extension(model):
+    filled(model, ["a.dwg", "b.dwg", "c.txt"])
+    assert [model.entry(row).name for row in model.rows_with_extension("dwg")] == \
+        ["a.dwg", "b.dwg"]
+
+
+def test_a_folder_is_never_the_same_kind_however_many_dots_are_in_it(model):
+    """The rule the Ext column already follows, stated where a command uses it."""
+    model.begin(has_parent=False)
+    model.add([entry("release.v2.dwg", is_dir=True), entry("plan.dwg")])
+    model.finish()
+    names = [model.entry(row).name for row in model.rows_with_extension("dwg")]
+    assert names == ["plan.dwg"]
+
+
+def test_a_filtered_out_row_is_not_selected(model):
+    """A selection command acts on the listing, and the listing is what the
+    filter lets through."""
+    filled(model, ["keep.dwg", "hide.dwg"])
+    model.set_filter("keep")
+    assert [model.entry(row).name for row in model.rows_matching("*.dwg")] == \
+        ["keep.dwg"]
+
+
+def test_folder_names_are_what_is_on_screen(model):
+    model.begin(has_parent=True)
+    model.add([entry("kept", is_dir=True), entry("gone", is_dir=True),
+               entry("a.txt")])
+    model.finish()
+    model.set_filter("kept")
+    assert model.folder_names() == ["kept"]
+
+
+def test_an_entry_is_findable_by_name_whatever_its_case(model):
+    filled(model, ["Drawings"])
+    assert model.entry_named("drawings").name == "Drawings"
+    assert model.entry_named("missing") is None

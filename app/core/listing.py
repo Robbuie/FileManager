@@ -96,6 +96,33 @@ def format_time(mtime: float) -> str:
         return ""
 
 
+#: What separates one pattern from the next in a selection or filter string.
+PATTERN_SEPARATOR = ";"
+
+
+def matches(name: str, pattern: str) -> bool:
+    """Whether a name answers to a pattern, the way somebody typing means it.
+
+    A pattern containing `*` or `?` is a glob; anything else is a substring.
+    Both are what a person typing into a file list means, and which one they
+    meant is legible from what they typed rather than from a mode they had to
+    set first.
+
+    Several patterns can be given at once, separated by `;`, which is what
+    makes `*.dwg;*.dxf` a single answer to "select the drawings".
+    """
+    name = name.lower()
+    for part in pattern.lower().split(PATTERN_SEPARATOR):
+        part = part.strip()
+        if not part:
+            continue
+        found = (fnmatch.fnmatch(name, part) if "*" in part or "?" in part
+                 else part in name)
+        if found:
+            return True
+    return False
+
+
 def split_name(entry: Entry) -> tuple[str, str]:
     """Name and extension as separate columns, the way a file list wants them.
 
@@ -221,9 +248,8 @@ class ListingModel(QAbstractTableModel):
     def set_filter(self, text: str) -> None:
         """Show only the rows whose name matches.
 
-        A pattern containing `*` or `?` is matched as a glob, anything else as
-        a substring. Both are what someone typing into a file list means, and
-        which one they meant is legible from what they typed.
+        `matches` decides what a pattern means: a glob if it has `*` or `?` in
+        it, a substring otherwise, and several of them separated by `;`.
         """
         text = (text or "").strip()
         if text == self._filter:
@@ -268,6 +294,36 @@ class ListingModel(QAbstractTableModel):
             if entry.name.lower() == wanted:
                 return entry
         return None
+
+    def rows_matching(self, pattern: str, *, files_only: bool = False) -> list[int]:
+        """The rows a selection command should act on.
+
+        Rows rather than names, because a selection is rows -- and view rows,
+        with the parent row's offset already in them, because that is what the
+        widget hands to Qt. `..` is never among them: it is not an entry, and
+        a selection that included it would offer `..` to the next operation.
+        """
+        found = []
+        for index, entry in enumerate(self._rows):
+            if files_only and entry.is_dir:
+                continue
+            if matches(entry.name, pattern):
+                found.append(index + self._offset)
+        return found
+
+    def rows_with_extension(self, suffix: str) -> list[int]:
+        """Every file sharing an extension, for "the rest of these".
+
+        Folders are never included however many dots are in their names, which
+        is the same rule the Ext column follows.
+        """
+        wanted = (suffix or "").lower()
+        return [index + self._offset for index, entry in enumerate(self._rows)
+                if not entry.is_dir and split_name(entry)[1].lower() == wanted]
+
+    def all_rows(self) -> list[int]:
+        """Every row a selection may hold, the parent row excluded."""
+        return [index + self._offset for index in range(len(self._rows))]
 
     def folder_names(self) -> list[str]:
         """Every folder on screen. What the filter lets through, not what
@@ -460,11 +516,7 @@ class ListingModel(QAbstractTableModel):
     # ---------------------------------------------------------------- filter
 
     def _passes(self, entry: Entry) -> bool:
-        pattern = self._filter.lower()
-        name = entry.name.lower()
-        if "*" in pattern or "?" in pattern:
-            return fnmatch.fnmatch(name, pattern)
-        return pattern in name
+        return matches(entry.name, self._filter)
 
     def _apply_filter(self) -> None:
         """Recompute the visible list. Callers own the reset around it."""

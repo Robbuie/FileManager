@@ -163,6 +163,38 @@ class MainWindow(QMainWindow):
             # keys that work without a menu entry advertising each one.
             entry.setVisible(position <= 3)
 
+        # The Norton keypad, which is what Double Commander uses and what
+        # these fingers already know, with a Ctrl equivalent for a keyboard
+        # that has no numeric pad.
+        #
+        # Hints rather than shortcuts, every one of them. Ctrl+A as a window
+        # shortcut would take select-all away from the path bar and the filter
+        # box, which is the same failure the function keys are kept off the
+        # window for; and the keypad keys have to be told apart from the same
+        # characters typed into a quick search, which only the widget holding
+        # the search can do. The pane handles all of them where focus makes
+        # that safe.
+        select = self.menuBar().addMenu("Se&lect")
+        widget = self._current_widget
+        self._hint(select, "Select group\tNum +  /  Ctrl+=",
+                   lambda: widget().ask_and_select(on=True))
+        self._hint(select, "Unselect group\tNum -  /  Ctrl+-",
+                   lambda: widget().ask_and_select(on=False))
+        self._hint(select, "Invert selection\tNum *  /  Ctrl+8",
+                   lambda: widget().invert_selection())
+        select.addSeparator()
+        self._hint(select, "Select all\tCtrl+A", lambda: widget().select_all())
+        self._hint(select, "Unselect all\tCtrl+Shift+A",
+                   lambda: widget().select_all(on=False))
+        select.addSeparator()
+        same = self._hint(select, "Select all of this kind\tAlt+Num +",
+                          lambda: widget().select_same_extension(on=True))
+        same.setToolTip("Every file with the same extension as the one under "
+                        "the cursor.")
+        self._hint(select, "Unselect all of this kind\tAlt+Num -",
+                   lambda: widget().select_same_extension(on=False))
+        select.setToolTipsVisible(True)
+
         self._favorites_menu = self.menuBar().addMenu("F&avorites")
         self._favorites_menu.setToolTipsVisible(True)
         self._add_favorite_action = QAction("Add this folder", self)

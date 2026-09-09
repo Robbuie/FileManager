@@ -84,6 +84,50 @@ class NamePrompt(QDialog):
         self._field.setSelection(0, len(stem) if dot and stem else len(text))
 
 
+class PatternPrompt(QDialog):
+    """One pattern, for the two group selection commands.
+
+    Separate from `NamePrompt` because the two validate opposite things: a
+    name may not contain `*`, and a pattern is mostly why somebody would type
+    one. The note under the field is the whole documentation of what a pattern
+    means, and it is here because this is where it is needed.
+    """
+
+    def __init__(self, parent: QWidget | None, *, title: str, label: str,
+                 initial: str = "", ok_text: str = "OK") -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(460)
+
+        self._field = QLineEdit(initial)
+        self._field.setPlaceholderText("*.dwg")
+        self._field.selectAll()
+
+        note = QLabel("A pattern with * or ? matches the whole name; anything "
+                      "else matches part of it. Several at once, separated by "
+                      "a semicolon: *.dwg;*.dxf")
+        note.setWordWrap(True)
+        note.setProperty("role", "note")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText(ok_text)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        caption = QLabel(label)
+        caption.setWordWrap(True)
+        layout.addWidget(caption)
+        layout.addWidget(self._field)
+        layout.addWidget(note)
+        layout.addWidget(buttons)
+
+    def value(self) -> str:
+        return self._field.text().strip()
+
+
 class DeleteConfirm(QDialog):
     """What is about to be deleted, by name, and where it will go."""
 
@@ -418,6 +462,16 @@ def ask_name(parent: QWidget, *, title: str, label: str, initial: str = "",
                         ok_text=ok_text)
     if stem:
         dialog.select_stem()
+    if dialog.exec() != QDialog.Accepted:
+        return None
+    return dialog.value() or None
+
+
+def ask_pattern(parent: QWidget, *, title: str, label: str,
+                initial: str = "", ok_text: str = "OK") -> str | None:
+    """A selection pattern, or None if the dialog was cancelled or left empty."""
+    dialog = PatternPrompt(parent, title=title, label=label, initial=initial,
+                           ok_text=ok_text)
     if dialog.exec() != QDialog.Accepted:
         return None
     return dialog.value() or None
