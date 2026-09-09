@@ -38,6 +38,7 @@ def main() -> int:
 
     from app.core.bridge import Bridge
     from app.core.config import Config
+    from app.core.favorites import Favorites
     from app.core.icons import Icons
     from app.core.menu import ShellMenu
     from app.core.overlays import Overlays
@@ -77,8 +78,12 @@ def main() -> int:
     volumes = Volumes(bridge, config)
     transfers = TransferQueue()
     updates = Updates(config, __version__)
+    # One list for the window, not one per pane: a favourite is a place rather
+    # than a side of the window.
+    favorites = Favorites(config)
 
-    window = MainWindow(config, left, right, volumes, transfers, updates)
+    window = MainWindow(config, left, right, volumes, transfers, updates,
+                        favorites)
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

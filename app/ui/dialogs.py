@@ -16,9 +16,12 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
@@ -299,6 +302,106 @@ class ElevateOffer(QDialog):
         layout.addWidget(buttons)
 
 
+class FavoritesEditor(QDialog):
+    """Rename, reorder and remove saved locations.
+
+    It edits the list directly rather than collecting changes and applying
+    them on OK. There is no destructive step to confirm here -- a removed
+    favourite is a line in a settings file, not a file on disk -- and a dialog
+    that has to be accepted before a rename takes is a dialog people close
+    without meaning to lose anything.
+    """
+
+    def __init__(self, parent: QWidget | None, favorites) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Favorites")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+        self._favorites = favorites
+
+        self._list = QListWidget()
+        self._list.setUniformItemSizes(True)
+        self._list.currentRowChanged.connect(self._on_row_changed)
+        self._list.itemDoubleClicked.connect(lambda _item: self._rename())
+
+        self._name = QLineEdit()
+        self._name.setPlaceholderText("Name")
+        self._name.returnPressed.connect(self._rename)
+
+        self._up = QPushButton("Move up")
+        self._down = QPushButton("Move down")
+        self._remove = QPushButton("Remove")
+        self._up.clicked.connect(lambda: self._move(-1))
+        self._down.clicked.connect(lambda: self._move(1))
+        self._remove.clicked.connect(self._on_remove)
+        for button in (self._up, self._down, self._remove):
+            button.setAutoDefault(False)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self._name, 1)
+        row.addWidget(self._up)
+        row.addWidget(self._down)
+        row.addWidget(self._remove)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        caption = QLabel("Saved locations, in the order they appear in the menu.")
+        caption.setWordWrap(True)
+        layout.addWidget(caption)
+        layout.addWidget(self._list, 1)
+        layout.addLayout(row)
+        layout.addWidget(buttons)
+
+        self._reload(0)
+
+    def _reload(self, row: int) -> None:
+        self._list.blockSignals(True)
+        self._list.clear()
+        for entry in self._favorites.entries:
+            item = QListWidgetItem(f"{entry.name}      {entry.path}")
+            item.setToolTip(entry.path)
+            self._list.addItem(item)
+        self._list.blockSignals(False)
+        count = self._list.count()
+        self._list.setCurrentRow(min(max(0, row), count - 1) if count else -1)
+        self._on_row_changed(self._list.currentRow())
+
+    def _on_row_changed(self, row: int) -> None:
+        entries = self._favorites.entries
+        live = 0 <= row < len(entries)
+        self._name.setText(entries[row].name if live else "")
+        self._name.setEnabled(live)
+        self._remove.setEnabled(live)
+        self._up.setEnabled(live and row > 0)
+        self._down.setEnabled(live and row < len(entries) - 1)
+
+    def _rename(self) -> None:
+        row = self._list.currentRow()
+        name = self._name.text().strip()
+        if row >= 0 and name:
+            self._favorites.rename(row, name)
+            self._reload(row)
+
+    def _move(self, step: int) -> None:
+        row = self._list.currentRow()
+        if row < 0:
+            return
+        landed = self._favorites.move(row, step)
+        self._favorites.commit_order()
+        self._reload(landed)
+
+    def _on_remove(self) -> None:
+        row = self._list.currentRow()
+        if row >= 0:
+            self._favorites.remove(row)
+            self._reload(row)
+
+
 def _count(value: int) -> str:
     return "1 item" if value == 1 else f"{value:,} items"
 
@@ -342,6 +445,12 @@ def offer_update(parent: QWidget, *, version: str, current: str, size: int) -> s
 def confirm_elevate(parent: QWidget, description: str) -> bool:
     """True to run one refused operation again with administrator rights."""
     return ElevateOffer(parent, description=description).exec() == QDialog.Accepted
+
+
+def edit_favorites(parent: QWidget, favorites) -> None:
+    """Open the favourites editor. It writes as it goes; there is nothing to
+    return."""
+    FavoritesEditor(parent, favorites).exec()
 
 
 def confirm_install(parent: QWidget, *, version: str, transfers: bool) -> bool:

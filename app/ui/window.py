@@ -36,10 +36,11 @@ TITLE = "File Manager"
 class MainWindow(QMainWindow):
 
     def __init__(self, config, left, right, volumes, transfers, updates=None,
-                 parent: QWidget | None = None) -> None:
+                 favorites=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
         self._updates = updates
+        self._favorites = favorites
         self._panes = (left, right)
         self._icons = left.icons
         self._overlays = left.overlays
@@ -85,6 +86,11 @@ class MainWindow(QMainWindow):
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
         self._build_menus()
+        if self._favorites is not None:
+            # Rebuilt rather than patched. The list is a dozen entries and
+            # the alternative is a diff against a menu.
+            self._favorites.changed.connect(self._fill_favorites)
+            self._fill_favorites()
         self._active = 0
         self._set_active(0)
         # Timed, not permanent. The status bar is where a transfer reports
@@ -157,6 +163,22 @@ class MainWindow(QMainWindow):
             # keys that work without a menu entry advertising each one.
             entry.setVisible(position <= 3)
 
+        self._favorites_menu = self.menuBar().addMenu("F&avorites")
+        self._favorites_menu.setToolTipsVisible(True)
+        self._add_favorite_action = QAction("Add this folder", self)
+        self._add_favorite_action.setShortcut(QKeySequence("Ctrl+D"))
+        self._add_favorite_action.setShortcutContext(Qt.WindowShortcut)
+        self._add_favorite_action.setToolTip("Save the folder this pane is showing.")
+        self._add_favorite_action.triggered.connect(self._add_favorite)
+        self._manage_favorites_action = QAction("Manage favorites", self)
+        self._manage_favorites_action.triggered.connect(self._manage_favorites)
+        self._favorites_menu.addAction(self._add_favorite_action)
+        self._favorites_menu.addAction(self._manage_favorites_action)
+        # A window built without a list -- a preview render, a test -- gets the
+        # menu drawn and inert rather than a menu bar that is a different shape
+        # from the real one.
+        self._favorites_menu.setEnabled(self._favorites is not None)
+
         go = self.menuBar().addMenu("&Go")
         self._action(go, "Up", "Backspace", lambda: self._current_pane().go_up())
         self._action(go, "Back", "Alt+Left", lambda: self._current_pane().go_back())
@@ -221,6 +243,75 @@ class MainWindow(QMainWindow):
             lambda checked: self._config.set("updates.check_on_launch", bool(checked)))
         automatic.setEnabled(self._updates is not None)
         helping.addAction(automatic)
+
+    # -------------------------------------------------------------- favorites
+
+    def _fill_favorites(self) -> None:
+        """The saved locations, with the two commands that maintain them.
+
+        The commands go at the top rather than the bottom so they stay in one
+        place as the list grows; a menu whose first entry moves every time
+        something is added is a menu that has to be read before it is used.
+        """
+        menu = self._favorites_menu
+        menu.clear()
+        # The two commands are made once, in `_build_menus`, and put back
+        # here. Made afresh on every rebuild they would leave the previous
+        # copies alive on the window -- they are parented to it, so
+        # `QMenu.clear` does not delete them -- and after a few favourites
+        # Qt would have several actions claiming Ctrl+D and honour none of
+        # them. Everything below the separator is parented to the menu
+        # instead, so clearing it does delete them.
+        menu.addAction(self._add_favorite_action)
+        menu.addAction(self._manage_favorites_action)
+        menu.addSeparator()
+        entries = self._favorites.entries
+        if not entries:
+            empty = QAction("No favorites yet", menu)
+            empty.setEnabled(False)
+            menu.addAction(empty)
+            return
+        for entry in entries:
+            action = QAction(entry.name, menu)
+            action.setToolTip(entry.path)
+            action.triggered.connect(
+                lambda _checked=False, path=entry.path: self._go_to_favorite(path))
+            menu.addAction(action)
+
+    def _go_to_favorite(self, path: str) -> None:
+        """Into the pane that has focus, and into a new tab if it is locked --
+        which `Pane.navigate` decides, not this."""
+        self._current_pane().navigate(path)
+        self._current_widget().focus_listing()
+
+    def _add_favorite(self) -> None:
+        """Save the folder on screen, under a name the user confirms.
+
+        A name is asked for rather than taken from the folder because the
+        whole point of the list is getting somewhere quickly, and four folders
+        called `2026` in four job trees do not do that.
+        """
+        pane = self._current_pane()
+        path = pane.current.path
+        known = self._favorites.index_of(path)
+        name = dialogs.ask_name(
+            self, title="Add favorite",
+            label=("Rename this favorite" if known >= 0
+                   else f"Save {pane.display(path)} as"),
+            initial=(self._favorites.entries[known].name if known >= 0
+                     else self._favorites.suggested_name(path)),
+            ok_text="Save",
+        )
+        if not name:
+            return
+        if not self._favorites.add(name, path):
+            self.statusBar().showMessage(
+                "the favorites list is full; remove one first", 6000)
+            return
+        self.statusBar().showMessage(f"saved {name}", 4000)
+
+    def _manage_favorites(self) -> None:
+        dialogs.edit_favorites(self, self._favorites)
 
     def _set_shell_icons(self, checked: bool) -> None:
         """Turn the pictures off, or back on, without a restart.
