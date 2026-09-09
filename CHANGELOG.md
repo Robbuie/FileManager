@@ -16,19 +16,26 @@ overlays and elevation as well as everything below.
   the tabs come back where they were; a middle click opens a folder in a tab
   behind and closes a tab in the strip; Ctrl+Shift+T duplicates one;
   Ctrl+Enter or the row menu opens the folder under the cursor in a new one;
-  Ctrl+Tab and Alt+1 to Alt+9 move between them; the tab strip has a menu with
-  duplicate, close others and close to the right; and there is a Tabs menu to
-  find all of it in.
+  Ctrl+Tab and Alt+1 to Alt+9 move between them; double-clicking the empty
+  part of the tab strip opens one; the tab strip has a menu with duplicate,
+  close others and close to the right; and there is a Tabs menu to find all of
+  it in.
 - **Locked tabs.** A locked tab keeps its folder: navigating away from it
   opens a new tab at the target rather than refusing to move, so the tab
   pinned to a job folder stays there while a double click still goes
   somewhere. It refuses to close, close-others spares it, and its name is
   drawn in brackets.
-- **Favorites.** Ctrl+D saves the folder on screen under a name you confirm,
-  the Favorites menu goes back to any of them, and `Manage favorites` renames,
-  reorders and removes. One list for both panes, because a favourite is a
-  place rather than a side of the window. It is written out as it changes
-  rather than at exit.
+- **Favorites, on a bar in each pane.** Ctrl+D saves the folder on screen
+  under a name you confirm, and it appears as a button under that pane's tab
+  strip: one click goes there, a middle click opens it in a tab behind, a
+  right click renames, reorders or removes it. Ctrl+1 to Ctrl+9 reach the
+  first nine without the mouse. The bar is in the pane rather than in the
+  window because the question is never only "where" but "which side", and the
+  panes sit side by side so two bars cost the height of one. What does not fit
+  goes behind a trailing button and comes back when the pane is widened.
+  `View`/`Favorites > Show the favorites bar` turns it off, and it hides
+  itself entirely while nothing is saved. The Favorites menu and
+  `Manage favorites` are still there.
 - **Quick search.** Typing in the listing jumps to a name -- prefix first,
   then anything containing what was typed, wrapping, and continuing from
   where the cursor already is so a second letter narrows the answer. F3 steps
@@ -53,6 +60,10 @@ overlays and elevation as well as everything below.
 - Dragging a tab in the strip reordered the widget and not the pane, so
   afterwards every index -- the one a click selected, the one a close button
   reported -- named a different tab than the one under it.
+- The favorites bar set a floor under the pane it was in, so the splitter
+  could not be dragged past the width of the favourites and a window asked for
+  820 pixels came back 1596 wide. A layout writes its widget's minimumSize
+  property by default, and that property beats any size hint.
 
 ## [0.9.0]
 

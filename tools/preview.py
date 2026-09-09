@@ -62,8 +62,11 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     # Two invented entries, for the same reason the menu preview invents shell
     # commands: what is being looked at is the shape of the menu, and that has
     # nothing to do with which folders this machine has.
-    config.set("favorites", [{"name": "Jobs", "path": path},
-                             {"name": "Drawings", "path": path}])
+    config.set("favorites", [
+        {"name": name, "path": path} for name in
+        ("Jobs", "Drawings", "Standards", "Scans", "Archive 2025",
+         "Templates", "Downloads", "Site photos")
+    ])
     sizes = FolderSizes(bridge, config)
     window = MainWindow(
         config,

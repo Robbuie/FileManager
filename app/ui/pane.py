@@ -27,6 +27,7 @@ from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size, split_name
 from app.io.protocol import MENU_COMMAND, MENU_SEPARATOR, MENU_SUBMENU, MenuItem
 from app.ui import dialogs
+from app.ui.favorites import FavoritesBar
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -70,12 +71,15 @@ class PaneWidget(QFrame):
 
     activated = Signal(object)          # this widget, when it takes focus
     transferRequested = Signal(str)     # "copy" or "move", from F5 and F6
+    addFavoriteRequested = Signal()     # from the favorites bar's own menu
+    manageFavoritesRequested = Signal()
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
-                 parent: QWidget | None = None):
+                 favorites=None, parent: QWidget | None = None):
         super().__init__(parent)
         self._pane = pane
         self._volumes = volumes
+        self._favorites = favorites
         self._summary = ("", "idle")
         self.setProperty("pane", "true")
         self.setProperty("active", "false")
@@ -194,10 +198,24 @@ class PaneWidget(QFrame):
         footer.addWidget(self._status, 1)
         footer.addWidget(self._space)
 
+        # The bar goes in the pane rather than in the window because in a
+        # dual-pane file manager the question is never only "where" but "which
+        # side", and a bar inside a pane answers both in one click. Two of them
+        # cost the height of one: the panes are side by side.
+        self._bar = None
+        if favorites is not None:
+            self._bar = FavoritesBar(
+                favorites, wanted=bool(pane.config.get("favorites.bar")))
+            self._bar.chosen.connect(self._on_favorite)
+            self._bar.addRequested.connect(self.addFavoriteRequested)
+            self._bar.manageRequested.connect(self.manageFavoritesRequested)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(4)
         layout.addWidget(self._tabs)
+        if self._bar is not None:
+            layout.addWidget(self._bar)
         layout.addLayout(controls)
         layout.addWidget(self._filter)
         layout.addWidget(self._view, 1)
@@ -1066,6 +1084,37 @@ class PaneWidget(QFrame):
         picker.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
         self._view.scrollTo(index)
 
+    # ---------------------------------------------------------- the favorites
+
+    def _on_favorite(self, path: str, new_tab: bool) -> None:
+        """A place from the bar. The pane decides what going there means.
+
+        Including the case that makes locked tabs worth having: `navigate` on
+        a locked tab opens a new one, so a favourite clicked from a pinned tab
+        does not take the pin with it.
+        """
+        self.activated.emit(self)
+        if new_tab:
+            self._pane.open_tab(path)
+        else:
+            self._pane.navigate(path)
+        self.focus_listing()
+
+    def go_to_favorite(self, position: int) -> None:
+        """The nth saved place, for Ctrl+1 through Ctrl+9."""
+        if self._favorites is None:
+            return
+        entries = self._favorites.entries
+        if 0 <= position < len(entries):
+            self._on_favorite(entries[position].path, False)
+
+    def show_favorites_bar(self, shown: bool) -> None:
+        """Draw the bar, or do not. It stays hidden while the list is empty
+        whichever way this is set -- a row of chrome with nothing in it is
+        worse than no row."""
+        if self._bar is not None:
+            self._bar.set_wanted(shown)
+
     # --------------------------------------------------------------- the tabs
 
     def _on_tab_menu(self, point: QPoint) -> None:
@@ -1149,6 +1198,14 @@ class PaneWidget(QFrame):
             if self._on_selection_key(event):
                 return True
             if self._on_search_key(event):
+                return True
+        if watched is self._tabs and event.type() == QEvent.MouseButtonDblClick \
+                and event.button() == Qt.LeftButton:
+            # Empty strip only. Double-clicking a tab is how a lot of people
+            # rename one, and opening a tab instead would be a surprise on the
+            # gesture most likely to be made by accident.
+            if self._tabs.tabAt(event.position().toPoint()) < 0:
+                self._pane.open_tab()
                 return True
         if event.type() == QEvent.MouseButtonRelease and \
                 event.button() == Qt.MiddleButton:

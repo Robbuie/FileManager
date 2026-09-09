@@ -141,6 +141,13 @@ class Pane(QObject):
     # ------------------------------------------------------------------ state
 
     @property
+    def config(self):
+        """The settings, for the widget above. Read-only by convention: the
+        pane is what writes them, so that what a setting means lives in one
+        place rather than in whichever widget got there first."""
+        return self._config
+
+    @property
     def current(self) -> Tab:
         return self.tabs[self.index]
 

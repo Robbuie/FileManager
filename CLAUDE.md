@@ -308,6 +308,11 @@ Ctrl+Tab / Ctrl+Shift+Tab  next, previous
 Alt+1 .. Alt+9  by number  Ctrl+Shift+L  lock this one
 Ctrl+Enter  the folder under the cursor, in a new tab
 middle click  a folder in a tab behind; a tab in the strip, closed
+double click  the empty part of the strip, a new tab
+
+Favorites
+Ctrl+D  save this folder    Ctrl+1 .. Ctrl+9  go to the first nine
+click a bar button  go there     middle click  go there in a new tab
 
 Finding and marking
 type a name  jump to it    F3 / Shift+F3  the next, the previous match

@@ -54,6 +54,11 @@ DEFAULTS: dict[str, Any] = {
     # panes, because a favourite is a place rather than a side of the window.
     "favorites": [],
 
+    # Whether the favorites bar is drawn under each tab strip. On, and it
+    # costs nothing until there is a favourite to put in it -- the bar hides
+    # itself entirely while the list is empty.
+    "favorites.bar": True,
+
     # Deadlines. Seconds without progress before a request is given up on and
     # its worker restarted.
     "timeout.listing": 20.0,

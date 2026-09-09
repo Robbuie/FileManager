@@ -162,6 +162,25 @@ QToolButton[role="tabclose"] {{
 }}
 QToolButton[role="tabclose"]:hover {{ color: {txt_0}; background: {bg_4}; border-radius: 2px; }}
 
+/* The favorites bar. Quieter than the chrome around it on purpose: it is a row
+   of places that is always on screen, and a row of places that draws like a
+   toolbar competes with the listing it sits above. The accent arrives on
+   hover, which is where a target the mouse is on wants it. */
+QToolButton[role="favorite"] {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: {radius_sm};
+    color: {txt_1};
+    padding: 2px 8px;
+    min-height: {button_h};
+}}
+QToolButton[role="favorite"]:hover {{
+    background: {bg_3};
+    border: 1px solid {accent_line};
+    color: {txt_0};
+}}
+QToolButton[role="favorite"]:pressed {{ background: {bg_4}; }}
+
 /* The listing itself. Everything above exists to frame this. */
 QTableView {{
     background: {bg_2};

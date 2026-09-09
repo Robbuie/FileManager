@@ -322,3 +322,76 @@ def test_the_pane_agrees_with_the_bar_after_a_drag():
     assert [tab.path for tab in core.tabs] == ["C:\\A", "C:\\B", "C:\\Jobs"]
     assert core.index == 2
     assert core.current.path == "C:\\Jobs"
+
+
+# ------------------------------------------------------- the gestures, on a bar
+#
+# Two mouse gestures reach the tab strip through an event filter rather than
+# through a signal, which means nothing about them is visible in the widget's
+# connections and a rename of the filter would take them out silently.
+
+
+class FakeVolumes:
+    """Enough of `core.Volumes` for a pane widget to draw: a list and a signal."""
+
+    def __init__(self):
+        from PySide6.QtCore import QObject, Signal
+
+        class Emitter(QObject):
+            changed = Signal()
+
+        self._emitter = Emitter()
+        self.changed = self._emitter.changed
+        self.drives = []
+
+    def letter_for(self, path):
+        return None
+
+
+def widget_for(core):
+    from app.theme import sheet
+    from app.ui.pane import PaneWidget
+
+    return PaneWidget(core, FakeVolumes(), sheet.metrics("normal"))
+
+
+def double_click(bar, point):
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication
+
+    where = QPointF(point)
+    event = QMouseEvent(QEvent.MouseButtonDblClick, where, where,
+                        Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+    QApplication.sendEvent(bar, event)
+
+
+def test_double_clicking_the_empty_strip_opens_a_tab(pane):
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QPoint
+
+    core, _, _ = pane
+    widget = widget_for(core)
+    widget.resize(700, 400)
+    strip = widget._tabs
+    beyond = strip.tabRect(strip.count() - 1).right() + 40
+
+    double_click(strip, QPoint(beyond, strip.height() // 2))
+    assert len(core.tabs) == 2
+    assert core.tabs[1].path == core.tabs[0].path
+
+
+def test_double_clicking_a_tab_itself_does_not(pane):
+    """Double-clicking a tab is how a lot of people expect to rename one.
+    Opening a tab there would be a surprise on the gesture most likely to be
+    made by accident.
+    """
+    pytest.importorskip("PySide6")
+
+    core, _, _ = pane
+    widget = widget_for(core)
+    widget.resize(700, 400)
+    strip = widget._tabs
+
+    double_click(strip, strip.tabRect(0).center())
+    assert len(core.tabs) == 1

@@ -51,8 +51,8 @@ class MainWindow(QMainWindow):
         self._transfer_sources: dict[int, str] = {}
 
         metrics = sheet.metrics(config.get("density"))
-        self._widgets = (PaneWidget(left, volumes, metrics),
-                         PaneWidget(right, volumes, metrics))
+        self._widgets = (PaneWidget(left, volumes, metrics, favorites),
+                         PaneWidget(right, volumes, metrics, favorites))
 
         self._splitter = QSplitter(Qt.Horizontal)
         for widget in self._widgets:
@@ -67,6 +67,8 @@ class MainWindow(QMainWindow):
                 lambda message: self.statusBar().showMessage(message, 8000))
         for widget in self._widgets:
             widget.transferRequested.connect(self._on_transfer_requested)
+            widget.addFavoriteRequested.connect(self._add_favorite)
+            widget.manageFavoritesRequested.connect(self._manage_favorites)
         transfers.conflict.connect(self._on_conflict)
         transfers.finished.connect(self._on_transfer_finished)
         if updates is not None:
@@ -204,8 +206,28 @@ class MainWindow(QMainWindow):
         self._add_favorite_action.triggered.connect(self._add_favorite)
         self._manage_favorites_action = QAction("Manage favorites", self)
         self._manage_favorites_action.triggered.connect(self._manage_favorites)
+        self._show_bar_action = QAction("Show the favorites bar", self,
+                                       checkable=True)
+        self._show_bar_action.setChecked(bool(self._config.get("favorites.bar")))
+        self._show_bar_action.triggered.connect(self._set_favorites_bar)
+        # Ctrl+1 to Ctrl+9, made here and not in the rebuilt part of the menu:
+        # a shortcut action remade on every change leaves the old ones alive
+        # on the window and Qt then honours none of them. Alt+n is the tabs,
+        # so the numbers with Ctrl are the places.
+        self._favorite_keys = []
+        for position in range(1, 10):
+            entry = QAction(f"Favorite {position}", self)
+            entry.setShortcut(QKeySequence(f"Ctrl+{position}"))
+            entry.setShortcutContext(Qt.WindowShortcut)
+            entry.triggered.connect(
+                lambda _checked=False, n=position - 1:
+                self._current_widget().go_to_favorite(n))
+            entry.setVisible(False)   # a key, not an entry to read
+            self.addAction(entry)
+            self._favorite_keys.append(entry)
         self._favorites_menu.addAction(self._add_favorite_action)
         self._favorites_menu.addAction(self._manage_favorites_action)
+        self._favorites_menu.addAction(self._show_bar_action)
         # A window built without a list -- a preview render, a test -- gets the
         # menu drawn and inert rather than a menu bar that is a different shape
         # from the real one.
@@ -310,6 +332,7 @@ class MainWindow(QMainWindow):
         # instead, so clearing it does delete them.
         menu.addAction(self._add_favorite_action)
         menu.addAction(self._manage_favorites_action)
+        menu.addAction(self._show_bar_action)
         menu.addSeparator()
         entries = self._favorites.entries
         if not entries:
@@ -317,9 +340,13 @@ class MainWindow(QMainWindow):
             empty.setEnabled(False)
             menu.addAction(empty)
             return
-        for entry in entries:
+        for position, entry in enumerate(entries):
             action = QAction(entry.name, menu)
             action.setToolTip(entry.path)
+            if position < 9:
+                # Shown, not claimed here: the key belongs to the action made
+                # once in `_build_menus`, and this entry only says what it is.
+                action.setText(f"{entry.name}\tCtrl+{position + 1}")
             action.triggered.connect(
                 lambda _checked=False, path=entry.path: self._go_to_favorite(path))
             menu.addAction(action)
@@ -358,6 +385,11 @@ class MainWindow(QMainWindow):
 
     def _manage_favorites(self) -> None:
         dialogs.edit_favorites(self, self._favorites)
+
+    def _set_favorites_bar(self, checked: bool) -> None:
+        self._config.set("favorites.bar", bool(checked))
+        for widget in self._widgets:
+            widget.show_favorites_bar(bool(checked))
 
     def _set_shell_icons(self, checked: bool) -> None:
         """Turn the pictures off, or back on, without a restart.
