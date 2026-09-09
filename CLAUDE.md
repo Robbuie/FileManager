@@ -74,6 +74,7 @@ python -m app.io.harness list S:\Jobs --timeout 20       # rows, first batch, ra
 python -m app.io.harness list S:\Jobs --kill-after 2000  # kill mid-listing
 python -m app.io.harness soak S:\Jobs --count 40 --interval 3 --retry
 python -m app.io.harness icons S:\Jobs                    # kinds in a folder, and their icons
+python -m app.io.harness folders S:\Jobs --limit 200      # what a chevron drops down
 python -m app.io.harness copy S:\Jobs\big D:\scratch --conflict rename
 python -m app.io.harness move S:\Jobs\big D:\scratch --cancel-after 50000000
 ```
@@ -300,6 +301,13 @@ Ctrl+R  refresh            Ctrl+Shift+R  reconnect
 Ctrl+F  filter             Ctrl+L  edit the path
 Ctrl+J  the transfer queue Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
+Ctrl+B  the navigation rail
+
+The rail and the path bar
+click a place, a drive, a saved folder  the pane that has the keyboard goes
+middle click  the same, in a tab behind
+click a heading  fold that section     right click a drive  measure it
+click a chevron in the path bar  the folders inside the crumb on its left
 
 Tabs
 Ctrl+T  new                Ctrl+W  close
@@ -313,6 +321,7 @@ double click  the empty part of the strip, a new tab
 Favorites
 Ctrl+D  save this folder    Ctrl+1 .. Ctrl+9  go to the first nine
 click a bar button  go there     middle click  go there in a new tab
+right click one in the rail  move it to a group, reorder it, remove it
 
 Finding and marking
 type a name  jump to it    F3 / Shift+F3  the next, the previous match
@@ -390,6 +399,33 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   the rows on screen rather than the folder, one request per folder, a short
   deadline, one picture per badge-on-a-kind, and the answers dropped when the
   folder is listed again. Anything added there keeps all five.
+- **A control that takes no focus is invisible to the active-pane rule.**
+  Every borderless control in a pane is `NoFocus` so the listing keeps the
+  keyboard, and the window works out the active pane from
+  `QApplication.focusChanged` -- so a control that never takes focus is a
+  control the window cannot see being used, and clicking it in the *inactive*
+  pane walks that pane while every keystroke still goes to the other one.
+  `PaneWidget._claim` is what answers it, and **every control added to a pane
+  from now on has to call it.** The navigation rail is the deliberate
+  exception and inverts the rule: it is not in a pane, so it claims nothing,
+  takes no focus anywhere, and goes to whichever pane already had the
+  keyboard. A rail that took focus would leave the *next* click going wherever
+  the last one left things.
+- **Anything the rail can open is an opened volume, so it is asked for by
+  hand.** A drive capacity meter is `disk_usage`, which on a mapped drive
+  whose server has gone is the block this application exists to escape. Only
+  local fixed disks are measured without somebody asking (`capacity.AUTOMATIC`
+  is the whole filter), a failure is remembered as a failure rather than
+  re-asked on every redraw, and no place in the rail is ever checked for
+  existence -- five `isdir` calls at startup is the startup probe with a
+  different name.
+- **A breadcrumb chevron is a scan, not chrome.** `Op.FOLDERS` is capped in
+  the worker rather than sliced by the caller, so a chevron on a 50,000-row
+  folder costs two hundred names -- which also means past the cap the names
+  are the ones the folder handed over first and not the first alphabetically,
+  and the menu says so. One is outstanding at a time and a second chevron
+  cancels the first *at the worker*: an abandoned scan still holds the volume
+  the next one wants.
 - **Icons are asked for by kind, never by row.** `SHGFI_USEFILEATTRIBUTES` is
   what makes them safe: the shell answers from the extension alone and does
   not go near the path, so the request goes to the local worker and cannot be
@@ -412,9 +448,12 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    the installer and auto-update (0.7), shell icons in the listing (0.8), the
    Explorer context menu, overlays and elevation (0.9), and the working
    comforts -- tabs that persist and lock, favourites, quick search, folder
-   sizes on demand, selecting a group (0.10). What is left before this
-   replaces Double Commander day to day: per-file icons for the types that
-   carry their own, and a transfer that outlives the window.
+   sizes on demand, selecting a group (0.10), the restyle -- flat listing,
+   breadcrumb path bar, age and size-bar columns (0.11), and the navigation
+   rail with drive capacity meters, grouped favourites and sibling dropdowns
+   on the breadcrumb chevrons (0.12). What is left before this replaces
+   Double Commander day to day: per-file icons for the types that carry their
+   own, and a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

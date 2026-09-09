@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from app import __version__
+from app.core import places as core_places
+from app.core.favorites import UNGROUPED
 from app.io.protocol import Transfer
 from app.theme import sheet
 from app.theme.tokens import (
@@ -28,6 +30,7 @@ from app.theme.tokens import (
 )
 from app.ui import dialogs
 from app.ui.pane import PaneWidget
+from app.ui.rail import NavigationRail
 from app.ui.transfers import ConflictDialog, QueueDialog, TransferBar, TransferPrompt
 
 TITLE = "File Manager"
@@ -36,11 +39,13 @@ TITLE = "File Manager"
 class MainWindow(QMainWindow):
 
     def __init__(self, config, left, right, volumes, transfers, updates=None,
-                 favorites=None, parent: QWidget | None = None) -> None:
+                 favorites=None, capacity=None,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
         self._updates = updates
         self._favorites = favorites
+        self._capacity = capacity
         self._panes = (left, right)
         self._icons = left.icons
         self._overlays = left.overlays
@@ -62,13 +67,42 @@ class MainWindow(QMainWindow):
         for widget in self._widgets:
             widget.apply_tokens(tokens)
 
+        # One rail for the window, at the left of the same splitter the panes
+        # are in, so the width it is dragged to is the width it keeps. It is
+        # built only when there is a list and a capacity to draw from -- a
+        # preview render or a test gets a window without one rather than a
+        # rail that is a different shape from the real one.
+        self._rail = None
+        if favorites is not None and capacity is not None:
+            self._rail = NavigationRail(favorites, volumes, capacity, config)
+            self._rail.set_places(core_places.places())
+            self._rail.apply_tokens(tokens)
+            self._rail.chosen.connect(self._on_rail_chosen)
+            self._rail.measureRequested.connect(capacity.measure)
+            self._rail.rescanRequested.connect(
+                lambda: self._volumes.refresh(rescan=True))
+            self._rail.addFavoriteRequested.connect(self._add_favorite)
+            self._rail.manageFavoritesRequested.connect(self._manage_favorites)
+            self._rail.groupRequested.connect(self._set_favorite_group)
+            self._rail.setVisible(bool(config.get("rail.shown")))
+            # Measured once the letters are known, and only the local fixed
+            # ones -- see `core/capacity.py`. Nothing here touches a server.
+            volumes.changed.connect(self._measure_local_drives)
+
         self._splitter = QSplitter(Qt.Horizontal)
+        if self._rail is not None:
+            self._splitter.addWidget(self._rail)
         for widget in self._widgets:
             widget.activated.connect(self._on_pane_activated)
             self._splitter.addWidget(widget)
         for pane in self._panes:
             pane.folderChanged.connect(self._on_folder_changed)
             pane.elevationOffered.connect(self._offer_elevation(pane))
+            # The rail marks the row the active pane is standing on, which is
+            # the one thing a rail can say that a menu cannot. Both panes are
+            # watched and the mark follows whichever is active, so the answer
+            # changes when the pane does as well as when the folder does.
+            pane.pathChanged.connect(self._sync_rail_mark)
         if self._shell_menu is not None:
             self._shell_menu.invoked.connect(self._on_shell_invoked)
             self._shell_menu.problem.connect(
@@ -86,6 +120,14 @@ class MainWindow(QMainWindow):
             updates.progress.connect(self._on_update_progress)
             updates.ready.connect(self._on_update_ready)
         self._splitter.setChildrenCollapsible(False)
+        # The panes take the slack; the rail keeps whatever width it was
+        # dragged to. Without this a window resize grows all three, and a rail
+        # that grows when the window does is a rail that ends up half the
+        # screen after a maximise.
+        if self._rail is not None:
+            self._splitter.setStretchFactor(0, 0)
+            self._splitter.setStretchFactor(1, 1)
+            self._splitter.setStretchFactor(2, 1)
         self.setCentralWidget(self._splitter)
 
         self.setWindowTitle(TITLE)
@@ -111,6 +153,10 @@ class MainWindow(QMainWindow):
             self._fill_favorites()
         self._active = 0
         self._set_active(0)
+        if self._rail is not None:
+            # After `resize`, so the sizes are being shared out of a window
+            # that is already the width it will be.
+            self._restore_rail_width()
         # Timed, not permanent. The status bar is where a transfer reports
         # itself, and a hint that never goes away means the two share a line
         # and neither of them fits. The keys are in the menus, which is where
@@ -284,6 +330,15 @@ class MainWindow(QMainWindow):
         self._action(view, "Clear filter", "Ctrl+Shift+F",
                      lambda: self._current_widget().clear_filter())
         view.addSeparator()
+        rail = QAction("Navigation rail", self, checkable=True)
+        rail.setShortcut(QKeySequence("Ctrl+B"))
+        rail.setShortcutContext(Qt.WindowShortcut)
+        rail.setChecked(bool(self._config.get("rail.shown")))
+        rail.setEnabled(self._rail is not None)
+        rail.setToolTip("Places, drives and the saved folders, down the left.")
+        rail.triggered.connect(self._toggle_rail)
+        view.addAction(rail)
+        view.addSeparator()
         self._axis_menu(view, "Theme", THEME_LABELS, "theme")
         self._axis_menu(view, "Accent", ACCENT_LABELS, "accent")
         self._axis_menu(view, "Density", DENSITY_LABELS, "density")
@@ -327,6 +382,80 @@ class MainWindow(QMainWindow):
             lambda checked: self._config.set("updates.check_on_launch", bool(checked)))
         automatic.setEnabled(self._updates is not None)
         helping.addAction(automatic)
+
+    # ------------------------------------------------------------------- rail
+
+    def _on_rail_chosen(self, path: str, new_tab: bool) -> None:
+        """A place from the rail goes into the pane that has the keyboard.
+
+        Which is the whole reason the rail takes no focus anywhere: clicking
+        in it must not change the answer to "which pane", or every click would
+        go wherever the previous one left things. `Pane.navigate` still decides
+        what going there means -- a locked tab opens a new one.
+        """
+        pane = self._current_pane()
+        if new_tab:
+            pane.open_tab(path)
+        else:
+            pane.navigate(path)
+        self._current_widget().focus_listing()
+
+    def _set_favorite_group(self, index: int, group: str) -> None:
+        """Move a favourite under a heading. An empty name asks for a new one.
+
+        `UNGROUPED` is the label the rail draws the ungrouped ones under, so
+        being sent there means having no group rather than having one called
+        that -- otherwise a group would appear that could then be renamed.
+        """
+        if self._favorites is None:
+            return
+        if group == UNGROUPED:
+            self._favorites.set_group(index, "")
+            return
+        if not group:
+            group = dialogs.ask_name(
+                self, title="New group", label="Call the group",
+                initial="", ok_text="Create") or ""
+            if not group:
+                return
+        self._favorites.set_group(index, group)
+
+    def _sync_rail_mark(self, *_ignored) -> None:
+        """Put the rail's mark on the folder the active pane is showing."""
+        if self._rail is not None:
+            self._rail.set_current(self._current_pane().display())
+
+    def _measure_local_drives(self) -> None:
+        if self._capacity is not None:
+            self._capacity.measure_local(self._volumes.drives)
+
+    def _toggle_rail(self, shown: bool) -> None:
+        """Ctrl+B. Hidden rather than collapsed to nothing: a splitter section
+        of zero width is one the handle can be dragged back out of by accident,
+        and this is a setting rather than a gesture."""
+        if self._rail is None:
+            return
+        if not shown:
+            self._remember_rail_width()
+        self._config.set("rail.shown", bool(shown))
+        self._rail.setVisible(bool(shown))
+        if shown:
+            self._restore_rail_width()
+
+    def _restore_rail_width(self) -> None:
+        """Give the rail the width it was left at and the panes the rest."""
+        if self._rail is None or not self._rail.isVisible():
+            return
+        width = max(96, int(self._config.get("rail.width")))
+        rest = max(200, self._splitter.width() - width)
+        self._splitter.setSizes([width, rest // 2, rest - rest // 2])
+
+    def _remember_rail_width(self) -> None:
+        if self._rail is None or not self._rail.isVisible():
+            return
+        sizes = self._splitter.sizes()
+        if sizes and sizes[0] > 0:
+            self._config.set("rail.width", int(sizes[0]))
 
     # -------------------------------------------------------------- favorites
 
@@ -509,6 +638,11 @@ class MainWindow(QMainWindow):
         for widget in self._widgets:
             widget.apply_metrics(metrics)
             widget.apply_tokens(tokens)
+        if self._rail is not None:
+            # The meters are painted rather than styled, so the rail needs the
+            # same render the sheet was made from -- the reason the panes get
+            # them handed down rather than fetching their own.
+            self._rail.apply_tokens(tokens)
         self._set_active(self._active)
 
     def _on_folder_changed(self, path: str) -> None:
@@ -693,6 +827,7 @@ class MainWindow(QMainWindow):
         self._active = index
         for position, widget in enumerate(self._widgets):
             widget.set_active(position == index)
+        self._sync_rail_mark()
 
     # ------------------------------------------------------------------ close
 
@@ -715,6 +850,7 @@ class MainWindow(QMainWindow):
             self._updates.shutdown()
         self._config.set("window.width", self.width())
         self._config.set("window.height", self.height())
+        self._remember_rail_width()
         for side, pane in zip(("left", "right"), self._panes):
             self._config.set(f"{side}.path", pane.current.path)
             self._config.set(f"{side}.tabs", pane.session())

@@ -140,6 +140,12 @@ class PaneWidget(QFrame):
         self._crumbs.navigate.connect(self._claim)
         self._crumbs.navigate.connect(self._pane.navigate)
         self._crumbs.editRequested.connect(self.focus_path)
+        # A chevron is a target now, and a target in a pane claims it -- the
+        # same rule the nav buttons, the crumbs, the favourites and the drive
+        # picker follow. Opening a dropdown in the other pane and choosing
+        # from it must not walk this one.
+        self._crumbs.siblingsWanted.connect(self._claim)
+        self._crumbs.siblingsWanted.connect(self._ask_siblings)
 
         self._path = QLineEdit()
         self._path.setClearButtonEnabled(False)
@@ -278,6 +284,12 @@ class PaneWidget(QFrame):
         if self._pane.menu is not None:
             self._pane.menu.ready.connect(self._on_shell_items)
             self._pane.menu.unavailable.connect(self._on_shell_unavailable)
+        if self._pane.siblings is not None:
+            # Both panes hear both answers, because there is one scan for the
+            # window. The bar with no menu open drops what it is handed, which
+            # is the same guard the shell menu needs and for the same reason.
+            self._pane.siblings.ready.connect(self._on_siblings)
+            self._pane.siblings.unavailable.connect(self._crumbs.sibling_problem)
 
         #: The menu currently on screen, and what its shell entries mean. Both
         #: are None whenever no menu is open, which is what tells the replies
@@ -386,6 +398,17 @@ class PaneWidget(QFrame):
         """Put the bar back after the field has had its turn."""
         self._path.hide()
         self._crumbs.show()
+
+    def _ask_siblings(self, folder: str) -> None:
+        """A chevron was clicked. Ask what is in the folder behind it."""
+        if self._pane.siblings is not None:
+            self._pane.siblings.ask(folder)
+
+    def _on_siblings(self, folder: str, names, more: bool) -> None:
+        """Names into places. The pane joins them; this widget does no path
+        arithmetic, which is the same rule that keeps `..` out of the model."""
+        self._crumbs.show_siblings(folder, self._pane.children(folder, names),
+                                   bool(more))
 
     def focus_listing(self) -> None:
         self._view.setFocus(Qt.OtherFocusReason)

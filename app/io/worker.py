@@ -74,6 +74,12 @@ _com_ready = False
 #: cancel responsive to roughly a millisecond of work.
 CHECK_INTERVAL = 128
 
+#: How many subfolder names a FOLDERS request returns before it stops looking.
+#: A dropdown is a way of getting somewhere quickly, and a menu past about this
+#: length has stopped being one -- so the cap is on the scan rather than on the
+#: drawing, and the folder is never enumerated past it.
+FOLDER_LIMIT = 200
+
 #: Windows error numbers that mean the path or the server is no longer there.
 #: They are answered with GONE rather than ERROR because the difference matters
 #: to the caller: GONE is what puts a tab into "reconnecting" instead of
@@ -139,6 +145,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _elevate(request, outbox)
     elif request.op is Op.OVERLAY:
         _overlays(request, outbox)
+    elif request.op is Op.FOLDERS:
+        _folders(request, outbox, control, cancelled)
     elif request.op is Op.DRIVES:
         _drives(request, outbox)
     elif request.op is Op.FREE_SPACE:
@@ -220,6 +228,69 @@ def _list(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                 deadline = time.monotonic() + request.timeout
 
     outbox.put(Reply(request.id, Status.OK, payload=batch, seq=seq))
+
+
+def _folders(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:
+    """The subfolder names of one folder, and whether there were more.
+
+    The cap is the whole point. This answers a dropdown, and a dropdown of two
+    hundred entries is already past being a way of getting anywhere -- so the
+    scan stops at the limit rather than enumerating a 50,000-row folder to
+    show the first twenty of it. `more` is what lets the menu say so instead
+    of quietly lying about what is in the folder.
+
+    Sorted here rather than by the caller, because here is where the whole
+    list exists and it is never longer than the cap.
+    """
+    limit = max(1, int(request.args.get("limit", FOLDER_LIMIT)))
+    deadline = time.monotonic() + request.timeout
+    names: list[str] = []
+    seen = 0
+    more = False
+
+    try:
+        scanner = os.scandir(request.path)
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+        return
+
+    with scanner:
+        while True:
+            if seen % CHECK_INTERVAL == 0:
+                _drain_control(control, cancelled)
+                if request.id in cancelled:
+                    cancelled.discard(request.id)
+                    outbox.put(Reply(request.id, Status.CANCELLED))
+                    return
+                if time.monotonic() > deadline:
+                    # A partial answer, not a failure. Some of the siblings is
+                    # a usable menu; nothing at all is a menu that says the
+                    # folder is empty, which it is not.
+                    outbox.put(Reply(request.id, Status.TIMEOUT, payload={
+                        "names": sorted(names, key=str.lower), "more": True,
+                    }, message="partial; the scan exceeded its deadline"))
+                    return
+            try:
+                entry = next(scanner)
+            except StopIteration:
+                break
+            except OSError as exc:
+                outbox.put(_failure(request, exc))
+                return
+            seen += 1
+            try:
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            if len(names) >= limit:
+                more = True
+                break
+            names.append(entry.name)
+
+    outbox.put(Reply(request.id, Status.OK, payload={
+        "names": sorted(names, key=str.lower), "more": more,
+    }))
 
 
 def _row(entry: os.DirEntry) -> Entry | None:

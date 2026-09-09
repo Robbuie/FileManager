@@ -32,11 +32,13 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     from PySide6.QtWidgets import QApplication
 
     from app.core.bridge import Bridge
+    from app.core.capacity import Capacity
     from app.core.config import Config
     from app.core.favorites import Favorites
     from app.core.icons import Icons
     from app.core.overlays import Overlays
     from app.core.pane import Pane
+    from app.core.siblings import Siblings
     from app.core.sizes import FolderSizes
     from app.core.transfers import TransferQueue
     from app.core.volumes import Volumes
@@ -62,17 +64,28 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     # Two invented entries, for the same reason the menu preview invents shell
     # commands: what is being looked at is the shape of the menu, and that has
     # nothing to do with which folders this machine has.
+    # Two of them grouped, so the rail's headings are in the picture. What is
+    # being looked at is the shape of the sections, which has nothing to do
+    # with which folders this machine has.
     config.set("favorites", [
-        {"name": name, "path": path} for name in
+        # Pointed somewhere other than the folder on screen, so that the rail's
+        # mark on the folder a pane is standing on is legible in the picture
+        # rather than being on every row at once.
+        {"name": name, "path": path + "/" + name.lower()} for name in
         ("Jobs", "Drawings", "Standards", "Scans", "Archive 2025",
          "Templates", "Downloads", "Site photos")
+    ] + [
+        {"name": name, "path": path + "/" + name.lower(),
+         "group": "Current job"} for name in ("Survey", "Markups")
     ])
     sizes = FolderSizes(bridge, config)
+    siblings = Siblings(bridge, config)
+    capacity = Capacity(bridge, config)
     window = MainWindow(
         config,
-        Pane(bridge, config, "left", icons, overlays, None, sizes),
-        Pane(bridge, config, "right", icons, overlays, None, sizes),
-        volumes, TransferQueue(), None, Favorites(config))
+        Pane(bridge, config, "left", icons, overlays, None, sizes, siblings),
+        Pane(bridge, config, "right", icons, overlays, None, sizes, siblings),
+        volumes, TransferQueue(), None, Favorites(config), capacity)
     volumes.refresh()
     icons.start()
     overlays.start()

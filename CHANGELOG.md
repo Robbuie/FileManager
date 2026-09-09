@@ -5,6 +5,62 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.12.0]
+
+The navigation rail, and the chevrons in the path bar becoming targets. Both
+were named in 0.11 and deliberately left out of it, because neither is chrome:
+a rail has to decide which pane a click lands in, and a chevron dropdown is a
+scan of a folder over the network.
+
+### Added
+- **A navigation rail down the left of the window.** Places, drives and the
+  saved folders in one column, so the place you are going to is somewhere you
+  can read rather than something you have to remember. One click goes there, a
+  middle click opens it in a tab behind, and a right click on a saved folder
+  moves, renames or removes it. Ctrl+B folds the whole rail away and brings it
+  back; each heading folds on its own and stays folded; the width is whatever
+  the splitter was left at.
+
+  It goes to **the pane that has the keyboard**, which is the same rule Ctrl+1
+  to Ctrl+9 have always followed -- and the reason nothing in the rail takes
+  focus is so that clicking in it cannot change the answer. One rail rather
+  than one per pane: the favorites bar is per-pane because it is a move into
+  the pane it sits in, and a rail is the list you read before you decide.
+- **Drives with capacity meters.** Each letter shows what it is -- a mapping
+  shows the share it points at, `\\vault\projects` rather than "remote" --
+  and a measured drive shows a bar and how much is left, in the warn colour
+  past ninety per cent.
+
+  **Only local fixed disks are measured without being asked**, and that is the
+  whole design of it. `disk_usage` on a mapped drive whose server has gone is
+  the thirty-second block this application exists to escape, and a rail
+  opening is not somebody asking about a share. Any other drive is measured
+  from its own right-click menu, and a drive that failed is remembered as
+  having failed rather than asked again on every redraw.
+- **Favorites in named groups.** A saved folder can sit under a heading --
+  "Current job", "Standards" -- through the right-click menu on it in the
+  rail, and the headings fold. A group is made by putting something in it and
+  is gone when the last entry leaves, so there is no separate list of groups
+  to fall out of step with the folders. A favourite saved before this release
+  has no group, reads back exactly as it was written, and appears under one
+  heading rather than none.
+- **The chevrons in the path bar drop down what is inside the crumb to their
+  left.** Along one folder is now a click rather than up, scroll, double
+  click. This is the piece the 0.11 restyle drew and did not build: listing a
+  sibling folder is a worker request, so it carries its own deadline and its
+  own cancel, one is outstanding at a time and a second chevron withdraws the
+  first at the worker, and the scan stops at two hundred names rather than
+  enumerating the folder -- a dropdown that stops short says so. It opens
+  saying it is looking, and fills in or says why it cannot.
+- `python -m app.io.harness folders <path>` runs the same scan from the
+  command line, with `--limit` to see the cap work. The number worth looking
+  at on a large folder is that it comes back in the time a listing's first
+  batch takes rather than the time the whole listing takes.
+
+### Changed
+- The drive picker in each pane is unchanged and stays: the rail is for
+  reading and choosing, the picker is for the pane you are already in.
+
 ## [0.11.0]
 
 The chrome. No feature moved and no shortcut changed -- what changed is that

@@ -23,6 +23,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QObject, Qt, Signal  # noqa: E402
 from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
 
+from app.core.capacity import Capacity  # noqa: E402
 from app.core.config import Config  # noqa: E402
 from app.core.favorites import Favorites  # noqa: E402
 from app.core.pane import Pane  # noqa: E402
@@ -74,7 +75,8 @@ def window(tmp_path):
     bridge = FakeBridge()
     made = MainWindow(config, Pane(bridge, config, "left"),
                       Pane(bridge, config, "right"), FakeVolumes(),
-                      TransferQueue(), None, Favorites(config))
+                      TransferQueue(), None, Favorites(config),
+                      Capacity(bridge, config))
     made.resize(1200, 600)
     made.show()
     QApplication.processEvents()
@@ -171,3 +173,69 @@ def test_a_favorite_opens_in_the_pane_with_focus(window):
     window._go_to_favorite(LEFT)
     assert window._panes[1].current.path == LEFT
     assert window._panes[0].current.path == LEFT   # it was already there
+
+
+# --------------------------------------------------------------------- rail
+
+
+def test_the_rail_sends_places_to_the_pane_that_has_the_keyboard(window):
+    """The rail is one widget for two panes, so where a click lands is the
+    whole question -- and it is answered by the pane that is already active
+    rather than by anything the rail knows."""
+    window._widgets[1]._view.setFocus(Qt.MouseFocusReason)
+    QApplication.processEvents()
+    window._rail.chosen.emit("E:\\Elsewhere", False)
+    assert window._panes[1].current.path == "E:\\Elsewhere"
+    assert window._panes[0].current.path == LEFT
+
+
+def test_clicking_in_the_rail_does_not_change_which_pane_is_active(window):
+    """Nothing in the rail takes focus, and that is the point: a rail that
+    took the keyboard would leave the *next* click going wherever the last one
+    left things. Same failure as 0.10's and 0.11's, from a third direction."""
+    window._widgets[1]._view.setFocus(Qt.MouseFocusReason)
+    QApplication.processEvents()
+    rows = window._rail._elidable
+    if rows:
+        rows[0][0].click()
+        QApplication.processEvents()
+    assert window._current_pane() is window._panes[1]
+
+
+def test_a_middle_click_in_the_rail_opens_a_tab_in_that_same_pane(window):
+    window._widgets[1]._view.setFocus(Qt.MouseFocusReason)
+    QApplication.processEvents()
+    before = len(window._panes[1].tabs)
+    window._rail.chosen.emit("E:\\Elsewhere", True)
+    assert len(window._panes[1].tabs) == before + 1
+    assert len(window._panes[0].tabs) == 1
+
+
+def test_the_rail_marks_the_folder_the_active_pane_is_on(window):
+    window._favorites.add("Archive", RIGHT)
+    window._widgets[1]._view.setFocus(Qt.MouseFocusReason)
+    QApplication.processEvents()
+    marked = [button.property("target")
+              for button, _label in window._rail._elidable
+              if button.property("state") == "current"]
+    assert marked == [RIGHT]
+
+
+def test_ctrl_b_hides_the_rail_and_remembers_that_it_is_hidden(window):
+    window._toggle_rail(False)
+    assert not window._rail.isVisible()
+    assert window._config.get("rail.shown") is False
+    window._toggle_rail(True)
+    assert window._rail.isVisible()
+
+
+def test_the_rail_does_not_put_a_floor_under_the_window(window):
+    """The favorites bar's bug, at window scale: a rail full of long names
+    must not stop the window being made narrow."""
+    for index in range(8):
+        window._favorites.add(f"A rather long saved folder name {index}",
+                              f"C:\\Jobs\\{index}")
+    QApplication.processEvents()
+    window.resize(820, 600)
+    QApplication.processEvents()
+    assert window.width() == 820

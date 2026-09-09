@@ -49,15 +49,29 @@ DEFAULTS: dict[str, Any] = {
     "left.tab": 0,
     "right.tab": 0,
 
-    # Saved locations. A list of `{"name": ..., "path": ...}`; the name is
-    # what the menu shows and the path is what it navigates to. Shared by both
-    # panes, because a favourite is a place rather than a side of the window.
+    # Saved locations. A list of `{"name": ..., "path": ...}` with an optional
+    # `"group"`; the name is what the menu shows and the path is what it
+    # navigates to. Shared by both panes, because a favourite is a place rather
+    # than a side of the window. The group key is written only for entries
+    # that have one, so a list nobody has grouped is byte for byte what an
+    # earlier version wrote.
     "favorites": [],
 
     # Whether the favorites bar is drawn under each tab strip. On, and it
     # costs nothing until there is a favourite to put in it -- the bar hides
     # itself entirely while the list is empty.
     "favorites.bar": True,
+
+    # The navigation rail down the left of the window: places, drives with
+    # capacity meters, and the favourites under their group headings. One rail
+    # for the window rather than one per pane -- a click in it goes to the
+    # pane that has the keyboard, which is the same rule Ctrl+1 already
+    # follows. Ctrl+B collapses it; the width is what the splitter was left at.
+    "rail.shown": True,
+    "rail.width": 232,
+    # Which sections are folded up, by heading. A list rather than a flag per
+    # section so a group added later starts open without a migration.
+    "rail.collapsed": [],
 
     # Deadlines. Seconds without progress before a request is given up on and
     # its worker restarted.
@@ -73,6 +87,14 @@ DEFAULTS: dict[str, Any] = {
     "timeout.delete": 300.0,
     "timeout.drives": 10.0,
     "timeout.free_space": 10.0,
+    # The subfolders behind a breadcrumb chevron. Short on purpose: nothing is
+    # waiting on a dropdown, so a share that is answering slowly should lose it
+    # rather than hold the volume. A timeout still delivers the names it got.
+    "timeout.siblings": 8.0,
+    # How many of them the worker looks for before it stops. The cap is on the
+    # scan, not on the drawing, so a chevron on a 50,000-row folder costs this
+    # many names rather than the folder.
+    "siblings.limit": 200,
     # Association lookups against the local registry, in a batch. Generous
     # because a shell extension can be slow the first time it is loaded, and
     # short of a listing because nothing is waiting on the answer.

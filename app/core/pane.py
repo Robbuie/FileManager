@@ -88,7 +88,7 @@ class Pane(QObject):
     elevationOffered = Signal(object, str)
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
-                 menu=None, sizes=None, parent=None) -> None:
+                 menu=None, sizes=None, siblings=None, parent=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -104,6 +104,13 @@ class Pane(QObject):
         # so the queue that runs one at a time has to be the same queue for
         # every tab in the window rather than one per pane.
         self.sizes = sizes
+        # Shared for the fourth reason, and it is the shell menu's reason
+        # again: one dropdown is open at a time whichever crumb bar it hangs
+        # off, so one outstanding scan is the right number for the window. It
+        # follows that a reply arrives at the pane that did not ask, and that
+        # pane's bar must do nothing with it -- which it decides by having no
+        # menu open.
+        self.siblings = siblings
         self.tabs: list[Tab] = self._restore()
         self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
                          len(self.tabs) - 1)
@@ -237,6 +244,16 @@ class Pane(QObject):
         rather than from the resolved form the pane works in.
         """
         return paths.crumbs(self.current.path if path is None else path)
+
+    def children(self, folder: str, names) -> list[tuple[str, str]]:
+        """Bare names in a folder, as `(label, path)` the widget can navigate.
+
+        Here for the same reason `crumbs` is: joining a folder to a name is
+        path arithmetic. The names come back from a worker as names, because
+        a name is what a menu draws and a path is what a click needs, and this
+        is the one place that knows how to turn one into the other.
+        """
+        return [(name, paths.join(folder, name)) for name in names]
 
     def go_up(self) -> None:
         above = self.parent_path()

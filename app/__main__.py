@@ -37,12 +37,14 @@ def main() -> int:
     from app import __version__
 
     from app.core.bridge import Bridge
+    from app.core.capacity import Capacity
     from app.core.config import Config
     from app.core.favorites import Favorites
     from app.core.icons import Icons
     from app.core.menu import ShellMenu
     from app.core.overlays import Overlays
     from app.core.pane import Pane
+    from app.core.siblings import Siblings
     from app.core.sizes import FolderSizes
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
@@ -77,9 +79,17 @@ def main() -> int:
     # One queue for the window: a folder walk holds that volume's worker, so
     # running one at a time has to mean one at a time across every tab.
     sizes = FolderSizes(bridge, config)
-    left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes)
-    right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes)
+    # One scan for the window, for the shell menu's reason: one breadcrumb
+    # dropdown is open at a time whichever pane it hangs off.
+    siblings = Siblings(bridge, config)
+    left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes,
+                siblings)
+    right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes,
+                 siblings)
     volumes = Volumes(bridge, config)
+    # The drive meters in the rail. It measures local fixed disks only unless
+    # somebody asks for more, which is what keeps a rail from probing a server.
+    capacity = Capacity(bridge, config)
     transfers = TransferQueue()
     updates = Updates(config, __version__)
     # One list for the window, not one per pane: a favourite is a place rather
@@ -87,7 +97,7 @@ def main() -> int:
     favorites = Favorites(config)
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
-                        favorites)
+                        favorites, capacity)
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

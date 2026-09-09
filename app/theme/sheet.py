@@ -169,6 +169,21 @@ QLabel[role="crumbsep"] {{
     color: {txt_2};
     padding: 0px 1px;
 }}
+/* The same chevron, when there is a folder behind it to drop down. It draws
+   exactly like the label above at rest -- a separator is what it is most of
+   the time -- and becomes a target under the mouse, which is the same way a
+   crumb announces itself. */
+QToolButton[role="crumbsep"] {{
+    background: transparent;
+    border: none;
+    border-radius: {radius_sm};
+    color: {txt_2};
+    padding: 2px 2px;
+    min-width: 13px;
+    min-height: 20px;
+}}
+QToolButton[role="crumbsep"]:hover {{ background: {bg_3}; color: {txt_0}; }}
+QToolButton[role="crumbsep"]:pressed {{ background: {bg_4}; }}
 /* The rest of the bar. Clicking the empty space edits the path, which is why
    it is a button and not a spacer. */
 QToolButton[role="crumbrest"] {{
@@ -270,6 +285,55 @@ QToolButton[role="favorite"]:hover {{
     color: {txt_0};
 }}
 QToolButton[role="favorite"]:pressed {{ background: {bg_4}; }}
+
+/* -------------------------------------------------------------------- rail */
+
+/* The rail is chrome, so it takes the chrome grey and the panes beside it keep
+   the raised one -- which is what makes two panes read as two surfaces on a
+   backdrop rather than three panels in a row. It carries no border of its own:
+   the splitter handle is already the line between it and the panes, and a
+   second one there would be two rules doing one job. */
+QFrame[role="rail"] {{
+    background: {bg_1};
+    border: none;
+}}
+QWidget[role="railbody"] {{ background: {bg_1}; }}
+QFrame[role="rail"] QScrollArea {{ background: {bg_1}; border: none; }}
+QFrame[role="rail"] QScrollArea > QWidget > QWidget {{ background: {bg_1}; }}
+
+/* A heading. Small, upper case and muted -- the same treatment the listing's
+   column headers get, because they are the same kind of thing: a label on a
+   group of rows that is not itself a row. */
+QPushButton[role="railhead"] {{
+    background: transparent;
+    border: none;
+    color: {txt_2};
+    font-size: {head_font};
+    font-weight: 600;
+    padding: 7px 6px 3px 6px;
+    text-align: left;
+    min-height: 0px;
+}}
+QPushButton[role="railhead"]:hover {{ color: {txt_1}; }}
+
+/* A place, a favourite. Borderless like everything else inside chrome, lit by
+   the mouse, and marked with the accent when a pane is standing on it -- which
+   is the one thing a rail can say that a menu cannot. */
+QPushButton[role="railrow"] {{
+    background: transparent;
+    border: none;
+    border-radius: {radius_sm};
+    color: {txt_1};
+    padding: 3px 8px;
+    text-align: left;
+    min-height: 22px;
+}}
+QPushButton[role="railrow"]:hover {{ background: {bg_3}; color: {txt_0}; }}
+QPushButton[role="railrow"]:pressed {{ background: {bg_4}; }}
+QPushButton[role="railrow"][state="current"] {{
+    background: {accent_soft};
+    color: {accent_text};
+}}
 
 /* ----------------------------------------------------------------- listing */
 

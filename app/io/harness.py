@@ -245,6 +245,32 @@ def cmd_dirsize(args: argparse.Namespace) -> int:
         pool.shutdown()
 
 
+def cmd_folders(args: argparse.Namespace) -> int:
+    """What a breadcrumb chevron drops down, and what it cost.
+
+    The number worth looking at is `more`: on a folder with more subfolders
+    than the limit it must be true, and the request must come back in about
+    the time the first batch of a listing takes rather than the time the whole
+    listing takes. If it does not, the cap is not doing its job and a chevron
+    on a job folder is an enumeration.
+    """
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.FOLDERS, args.path, timeout=args.timeout,
+                       args={"limit": args.limit})
+        _report_outcome(args.path, outcome, rows=False)
+        payload = outcome.payload
+        if isinstance(payload, dict):
+            names = payload.get("names") or []
+            _report("folders", f"{len(names):,}")
+            _report("more", "yes" if payload.get("more") else "no")
+            for name in names[:args.names]:
+                print(f"  {name}")
+        return _exit_code(outcome)
+    finally:
+        pool.shutdown()
+
+
 def cmd_open(args: argparse.Namespace) -> int:
     """Hand a path to the shell, once, from the same code path the window uses.
 
@@ -771,6 +797,14 @@ def build_parser() -> argparse.ArgumentParser:
                          help="kill the worker once this many rows have arrived; "
                               "the request must settle, not hang")
     listing.set_defaults(func=cmd_list)
+
+    folders = with_path("folders", "the subfolders of one folder, capped",
+                        timeout=8.0)
+    folders.add_argument("--limit", type=int, default=200, metavar="N",
+                         help="stop scanning after this many subfolders")
+    folders.add_argument("--names", type=int, default=0, metavar="N",
+                         help="print the first N names")
+    folders.set_defaults(func=cmd_folders)
 
     opening = with_path("open", "hand a path to the shell, exactly once", timeout=30.0)
     opening.add_argument("--verb", default="",

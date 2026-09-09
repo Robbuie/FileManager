@@ -28,12 +28,26 @@ from app.io import paths
 MAX_FAVORITES = 60
 
 
+#: What the rail calls the favourites that are in no group. Not stored: an
+#: empty group is the absence of one, and writing a name for it would make
+#: "Places" a group somebody could then rename or empty.
+UNGROUPED = "Saved"
+
+
 @dataclass(frozen=True, slots=True)
 class Favorite:
-    """A name and where it goes. Both are the user's; neither is derived."""
+    """A name, where it goes, and which heading it sits under.
+
+    The group is a plain string and defaults to empty, which is what every
+    favourite saved before 0.12 has. Empty means the entry belongs to no group
+    rather than to one called "": the rail draws those under `UNGROUPED` and
+    the settings file does not carry the key at all, so a list made by an
+    earlier version reads back byte for byte the same.
+    """
 
     name: str
     path: str
+    group: str = ""
 
 
 class Favorites(QObject):
@@ -79,26 +93,67 @@ class Favorites(QObject):
 
     # --------------------------------------------------------------- editing
 
-    def add(self, name: str, path: str) -> bool:
+    def groups(self) -> list[str]:
+        """The group names in use, in the order the list first mentions them.
+
+        Order of first appearance rather than alphabetical, for the reason
+        `move` gives: the order is the user's. A group is created by putting
+        something in it and disappears when the last entry leaves, so there is
+        no separate list of groups to fall out of step with this one.
+        """
+        out: list[str] = []
+        for entry in self._entries:
+            if entry.group and entry.group not in out:
+                out.append(entry.group)
+        return out
+
+    def add(self, name: str, path: str, group: str = "") -> bool:
         """Put a folder in the list, or rename the entry already on it.
 
         Adding a path that is already a favourite is a rename rather than a
         second entry: a list with the same folder twice under two names is a
-        list nobody trusts to be the whole list.
+        list nobody trusts to be the whole list. Its group is kept in that
+        case -- renaming something is not a reason to move it.
         """
         name, path = name.strip(), paths.normalize(path)
         if not name or not path:
             return False
         existing = self.index_of(path)
         if existing >= 0:
-            self._entries[existing] = Favorite(name, path)
+            keep = self._entries[existing].group
+            self._entries[existing] = Favorite(name, path, group.strip() or keep)
             self._commit()
             return True
         if len(self._entries) >= MAX_FAVORITES:
             return False
-        self._entries.append(Favorite(name, path))
+        self._entries.append(Favorite(name, path, group.strip()))
         self._commit()
         return True
+
+    def set_group(self, index: int, group: str) -> None:
+        """Move one entry under a heading, or out from under all of them.
+
+        An empty name is what takes it out, which is why this is one call
+        rather than a move and a remove: a group with nothing in it is not a
+        state this list can be in.
+        """
+        if 0 <= index < len(self._entries):
+            entry = self._entries[index]
+            self._entries[index] = Favorite(entry.name, entry.path, group.strip())
+            self._commit()
+
+    def rename_group(self, old: str, new: str) -> None:
+        """Rename a heading, taking everything under it with it."""
+        old, new = old.strip(), new.strip()
+        if not old or old == new:
+            return
+        changed = False
+        for position, entry in enumerate(self._entries):
+            if entry.group == old:
+                self._entries[position] = Favorite(entry.name, entry.path, new)
+                changed = True
+        if changed:
+            self._commit()
 
     def remove(self, index: int) -> None:
         if 0 <= index < len(self._entries):
@@ -157,11 +212,22 @@ class Favorites(QObject):
                 continue
             if not isinstance(name, str) or not name.strip():
                 name = paths.leaf(paths.normalize(path))
-            entries.append(Favorite(name.strip(), paths.normalize(path)))
+            group = item.get("group")
+            if not isinstance(group, str):
+                group = ""
+            entries.append(Favorite(name.strip(), paths.normalize(path),
+                                    group.strip()))
         return entries
 
     def _commit(self) -> None:
-        self._config.set("favorites",
-                         [{"name": e.name, "path": e.path} for e in self._entries])
+        # The group key is written only when there is one. A list nobody has
+        # grouped then reads back exactly as an earlier version wrote it,
+        # which is what makes this addition invisible to somebody who never
+        # uses it -- and what lets 0.11 read a 0.12 settings file.
+        self._config.set("favorites", [
+            ({"name": e.name, "path": e.path, "group": e.group} if e.group
+             else {"name": e.name, "path": e.path})
+            for e in self._entries
+        ])
         self._config.save()
         self.changed.emit()

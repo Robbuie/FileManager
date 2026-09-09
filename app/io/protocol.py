@@ -41,6 +41,25 @@ class Op(str, Enum):
     RESOLVE = "resolve"
     PING = "ping"
 
+    #: The subfolder names of one folder, capped and in one reply. What a
+    #: breadcrumb chevron drops down.
+    #:
+    #: Deliberately not LIST with a flag. LIST streams, fills a model and is
+    #: what a pane is waiting on; this answers a menu that will be thrown away
+    #: in a second either way. So it stops at `args["limit"]` names rather than
+    #: enumerating a 50,000-row folder to show twenty of them, it returns
+    #: names rather than rows because a menu has nowhere to put a size, and it
+    #: sorts in the worker so nothing downstream has a list long enough to be
+    #: worth sorting. The reply is `{"names": [...], "more": bool}`.
+    #:
+    #: The cap is on the *scan*, which is worth being clear about: past the
+    #: limit the names are the first ones the directory happened to hand over
+    #: and not the first alphabetically, and `more` is how the caller knows to
+    #: say so. Making it the alphabetically-first N would mean enumerating the
+    #: whole folder to find out which those are, which is the cost being
+    #: avoided.
+    FOLDERS = "folders"
+
     #: Shell icons for a set of kinds, `args["keys"]`, at `args["size"]`.
     #: A kind is an extension, `ICON_FOLDER` or `ICON_FILE` -- never a path,
     #: and that is the point. The shell is asked with SHGFI_USEFILEATTRIBUTES,
