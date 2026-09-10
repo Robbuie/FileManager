@@ -1,8 +1,31 @@
-"""The copy/move queue, in a process of its own.
+"""The job queue, in a process of its own.
 
 Separate from the listing workers so a stalled transfer cannot take the window
 down, and so a transfer is never competing with the listing of the folder it is
 writing into.
+
+Four kinds of job go through it: copy, move, recycle and erase. The two deletes
+joined the queue in 0.14 for a reason that has nothing to do with copying and
+everything to do with how long they take. A recycle of 30,000 files on a share
+is minutes of work, and on the worker path it was a single request against a
+deadline -- so the deadline expired, the pane reported that the delete had not
+finished, and the shell carried on deleting anyway. Here it is a job like any
+other: it is in the list, it says how far through it is, and it can be taken out
+of the queue before it starts.
+
+What the two deletes do *not* share is how they run, and the queue does not
+pretend otherwise:
+
+  * **Recycle** is one `SHFileOperation` for the whole selection, in the worker
+    module's own handler, because one call is what makes one undo. It cannot be
+    paused, cancelled or reported on part way through, and the event that starts
+    it says so, so the window can grey the buttons rather than offer something
+    that will not happen.
+  * **Erase** is this application walking the tree and unlinking, item by item,
+    with the same checkpoint between items that a copy has between chunks. So it
+    pauses, it cancels, it retries a locked file, and it says which file it is
+    on. Cancelling leaves the rest of the tree where it was -- which is the
+    honest outcome, and the reason erase is not simply a recycle with a flag.
 
 The hard part is not the copying. It is the queue around it, and this is where
 most hobby file managers fall over, so it was designed before the copy loop was
@@ -23,7 +46,10 @@ until they are tried.
 
 **One job at a time.** Two transfers to the same disk are slower than the same
 two run in order, and two transfers to the same *folder* can produce a name
-collision that neither of them was asked about. The queue is a queue.
+collision that neither of them was asked about. The queue is a queue. What 0.14
+added on top is control over the order rather than an escape from it: a job that
+has not started can be moved up, moved down or held, and the queue takes the
+first one that is not being held.
 
 **Scan before copying.** A byte total that grows while the bar moves is not a
 progress bar. The walk costs one pass over the tree and buys a total that means
@@ -62,8 +88,8 @@ from app.io.protocol import (
     Conflict,
     Event,
     Job,
+    JobKind,
     Progress,
-    Transfer,
 )
 
 #: Waits between attempts on a file something else has open. Bounded, and
@@ -127,6 +153,11 @@ class Runner:
         self.outbox = outbox
         self.jobs: list[Job] = []
         self.cancelled: set[int] = set()
+        #: Jobs the user has held. A held job that has not started is skipped
+        #: over; a held job that is running waits at its next checkpoint. One
+        #: set for both, because "held" is one idea to the person who clicked
+        #: it and the difference is only where the job happens to be.
+        self.held: set[int] = set()
         self.answers: dict[int, Answer] = {}
         self.rules: dict[int, Conflict] = {}
         self.paused = False
@@ -137,7 +168,11 @@ class Runner:
 
     def loop(self) -> None:
         while not self.stopping:
-            if not self.jobs:
+            job = self._next()
+            if job is None:
+                # Nothing runnable. Either the queue is empty or everything in
+                # it is held, and both mean the same thing here: block until
+                # something arrives or something is released.
                 try:
                     message = self.inbox.get()
                 except (EOFError, OSError):  # the parent went away
@@ -147,7 +182,7 @@ class Runner:
                 self._control(message)
                 continue
 
-            job = self.jobs.pop(0)
+            self.jobs.remove(job)
             if job.id in self.cancelled:
                 self.cancelled.discard(job.id)
                 self._emit(job.id, Progress.DONE, {"cancelled": True})
@@ -165,15 +200,39 @@ class Runner:
             finally:
                 self.answers.pop(job.id, None)
                 self.rules.pop(job.id, None)
+                self.held.discard(job.id)
+
+    def _next(self) -> Job | None:
+        """The first job in the queue that is not being held.
+
+        Held jobs keep their place rather than going to the back: holding one
+        is a way of saying "not yet", and a job that lost its position every
+        time it was held would be a different thing entirely.
+        """
+        for job in self.jobs:
+            if job.id not in self.held:
+                return job
+        return None
 
     def _control(self, message: Any) -> None:
         kind, payload = message
         if kind == "enqueue":
             self.jobs.append(payload)
+            self._emit(payload.id, Progress.QUEUED, {"position": len(self.jobs) - 1})
         elif kind == "cancel":
             self.cancelled.add(payload)
         elif kind == "answer":
             self.answers[payload.job] = payload
+        elif kind == "hold":
+            if payload not in self.held:
+                self.held.add(payload)
+                self._emit(payload, Progress.HELD)
+        elif kind == "release":
+            if payload in self.held:
+                self.held.discard(payload)
+                self._emit(payload, Progress.RELEASED)
+        elif kind == "reorder":
+            self._reorder(*payload)
         elif kind == "pause":
             if not self.paused:
                 self.paused = True
@@ -184,6 +243,24 @@ class Runner:
                 self._emit(0, Progress.RESUMED)
         elif kind == "stop":
             self.stopping = True
+
+    def _reorder(self, job_id: int, delta: int) -> None:
+        """Move a waiting job up or down. A running job is not in this list.
+
+        The running job has left `self.jobs` by the time it starts, so there is
+        no case here where reordering could move the thing currently writing
+        files -- which is the one reorder that would have to mean something
+        complicated.
+        """
+        for index, job in enumerate(self.jobs):
+            if job.id != job_id:
+                continue
+            target = max(0, min(len(self.jobs) - 1, index + delta))
+            if target == index:
+                return
+            self.jobs.insert(target, self.jobs.pop(index))
+            self._emit(job_id, Progress.QUEUED, {"position": target})
+            return
 
     def _pump(self, timeout: float | None = None) -> None:
         """Take control messages. Without a timeout, only what is already waiting.
@@ -215,13 +292,20 @@ class Runner:
                 return
 
     def _checkpoint(self, job: Job) -> None:
-        """Between chunks: stop, cancel, or wait out a pause."""
+        """Between chunks: stop, cancel, or wait out a pause or a hold.
+
+        A hold on the running job and a pause of the whole queue wait in the
+        same loop. They are different commands to the user -- one stops
+        everything, one stops this -- but from inside a copy loop they are the
+        same instruction, and writing them as one place to wait is what keeps a
+        cancel answerable while either is in force.
+        """
         self._pump()
         if self.stopping:
             raise _Stopped()
         if job.id in self.cancelled:
             raise _Cancelled()
-        while self.paused:
+        while self.paused or job.id in self.held:
             self._pump(timeout=0.2)
             if self.stopping:
                 raise _Stopped()
@@ -243,6 +327,15 @@ class Runner:
             "kind": job.kind.value, "destination": job.destination,
             "sources": len(job.sources),
         })
+        if job.kind is JobKind.RECYCLE:
+            self._recycle(job)
+            return
+        if job.kind is JobKind.ERASE:
+            self._erase(job)
+            return
+        self._move_or_copy(job)
+
+    def _move_or_copy(self, job: Job) -> None:
         totals = Totals()
         sources = list(job.sources)
 
@@ -250,7 +343,7 @@ class Runner:
         # still say what it managed before it was stopped. "Cancelled" on its
         # own tells the user nothing about what is now in the destination.
         try:
-            if job.kind is Transfer.MOVE:
+            if job.kind is JobKind.MOVE:
                 sources = self._rename_what_can_be_renamed(job, sources, totals)
 
             if sources:
@@ -265,7 +358,7 @@ class Runner:
                 self._emit(job.id, Progress.SCANNED,
                            {"files": files, "bytes": total_bytes})
                 self._transfer(job, items, totals, total_bytes)
-                if job.kind is Transfer.MOVE:
+                if job.kind is JobKind.MOVE:
                     self._prune(job, items, totals)
         except _Cancelled:
             totals.cancelled = True
@@ -276,6 +369,152 @@ class Runner:
             "failed": totals.failed, "bytes": totals.bytes,
             "cancelled": totals.cancelled,
         })
+
+    # ---------------------------------------------------------------- deletes
+
+    def _recycle(self, job: Job) -> None:
+        """The Recycle Bin, in one shell call, and nothing pretending otherwise.
+
+        `worker._delete` is the handler rather than a copy of it here. The same
+        call has to serve the elevated retry, and a second implementation of a
+        destructive operation is a second implementation that only gets tested
+        half the time.
+
+        The `interruptible: False` on the first event is the important part of
+        this method. The shell call is atomic and gives nothing back until it
+        has finished, so pause, hold and cancel do not apply to it -- and a
+        queue that showed those buttons anyway would be lying about what
+        clicking them does. Cancelling before it starts still works; that is
+        what the queue is for.
+        """
+        self._emit(job.id, Progress.REMOVING, {
+            "name": "", "done": 0, "total": len(job.sources),
+            "interruptible": False,
+        })
+        try:
+            from app.io import worker  # deferred: it imports pywin32 on Windows
+            deleted, problem, code = worker.recycle(list(job.sources))
+        except Exception as exc:  # noqa: BLE001 - a job must always end
+            self._emit(job.id, Progress.DONE, {"failed": len(job.sources)},
+                       message=_describe(exc))
+            return
+        if problem:
+            self._emit(job.id, Progress.FAILED_ITEM,
+                       {"name": "", "denied": code in _DENIED_CODES},
+                       message=problem)
+        self._emit(job.id, Progress.DONE, {
+            "copied": deleted, "skipped": 0,
+            "failed": len(job.sources) - deleted if problem else 0,
+            "bytes": 0, "cancelled": False,
+        })
+
+    def _erase(self, job: Job) -> None:
+        """Delete permanently, item by item, so it can be watched and stopped.
+
+        The walk is the same one a copy does, and the deletion runs it
+        backwards: files first, then the folders that held them, deepest first.
+        `os.rmdir` rather than a recursive remove for the reason `_prune` gives
+        -- a folder that still holds something refuses to go, and after a
+        cancel or a skipped file that refusal is the correct outcome rather
+        than a fault.
+
+        A cancel leaves what has not been reached alone. There is no way to put
+        back what has, and none is offered: an erase that could be half undone
+        would be a recycle, and that is the other command.
+        """
+        totals = Totals()
+        try:
+            items, unreadable = self._scan(job, job.sources, destination="")
+            totals.failed += len(unreadable)
+            for source, problem in unreadable:
+                self._emit(job.id, Progress.FAILED_ITEM,
+                           {"name": os.path.basename(source)}, message=problem)
+            files = [item for item in items if not item.is_dir]
+            self._emit(job.id, Progress.SCANNED,
+                       {"files": len(files), "bytes": sum(i.size for i in files)})
+
+            for index, item in enumerate(files):
+                self._checkpoint(job)
+                try:
+                    self._unlink(job, item.source)
+                except OSError as exc:
+                    totals.failed += 1
+                    # `denied` is what lets the window offer to run this one
+                    # item as administrator, the same offer the worker path
+                    # makes when it is refused. Nothing else in the payload
+                    # tells the difference between "you may not" and "it is
+                    # gone", and only one of those is worth a consent prompt.
+                    self._emit(job.id, Progress.FAILED_ITEM,
+                               {"name": os.path.basename(item.source),
+                                "path": item.source, "denied": _is_denied(exc)},
+                               message=_describe(exc))
+                    continue
+                totals.copied += 1
+                totals.bytes += item.size
+                self._removed(job, os.path.basename(item.source),
+                              index + 1, len(files))
+            if files:
+                self._removed(job, "", len(files), len(files), force=True)
+            self._prune(job, items, totals)
+        except _Cancelled:
+            totals.cancelled = True
+            self.cancelled.discard(job.id)
+
+        self._emit(job.id, Progress.DONE, {
+            "copied": totals.copied, "skipped": totals.skipped,
+            "failed": totals.failed, "bytes": totals.bytes,
+            "cancelled": totals.cancelled,
+        })
+
+    def _unlink(self, job: Job, path: str) -> None:
+        """Remove one file, retrying the same lock a copy would retry.
+
+        A file somebody has open refuses to be deleted exactly as it refuses to
+        be overwritten, and it is worth the same short wait for the same reason.
+        A read-only attribute is cleared first: the shell does that silently on
+        a recycle, and an erase that stopped on it would be the one delete in
+        the application that failed on files Explorer removes without comment.
+        """
+        cleared = False
+        for attempt, delay in enumerate((0.0,) + RETRY_DELAYS):
+            if delay:
+                self._wait(job, delay)
+            try:
+                os.remove(path)
+                return
+            except OSError as exc:
+                if isinstance(exc, PermissionError) and not cleared:
+                    # A read-only file and a file this account may not touch
+                    # both arrive as a PermissionError, so the attribute is
+                    # cleared once and the delete tried again. If that changed
+                    # nothing it was the second kind.
+                    cleared = True
+                    try:
+                        os.chmod(path, 0o600)
+                        os.remove(path)
+                        return
+                    except OSError:
+                        pass
+                # A refusal is not worth waiting out. Windows reports "you may
+                # not" and "somebody has it open" with the same errno, so the
+                # winerror is what separates them -- and three seconds spent
+                # per file on a folder of denied ones is minutes of waiting for
+                # an answer that was known immediately.
+                if (_is_denied(exc) or not _worth_retrying(exc)
+                        or attempt == len(RETRY_DELAYS)):
+                    raise
+
+    def _removed(self, job: Job, name: str, done: int, total: int, *,
+                 force: bool = False) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_tick < PROGRESS_INTERVAL:
+            return
+        self._last_tick = now
+        self._emit(job.id, Progress.REMOVING, {
+            "name": name, "done": done, "total": total, "interruptible": True,
+        })
+
+    # ------------------------------------------------------------ copy and move
 
     def _rename_what_can_be_renamed(self, job: Job, sources: list[str],
                                     totals: Totals) -> list[str]:
@@ -306,17 +545,27 @@ class Runner:
             })
         return remaining
 
-    def _scan(self, job: Job, sources: Iterable[str]):
+    def _scan(self, job: Job, sources: Iterable[str], *,
+              destination: str | None = None):
         """Walk the sources into a flat list of items, directories first.
 
         Directories come before their contents so that creating them is just
         another item rather than a special case inside the copy loop.
+
+        `destination` is the job's unless it is given, and an erase gives `""`:
+        it has no destination, so every item's target is empty and only
+        `source` is ever read. One walk rather than two, because the walk is
+        the part with the awkward cases in it -- a symlink that must not be
+        followed, a folder that cannot be opened -- and those are worth having
+        in one place whatever is going to be done with the result.
         """
+        if destination is None:
+            destination = job.destination
         items: list[Item] = []
         unreadable: list[tuple[str, str]] = []
         for source in sources:
             self._checkpoint(job)
-            target = os.path.join(job.destination, os.path.basename(source))
+            target = os.path.join(destination, os.path.basename(source)) if destination else ""
             try:
                 if os.path.isdir(source) and not os.path.islink(source):
                     items.append(Item(source, target, is_dir=True))
@@ -338,7 +587,7 @@ class Runner:
         with scanner:
             for entry in scanner:
                 self._checkpoint(job)
-                child_target = os.path.join(target, entry.name)
+                child_target = os.path.join(target, entry.name) if target else ""
                 try:
                     if entry.is_dir(follow_symlinks=False):
                         items.append(Item(entry.path, child_target, is_dir=True))
@@ -383,7 +632,7 @@ class Runner:
                            message=_describe(exc))
                 continue
             totals.copied += 1
-            if job.kind is Transfer.MOVE:
+            if job.kind is JobKind.MOVE:
                 self._remove_source(job, item, totals, target)
 
     def _copy_file(self, job: Job, item: Item, target: str, totals: Totals,
@@ -567,7 +816,7 @@ class Transfers:
 
     # ------------------------------------------------------------- commands
 
-    def submit(self, kind: Transfer, sources: Iterable[str], destination: str, *,
+    def submit(self, kind: JobKind, sources: Iterable[str], destination: str = "", *,
                conflict: Conflict = Conflict.ASK) -> int:
         job = Job(id=next(self._ids), kind=kind, sources=tuple(sources),
                   destination=destination, conflict=conflict)
@@ -578,6 +827,16 @@ class Transfers:
 
     def cancel(self, job_id: int) -> None:
         self._send(("cancel", job_id))
+
+    def hold(self, job_id: int) -> None:
+        self._send(("hold", job_id))
+
+    def release(self, job_id: int) -> None:
+        self._send(("release", job_id))
+
+    def reorder(self, job_id: int, delta: int) -> None:
+        """Move a waiting job `delta` places. Negative is towards the front."""
+        self._send(("reorder", (job_id, delta)))
 
     def pause(self) -> None:
         self._send(("pause", None))
@@ -708,6 +967,24 @@ def _discard(path: str) -> None:
         os.remove(path)
     except OSError:
         pass
+
+
+#: What `SHFileOperation` returns when it was not allowed: the Win32 code, and
+#: the shell's own "access denied on the source". Named because a number in a
+#: comparison says nothing about why that number is interesting.
+_DENIED_CODES = (5, 0x78)
+
+
+def _is_denied(exc: BaseException) -> bool:
+    """Whether Windows refused this on permissions rather than failing at it.
+
+    The distinction is the whole basis of the elevation offer: retrying as
+    administrator is worth a consent prompt for a refusal and is worth nothing
+    at all for a file that has already gone.
+    """
+    if isinstance(exc, PermissionError):
+        return True
+    return getattr(exc, "winerror", None) == 5
 
 
 def _worth_retrying(exc: OSError) -> bool:

@@ -991,31 +991,22 @@ def _delete(request: Request, outbox: Any) -> None:
     targets = [os.path.join(request.path, name) for name in names]
 
     if win32shell is not None:
-        _ensure_com()
-        flags = (shellcon.FOF_NOCONFIRMATION | shellcon.FOF_NOERRORUI
-                 | shellcon.FOF_SILENT | shellcon.FOF_NOCONFIRMMKDIR)
-        if not permanent:
-            flags |= shellcon.FOF_ALLOWUNDO
         try:
-            result, aborted = _shell_delete(targets, flags)
+            deleted, aborted, problem, _code = shell_delete(targets,
+                                                            permanent=permanent)
         except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
             outbox.put(Reply(request.id, _shell_status(exc), message=_describe(exc)))
             return
-        if result:
-            outbox.put(Reply(request.id, Status.ERROR,
-                             message=f"the shell refused the delete (code {result})"))
+        if problem:
+            outbox.put(Reply(request.id, Status.ERROR, message=problem))
             return
         outbox.put(Reply(request.id, Status.OK, payload={
-            "deleted": len(targets), "permanent": permanent, "aborted": bool(aborted),
+            "deleted": deleted, "permanent": permanent, "aborted": aborted,
         }))
         return
 
     if not permanent:
-        outbox.put(Reply(request.id, Status.ERROR, message=(
-            "the Recycle Bin needs pywin32, which is not importable here. "
-            "Nothing was deleted; a permanent delete is still available and "
-            "says so before it runs."
-        )))
+        outbox.put(Reply(request.id, Status.ERROR, message=RECYCLE_NEEDS_PYWIN32))
         return
 
     removed = 0
@@ -1033,6 +1024,54 @@ def _delete(request: Request, outbox: Any) -> None:
     outbox.put(Reply(request.id, Status.OK, payload={
         "deleted": removed, "permanent": True, "aborted": False,
     }))
+
+
+#: Said in one place because two callers say it: the worker's own handler and
+#: the queue's recycle job. Turning a recycle into a permanent delete because a
+#: library is missing is the kind of helpfulness that loses somebody's work, so
+#: neither of them does it.
+RECYCLE_NEEDS_PYWIN32 = (
+    "the Recycle Bin needs pywin32, which is not importable here. "
+    "Nothing was deleted; a permanent delete is still available and "
+    "says so before it runs."
+)
+
+
+def shell_delete(targets: list[str], *, permanent: bool = False):
+    """One `SHFileOperation` for the whole list.
+
+    Returns (deleted, aborted, problem, code).
+
+    Full paths rather than a folder and names, because the queue's jobs carry
+    paths and the worker's requests carry names, and the thing they have in
+    common is the paths. One call for the list rather than one per item, which
+    is not an optimisation: the shell treats one call as one operation, and
+    that is what makes a recycle of forty files a single undo in Explorer.
+    """
+    _ensure_com()
+    flags = (shellcon.FOF_NOCONFIRMATION | shellcon.FOF_NOERRORUI
+             | shellcon.FOF_SILENT | shellcon.FOF_NOCONFIRMMKDIR)
+    if not permanent:
+        flags |= shellcon.FOF_ALLOWUNDO
+    result, aborted = _shell_delete(targets, flags)
+    if result:
+        return 0, bool(aborted), f"the shell refused the delete (code {result})", int(result)
+    return len(targets), bool(aborted), "", 0
+
+
+def recycle(targets: list[str]):
+    """To the Recycle Bin. Returns (deleted, problem, code), for the queue's job.
+
+    The queue calls this rather than carrying its own copy, so that the
+    destructive path the elevated retry runs and the one an ordinary delete
+    runs are the same lines of code. The code comes back with the message
+    because the queue has to tell a refusal from a failure: only the first is
+    worth offering to run as administrator.
+    """
+    if win32shell is None:
+        return 0, RECYCLE_NEEDS_PYWIN32, 0
+    deleted, _aborted, problem, code = shell_delete(targets, permanent=False)
+    return deleted, problem, code
 
 
 def _shell_delete(targets: list[str], flags: int):

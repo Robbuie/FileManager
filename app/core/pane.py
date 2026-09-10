@@ -90,7 +90,7 @@ class Pane(QObject):
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
                  menu=None, sizes=None, siblings=None, parent=None,
-                 file_icons=None) -> None:
+                 file_icons=None, transfers=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -117,6 +117,11 @@ class Pane(QObject):
         # pane's bar must do nothing with it -- which it decides by having no
         # menu open.
         self.siblings = siblings
+        # Shared for the fifth reason, and the plainest of them: there is one
+        # queue in the application. A copy started from the left pane and a
+        # delete started from the right are two jobs in one list, which is the
+        # whole point of having a list.
+        self.transfers = transfers
         self.tabs: list[Tab] = self._restore()
         self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
                          len(self.tabs) - 1)
@@ -379,21 +384,34 @@ class Pane(QObject):
                      failed=f"could not rename to {name}")
 
     def delete(self, names: list[str], *, permanent: bool = False) -> None:
-        """Remove named items from this folder.
+        """Remove named items from this folder, through the queue.
 
-        Names, not rows: by the time the reply lands the listing has been
+        Names, not rows: by the time the answer lands the listing has been
         replaced, and a row number that meant something when the user pressed
         the key would mean something else by now.
+
+        The queue rather than a worker request, since 0.14, and the reason is
+        the deadline. A delete on the worker path was one request against
+        `timeout.delete`, so a recycle of 30,000 files on a share expired --
+        the pane said the delete had not finished while the shell carried on
+        deleting, which is the worst of both answers. A job has no deadline; it
+        has a person watching it.
+
+        Without a queue -- a preview render, a test that builds a pane on its
+        own -- this does nothing rather than falling back to the worker. A
+        second path to a destructive operation is a second path that only gets
+        exercised half the time, and this is not the operation to have two of.
         """
         tab = self.current
-        if not names:
+        if not names or self.transfers is None:
             return
-        kind = "deleting" if not permanent else "deleting permanently"
+        paths_ = [paths.join(tab.path, name) for name in names]
+        kind = "deleting permanently" if permanent else "deleting"
         self._set_status(tab, f"{kind} {len(names)} item(s)", BUSY)
-        self._mutate(tab, Op.DELETE, tab.path,
-                     timeout=float(self._config.get("timeout.delete")),
-                     args={"names": names, "permanent": permanent},
-                     failed="the delete did not finish")
+        if permanent:
+            self.transfers.erase(paths_)
+        else:
+            self.transfers.recycle(paths_)
 
     def measure(self, names: list[str]) -> None:
         """Count what is under the named folders in this one.

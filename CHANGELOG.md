@@ -5,6 +5,72 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.14.0]
+
+The queue stops being a copy queue and becomes the one place work is listed.
+Deletes go into it, jobs can be held and reordered, and the panel behind the
+status line is a panel rather than three lines of text.
+
+### Added
+- **Deleting is a job in the queue.** Del and Shift+Del no longer send a
+  request to a worker and wait on a deadline; they put a job in the same list a
+  copy goes into, and it reports as it goes.
+
+  The deadline is why. A delete was one request against `timeout.delete`, so a
+  recycle of 30,000 files on a share ran past it: the pane said the delete had
+  not finished while the shell carried on deleting, which is the worst of both
+  answers. A job has no deadline -- it has a person watching it.
+
+  The two deletes behave differently in the queue, because they are two
+  different operations rather than one with a switch:
+
+  - **To the Recycle Bin** is still one shell call for the whole selection,
+    because one call is what makes one undo in Explorer. It cannot be paused
+    or cancelled once it has started, and the panel says so in the row and
+    greys the buttons rather than offering something that will not happen. It
+    can be cancelled while it is still waiting its turn.
+  - **Permanently** is now this application walking the tree itself, file by
+    file, with the same checkpoint between items that a copy has between
+    chunks. So it can be paused, held and cancelled, it says which file it is
+    on, and it counts items rather than bytes -- 40,000 small files take far
+    longer than one big one, and a bar drawn from bytes would sit still and
+    then jump. A cancel leaves everything it had not reached where it was.
+
+  A file Windows refuses is told apart from one that simply failed, and only
+  the refusal is offered as a retry with administrator rights -- the same offer
+  the worker path already made, for exactly the items that were refused.
+- **Jobs can be held and reordered.** A job that has not started can be moved
+  up or down the queue or held back; a running one can be held, which stops it
+  where it is without stopping anything else. Holding keeps a job's place
+  rather than sending it to the back: holding something is saying "not yet",
+  not "after everything else".
+- **The queue panel** (Ctrl+J) lists everything -- running, waiting and
+  finished -- one row each, with the destination, what it is working on, and a
+  bar with the percentage beside it. The buttons act on the selection and only
+  light up for what they can actually do: Cancel is offered for a job that can
+  be cancelled, Up and Down for one that is still waiting, and a recycle the
+  shell has already started offers neither.
+- `python -m app.io.harness recycle <paths>` and `... erase <paths>` run the
+  two deletes as real queued jobs from a console, with progress and
+  `--cancel-after`. `erase` against a folder on a share is the one worth
+  running: the thing to watch is that it reports as it goes and that a cancel
+  part way through leaves the rest of the tree alone.
+- `python tools/preview.py --queue` renders the queue panel with invented jobs
+  in every state it can be in, which is the only way to see whether they still
+  tell apart when they are next to each other.
+
+### Changed
+- The status line readout counts a delete in items and a transfer in bytes,
+  and names the job that is actually running rather than the first one that
+  has not finished -- with holds in the queue those are no longer the same job.
+- Pause is unavailable while a shell recycle is running, for the reason above.
+- The dialog shown when the window is closed with work still going no longer
+  says "transfers": it covers deletes now, and saying the wrong word at that
+  particular moment is worse than saying a vaguer one.
+- `timeout.delete` now applies only to a delete run through a worker, which is
+  the elevated retry and the harness's own `delete` command. The Del key does
+  not go near it.
+
 ## [0.13.0]
 
 The rows a person recognises by their picture. Everything drawn in the listing

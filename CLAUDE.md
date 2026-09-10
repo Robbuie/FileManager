@@ -58,6 +58,7 @@ python -m app                           # the window
 
 python tools/preview.py --path C:\Windows\System32 --out preview.png
 python tools/preview.py --all-themes --out-dir previews
+python tools/preview.py --queue --out queue.png       # the queue panel alone
 
 python packaging/build.py               # dist/: the folder, the setup exe, latest.json
 python packaging/build.py --skip-installer   # freeze only, no Inno Setup
@@ -78,6 +79,8 @@ python -m app.io.harness fileicons "C:\Program Files"     # the icons files carr
 python -m app.io.harness folders S:\Jobs --limit 200      # what a chevron drops down
 python -m app.io.harness copy S:\Jobs\big D:\scratch --conflict rename
 python -m app.io.harness move S:\Jobs\big D:\scratch --cancel-after 50000000
+python -m app.io.harness erase S:\Jobs\scratch --cancel-after 200
+python -m app.io.harness recycle S:\Jobs\scratch\one.txt
 ```
 
 The transfer commands run the real engine: the queue, the scan, the conflict
@@ -300,7 +303,7 @@ F8   delete (Recycle Bin)  Del  the same; Shift+Del is permanent
 Ins  mark and move down    Tab  the other pane
 Ctrl+R  refresh            Ctrl+Shift+R  reconnect
 Ctrl+F  filter             Ctrl+L  edit the path
-Ctrl+J  the transfer queue Ctrl+D  save this folder as a favourite
+Ctrl+J  the job queue     Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 Ctrl+B  the navigation rail
 
@@ -364,6 +367,22 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
 - **A killed worker leaves in-flight operations orphaned.** Whatever restarts the
   worker also has to fail the outstanding requests, or a tab waits forever on a
   reply that will never come. Restart and re-request; do not resume.
+- **A delete is a job, not a request.** Del and Shift+Del go into the queue in
+  `app/io/ops.py`, not to a worker, and the reason is the deadline: a recycle
+  of 30,000 files on a share ran past `timeout.delete`, so the pane reported a
+  failure while the shell carried on deleting. `Op.DELETE` still exists and is
+  still the worker's own handler -- it is what the elevated retry runs and what
+  `harness delete` exercises -- and the queue's recycle calls that same handler
+  rather than carrying a copy of it. **There must never be two implementations
+  of a destructive operation**, which is also why `Pane.delete` does nothing at
+  all when there is no queue rather than falling back to the worker.
+
+  The two deletes are separate job kinds because they behave differently and
+  the UI has to say so: a recycle is one uninterruptible shell call (one call
+  is what makes one undo), and an erase is a walk this application drives, so
+  it pauses, cancels and counts items. `JobState.interruptible` is what the
+  panel greys its buttons off, and it is False only while such a step is
+  actually running.
 - **Copy/move is where hobby file managers fall over,** and the hard part was
   never the copying. `app/io/ops.py` has the queue -- pause, resume, cancel,
   conflict rules with an answer that applies to the rest, bounded retry on a

@@ -355,18 +355,45 @@ def carries_own_icon(entry: Entry) -> bool:
 
 
 # --------------------------------------------------------------------------
-# Transfers.
+# Jobs.
 #
-# A separate vocabulary from the request/reply above, because a transfer is not
-# a request: it is long, it is interactive -- a conflict is a question asked
+# A separate vocabulary from the request/reply above, because a job is not a
+# request: it is long, it is interactive -- a conflict is a question asked
 # back -- and it outlives the folder it started from. What it shares is that
 # everything here is plain and picklable.
 # --------------------------------------------------------------------------
 
 
-class Transfer(str, Enum):
+class JobKind(str, Enum):
+    """The four things the queue does.
+
+    Deletes are here rather than on the worker path because of what they have
+    in common with a copy and not with a rename: they take as long as the
+    number of files, they are worth watching, and a person wants them in the
+    same list as everything else that is running. `Op.DELETE` still exists --
+    it is what an elevated retry uses, and it is one shell call, which is what
+    makes the Recycle Bin one undo.
+
+    The two deletes are separate members rather than a flag because they are
+    two different operations. `RECYCLE` is a single shell call that cannot be
+    interrupted and can be undone from the Recycle Bin; `ERASE` is this
+    application walking the tree itself, item by item, and cannot be undone at
+    all. Nothing about them should read as the same thing with a switch.
+    """
+
     COPY = "copy"
     MOVE = "move"
+    RECYCLE = "recycle"      # to the Recycle Bin, through the shell
+    ERASE = "erase"          # permanently, item by item
+
+    @property
+    def removes(self) -> bool:
+        return self in (JobKind.RECYCLE, JobKind.ERASE)
+
+    @property
+    def asks(self) -> bool:
+        """Whether this kind can hit a name collision. Only the two that write."""
+        return self in (JobKind.COPY, JobKind.MOVE)
 
 
 class Conflict(str, Enum):
@@ -395,7 +422,7 @@ class Job:
     """
 
     id: int
-    kind: Transfer
+    kind: JobKind
     sources: tuple[str, ...]
     destination: str
     conflict: Conflict = Conflict.ASK
@@ -404,14 +431,32 @@ class Job:
 class Progress(str, Enum):
     """What the ops process says while it works."""
 
+    QUEUED = "queued"        # accepted, and where it is in line: {"position"}
     SCANNING = "scanning"    # counting what is about to move
     SCANNED = "scanned"      # totals known: {"files", "bytes"}
     STARTED = "started"      # a job began
     COPYING = "copying"      # {"name", "done", "total", "item_done", "item_total"}
+
+    #: A delete is working on something: {"name", "done", "total"}. A separate
+    #: kind from COPYING rather than the same one with a different verb, because
+    #: the numbers mean something different -- items, not bytes. A delete's cost
+    #: is the number of files, and a progress bar drawn from bytes would sit at
+    #: nothing for a folder of 40,000 small files and then jump.
+    REMOVING = "removing"
+
     CONFLICT = "conflict"    # a question; the job waits for an Answer
     FAILED_ITEM = "item"     # one item failed; the job carries on
+
+    #: The queue as a whole stopped and started. Carried on job 0, because they
+    #: are about the queue rather than about any job in it.
     PAUSED = "paused"
     RESUMED = "resumed"
+
+    #: One job was held back and let go again. Unlike PAUSED these name a job:
+    #: holding the third thing in the queue leaves the first two running.
+    HELD = "held"
+    RELEASED = "released"
+
     DONE = "done"            # {"copied", "skipped", "failed", "cancelled"}
 
 

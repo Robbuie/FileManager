@@ -180,17 +180,23 @@ class DeleteConfirm(QDialog):
 
 
 class StopConfirm(QDialog):
-    """Closing the window while transfers are running."""
+    """Closing the window while jobs are running.
+
+    Transfers and deletes both, since 0.14, which is why nothing here says
+    "transfer" any more: a dialog that offered to stop two transfers while one
+    of them was a delete would be describing the wrong thing at the one moment
+    it matters.
+    """
 
     def __init__(self, parent: QWidget | None, *, names: list[str]) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Transfers are running")
+        self.setWindowTitle("Something is still running")
         self.setModal(True)
         self.setMinimumWidth(460)
 
         headline = QLabel(
-            f"{_count(len(names))} still transferring."
-            if len(names) != 1 else "A transfer is still running."
+            f"{_count(len(names))} still running."
+            if len(names) != 1 else "One job is still running."
         )
         headline.setWordWrap(True)
 
@@ -203,7 +209,9 @@ class StopConfirm(QDialog):
         listing.setFixedHeight(listing.count() * row + 8)
 
         note = QLabel("Closing stops them where they are. Whatever has already "
-                      "been copied stays; nothing half-written is left behind.")
+                      "been copied or removed stays that way; nothing "
+                      "half-written is left behind, and nothing part-deleted "
+                      "is put back.")
         note.setWordWrap(True)
         note.setProperty("role", "note")
 

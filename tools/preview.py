@@ -27,7 +27,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 def render(path: str, out: str, *, theme: str, accent: str, density: str,
            width: int, height: int, settle_ms: int, tabs: int = 1,
-           menu: bool = False) -> str:
+           menu: bool = False, queue: bool = False) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -103,6 +103,15 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     QTimer.singleShot(settle_ms, app.quit)
     app.exec()
 
+    if queue:
+        panel = _show_queue(window)
+        QTimer.singleShot(400, app.quit)
+        app.exec()
+        image = panel.grab()
+        image.save(out)
+        pool.shutdown()
+        return out
+
     popup = None
     if menu:
         popup = _show_menu(window)
@@ -123,6 +132,53 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     image.save(out)
     pool.shutdown()
     return out
+
+
+def _show_queue(window):
+    """The queue panel, with invented jobs in every state it can be in.
+
+    The states are built straight into the queue's own tables rather than by
+    submitting anything. Submitting would start the real ops process, which
+    would then go looking for paths that do not exist on this machine and
+    report them as failures a moment later -- so the picture would be of five
+    jobs failing rather than of five jobs in five states.
+
+    All five are put in at once because the thing worth seeing is whether they
+    are still telling apart when they are next to each other: a bar that is
+    moving, one that is held, one measured in items, one waiting and one done.
+    """
+    from app.core.transfers import JobState
+    from app.io.protocol import JobKind
+
+    queue = window._transfers  # noqa: SLF001 - a development tool, not the app
+
+    def add(state: JobState) -> None:
+        queue.jobs[state.id] = state
+        queue.order.append(state.id)
+
+    add(JobState(id=1, kind=JobKind.COPY, destination=r"D:\Archive\2025",
+                 sources=(r"S:\Jobs\24-118\survey.zip",), state="running",
+                 files=1180, total=4_100_000_000, done=1_650_000_000,
+                 current="site-photos-north-elevation.jpg"))
+    add(JobState(id=2, kind=JobKind.ERASE, destination="",
+                 sources=(r"D:\Archive\2019\superseded",), state="running",
+                 files=31_400, total=31_400, done=8_240,
+                 current="sheet-A-104-rev-C.dwg"))
+    add(JobState(id=3, kind=JobKind.MOVE, destination=r"S:\Jobs\24-118\sorted",
+                 sources=(r"S:\Jobs\24-118\incoming",), state="queued",
+                 files=94, held=True))
+    add(JobState(id=4, kind=JobKind.RECYCLE, destination="",
+                 sources=(r"D:\scratch\build",), state="running",
+                 files=2_800, total=2_800, done=0, interruptible=False))
+    add(JobState(id=5, kind=JobKind.COPY, destination=r"S:\Standards",
+                 sources=(r"C:\Users\rjokr\Downloads\standards.pdf",),
+                 state="done", files=1, copied=1))
+
+    window._show_queue()  # noqa: SLF001
+    panel = window._queue_dialog  # noqa: SLF001
+    panel.refresh()
+    panel.resize(max(560, window.width() - 200), 340)
+    return panel
 
 
 def _show_menu(window) -> None:
@@ -188,6 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--settle-ms", type=int, default=1500)
     parser.add_argument("--tabs", type=int, default=1,
                         help="open this many tabs per pane, to see the strip")
+    parser.add_argument("--queue", action="store_true",
+                        help="render the queue panel instead of the window, "
+                             "with invented jobs in every state")
     parser.add_argument("--menu", action="store_true",
                         help="open a context menu with invented shell entries, "
                              "to see how it draws")
@@ -198,7 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.all_themes:
         print(render(args.path, args.out, theme=args.theme, accent=args.accent,
                      density=args.density, width=args.width, height=args.height,
-                     settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu))
+                     settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
+                     queue=args.queue))
         return 0
 
     from app.theme.tokens import THEMES
@@ -207,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
         out = os.path.join(args.out_dir, f"{name}.png")
         print(render(args.path, out, theme=name, accent=args.accent,
                      density=args.density, width=args.width, height=args.height,
-                     settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu))
+                     settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
+                     queue=args.queue))
     return 0
 
 

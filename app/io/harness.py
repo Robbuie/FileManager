@@ -618,26 +618,35 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
 
 def cmd_transfer(args: argparse.Namespace) -> int:
-    """Run a real copy or move and print what the window would be showing.
+    """Run a real job and print what the window would be showing.
 
     The whole engine, minus the window: the queue, the scan, the conflict rule,
     pause and cancel. A 50,000-file copy over SMB can be watched here, and a
     cancel part way through can be seen to settle, without a UI existing.
+
+    All four kinds go through here, which is the point of it being one command
+    rather than four. `queue erase` against a folder of 30,000 files on a share
+    is the one worth running: a delete is now a job, and the thing to see is
+    that it reports as it goes and that Ctrl+C leaves the rest of the tree
+    alone.
     """
     import queue as _queue
 
     from app.io.ops import Transfers
-    from app.io.protocol import Conflict, Event, Progress, Transfer
+    from app.io.protocol import Conflict, Event, Progress, JobKind
 
     events: "_queue.Queue[Event]" = _queue.Queue()
     transfers = Transfers(events.put)
-    kind = Transfer.MOVE if args.move else Transfer.COPY
+    kind = JobKind(args.kind)
     conflict = Conflict(args.conflict)
+    destination = getattr(args, "destination", "") or ""
 
-    print(f"{kind.value} {len(args.sources)} source(s) -> {args.destination}")
-    print(f"conflicts: {conflict.value}")
+    print(f"{kind.value} {len(args.sources)} source(s)"
+          + (f" -> {destination}" if destination else ""))
+    if kind.asks:
+        print(f"conflicts: {conflict.value}")
     started = time.monotonic()
-    job = transfers.submit(kind, args.sources, args.destination, conflict=conflict)
+    job = transfers.submit(kind, args.sources, destination, conflict=conflict)
     cancelled = False
     code = 0
 
@@ -650,7 +659,8 @@ def cmd_transfer(args: argparse.Namespace) -> int:
                 code = 1
                 break
             if event.kind is Progress.SCANNED:
-                print(f"  to move: {event.payload['files']:,} files, "
+                verb = "to remove" if kind.removes else "to move"
+                print(f"  {verb}: {event.payload['files']:,} files, "
                       f"{event.payload['bytes']:,} bytes")
             elif event.kind is Progress.COPYING:
                 done = event.payload.get("done", 0)
@@ -667,12 +677,28 @@ def cmd_transfer(args: argparse.Namespace) -> int:
                 print(f"\n  conflict on {event.payload.get('name')}; "
                       f"answering {args.on_conflict}")
                 transfers.answer(job, Conflict(args.on_conflict), apply_to_all=True)
+            elif event.kind is Progress.REMOVING:
+                done = event.payload.get("done", 0)
+                total = event.payload.get("total", 0) or 1
+                if not event.payload.get("interruptible", True):
+                    print("  the shell is deleting these; it cannot be "
+                          "interrupted or reported on")
+                    continue
+                print(f"\r  {done * 100 // total:3d}%  {done:,} of {total:,}  "
+                      f"{str(event.payload.get('name', ''))[:40]:<40}",
+                      end="", flush=True)
+                if args.cancel_after and done >= args.cancel_after and not cancelled:
+                    cancelled = True
+                    print("\n  cancelling")
+                    transfers.cancel(job)
             elif event.kind is Progress.FAILED_ITEM:
-                print(f"\n  failed: {event.payload.get('name')}: {event.message}")
+                denied = " (refused, not failed)" if event.payload.get("denied") else ""
+                print(f"\n  failed{denied}: {event.payload.get('name')}: {event.message}")
             elif event.kind is Progress.DONE:
                 elapsed = time.monotonic() - started
                 print()
-                _report("copied", event.payload.get("copied", 0))
+                _report("removed" if kind.removes else "copied",
+                        event.payload.get("copied", 0))
                 _report("skipped", event.payload.get("skipped", 0))
                 _report("failed", event.payload.get("failed", 0))
                 _report("bytes", f"{event.payload.get('bytes', 0):,}")
@@ -928,11 +954,15 @@ def build_parser() -> argparse.ArgumentParser:
                           help="skip the Recycle Bin; there is no undo for this")
     deleting.set_defaults(func=cmd_delete)
 
-    for name, help_text in (("copy", "copy for real, with progress"),
-                            ("move", "move for real, with progress")):
+    for name, help_text in (
+            ("copy", "copy for real, with progress"),
+            ("move", "move for real, with progress"),
+            ("recycle", "delete to the Recycle Bin, as a queued job"),
+            ("erase", "delete permanently, item by item, as a queued job")):
         transfer = sub.add_parser(name, help=help_text)
         transfer.add_argument("sources", nargs="+")
-        transfer.add_argument("destination")
+        if name in ("copy", "move"):
+            transfer.add_argument("destination")
         transfer.add_argument("--conflict", default="ask",
                               choices=[c.value for c in _conflict_values()],
                               help="what to do when a name is taken")
@@ -940,11 +970,13 @@ def build_parser() -> argparse.ArgumentParser:
                               choices=[c.value for c in _conflict_values() if c.value != "ask"],
                               help="what this harness answers when asked, "
                                    "applied to the rest of the job")
-        transfer.add_argument("--cancel-after", type=int, default=0, metavar="BYTES",
-                              help="cancel once this many bytes have moved")
+        transfer.add_argument(
+            "--cancel-after", type=int, default=0,
+            metavar="BYTES" if name in ("copy", "move") else "ITEMS",
+            help="cancel once this much has been done")
         transfer.add_argument("--timeout", type=float, default=120.0,
                               help="seconds to wait for the next event")
-        transfer.set_defaults(func=cmd_transfer, move=(name == "move"))
+        transfer.set_defaults(func=cmd_transfer, kind=name)
 
     with_path("stat", "one entry").set_defaults(func=cmd_stat)
     with_path("dirsize", "recursive size of a folder", timeout=120.0).set_defaults(func=cmd_dirsize)

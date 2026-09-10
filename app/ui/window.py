@@ -8,6 +8,8 @@ adding one is how a picker ends up half working.
 
 from __future__ import annotations
 
+import os.path
+
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
@@ -21,7 +23,8 @@ from PySide6.QtCore import Qt
 from app import __version__
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
-from app.io.protocol import Transfer
+from app.io import elevate
+from app.io.protocol import JobKind, Op
 from app.theme import sheet
 from app.theme.tokens import (
     ACCENT_LABELS,
@@ -34,6 +37,28 @@ from app.ui.rail import NavigationRail
 from app.ui.transfers import ConflictDialog, QueueDialog, TransferBar, TransferPrompt
 
 TITLE = "File Manager"
+
+
+def _outcome(job) -> str:
+    """One line saying how a job went, in the words of what it did.
+
+    A copy reports what it copied and a delete reports what it removed, and the
+    same sentence for both would have a recycle of forty files announcing that
+    forty files were copied. `copied` is the count of items the job got through
+    whatever the job was; the verb is this function's business.
+    """
+    where = job.destination or (os.path.dirname(job.sources[0]) if job.sources else "")
+    verb = "removed" if job.kind.removes else "copied"
+    if job.cancelled:
+        summary = f"cancelled after {job.copied:,} item(s)"
+    elif job.failed:
+        summary = (f"finished with {job.failed:,} failed, "
+                   f"{job.copied:,} {verb}, {job.skipped:,} skipped")
+    elif job.kind.removes:
+        summary = f"{job.copied:,} removed"
+    else:
+        summary = f"{job.copied:,} copied, {job.skipped:,} skipped"
+    return f"{where}: {summary}" if where else summary
 
 
 class MainWindow(QMainWindow):
@@ -54,7 +79,6 @@ class MainWindow(QMainWindow):
         self._volumes = volumes
         self._transfers = transfers
         self._queue_dialog: QueueDialog | None = None
-        self._transfer_sources: dict[int, str] = {}
 
         metrics = sheet.metrics(config.get("density"))
         self._widgets = (PaneWidget(left, volumes, metrics, favorites),
@@ -65,6 +89,7 @@ class MainWindow(QMainWindow):
         # up painted from a different render than the one it is styled by.
         tokens = sheet.tokens(config.get("theme"), config.get("accent"),
                               config.get("density"))
+        self._tokens = tokens
         for widget in self._widgets:
             widget.apply_tokens(tokens)
 
@@ -184,7 +209,7 @@ class MainWindow(QMainWindow):
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
         files.addSeparator()
-        self._action(files, "Transfers", "Ctrl+J", self._show_queue)
+        self._action(files, "Queue", "Ctrl+J", self._show_queue)
         files.addSeparator()
         self._action(files, "Quit", "Ctrl+Q", self.close)
 
@@ -663,6 +688,13 @@ class MainWindow(QMainWindow):
             # same render the sheet was made from -- the reason the panes get
             # them handed down rather than fetching their own.
             self._rail.apply_tokens(tokens)
+        self._tokens = tokens
+        if self._queue_dialog is not None:
+            # The queue's rows paint their own bars, so a theme change has to
+            # reach a panel that may be open behind the window. It is the third
+            # thing in the application that paints rather than styles, and the
+            # third one that would silently stop following the picker.
+            self._queue_dialog.apply_tokens(tokens)
         self._set_active(self._active)
 
     def _on_folder_changed(self, path: str) -> None:
@@ -691,7 +723,7 @@ class MainWindow(QMainWindow):
         names = widget.selected_names()
         if not names:
             return
-        transfer = Transfer.COPY if kind == "copy" else Transfer.MOVE
+        transfer = JobKind.COPY if kind == "copy" else JobKind.MOVE
         prompt = TransferPrompt(transfer, names, other.display(), self)
         if prompt.exec() != QueueDialog.Accepted:
             return
@@ -699,11 +731,10 @@ class MainWindow(QMainWindow):
         if not destination:
             return
         sources = pane.paths_for(names)
-        if transfer is Transfer.COPY:
-            job = self._transfers.copy(sources, destination)
+        if transfer is JobKind.COPY:
+            self._transfers.copy(sources, destination)
         else:
-            job = self._transfers.move(sources, destination)
-        self._transfer_sources[job] = pane.current.path
+            self._transfers.move(sources, destination)
 
     def _on_conflict(self, job_id: int, payload: dict) -> None:
         dialog = ConflictDialog(payload.get("name", ""), payload.get("source", {}),
@@ -714,29 +745,59 @@ class MainWindow(QMainWindow):
         self._transfers.answer(job_id, dialog.action, apply_to_all=dialog.apply_to_all)
 
     def _on_transfer_finished(self, job) -> None:
-        """Re-list the folders a transfer touched, and say how it went.
+        """Re-list the folders a job touched, say how it went, and offer to
+        retry what Windows refused.
 
         Only those folders: a pane showing something else has no reason to pay
-        for a listing because a copy finished somewhere on the disk.
+        for a listing because a copy finished somewhere on the disk. The job
+        works out which they are -- the destination, and where the sources came
+        from -- so a delete refreshes the folder it emptied without this method
+        having to know that a delete has no destination.
         """
-        touched = {job.destination, self._transfer_sources.pop(job.id, "")}
+        touched = job.folders
         for pane in self._panes:
             if pane.current.path in touched and pane.current.request_id is None:
                 pane.refresh()
-        if job.cancelled:
-            summary = f"cancelled after {job.copied:,} item(s)"
-        elif job.failed:
-            summary = (f"finished with {job.failed:,} failed, "
-                       f"{job.copied:,} copied, {job.skipped:,} skipped")
-        else:
-            summary = f"{job.copied:,} copied, {job.skipped:,} skipped"
-        self.statusBar().showMessage(f"{job.destination}: {summary}", 8000)
+        self.statusBar().showMessage(_outcome(job), 8000)
         if job.problems:
             self._transfer_bar.refresh()
+        if job.denied:
+            self._offer_elevated_delete(job)
+
+    def _offer_elevated_delete(self, job) -> None:
+        """Windows refused a delete. Offer the same consent prompt the worker
+        path offers, for exactly the items it refused.
+
+        The plan runs `Op.DELETE`, which is the worker's own handler -- so an
+        elevated delete is the same code as an ordinary one, run by a process
+        that was allowed to. The queue does not run elevated and will not: a
+        long job holding a consent prompt open is the thing `CLAUDE.md` says
+        never to queue anything behind.
+        """
+        if not job.kind.removes:
+            return
+        folders = {os.path.dirname(source) for source in job.sources}
+        if len(folders) != 1:
+            # Every source came out of one folder in practice, because a
+            # selection is a selection in one listing. If that ever stops being
+            # true the plan has no single path to name, and no offer is better
+            # than an offer about the wrong folder.
+            return
+        folder = folders.pop()
+        plan = elevate.plan_for(Op.DELETE, folder, {
+            "names": list(dict.fromkeys(job.denied)),
+            "permanent": job.kind is JobKind.ERASE,
+        })
+        if plan is None:
+            return
+        description = elevate.describe(plan)
+        if dialogs.confirm_elevate(self, description):
+            self._current_pane().elevate(plan)
 
     def _show_queue(self) -> None:
         if self._queue_dialog is None:
             self._queue_dialog = QueueDialog(self._transfers, self)
+            self._queue_dialog.apply_tokens(self._tokens)
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
@@ -854,14 +915,20 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """Remember where the panes were. Failing to save is not worth a dialog.
 
-        A transfer still running is the one thing worth stopping for. The ops
+        A job still running is the one thing worth stopping for. The ops
         process is a child of this one, so closing the window ends it: the
         honest thing is to say so and let the user decide, rather than to
-        promise a transfer that outlives the window and not deliver it.
+        promise work that outlives the window and not deliver it.
+
+        A recycle is the case to keep in mind here. It is one shell call, so
+        "closing stops them where they are" is not quite true of it -- the
+        process goes, the call it was inside does not. Nothing is lost either
+        way, which is why the dialog does not try to explain it.
         """
         running = self._transfers.active
         if running:
-            names = [f"{job.label} to {job.destination}" for job in running]
+            names = [f"{job.label} to {job.destination}" if job.destination
+                     else job.label for job in running]
             if not dialogs.confirm_stop(self, names):
                 event.ignore()
                 return

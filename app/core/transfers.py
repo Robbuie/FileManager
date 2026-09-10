@@ -1,25 +1,34 @@
-"""The transfer queue as the window sees it.
+"""The job queue as the window sees it.
 
 The same job `app/core/bridge.py` does for workers: events arrive on the ops
 process's reader thread, cross to the UI thread through a queued signal, and
 nothing in `ui` ever touches anything that came off that thread directly.
 
 What this adds on top is memory. The ops process reports what is happening
-right now; a status bar and a queue dialog need to know what has happened so
+right now; a status bar and a queue panel need to know what has happened so
 far -- which job, how far through, what it is called, what has already failed.
-That state lives here, in one place, so the status bar and the dialog cannot
+That state lives here, in one place, so the status bar and the panel cannot
 disagree about it.
+
+Since 0.14 it also holds the *order*, and the order is the reason this file is
+not simply a mirror. The ops process owns the real queue -- it is the thing that
+decides what runs next -- but a reorder or a hold has to show on screen the
+instant it is clicked rather than a round trip later, and the two must not then
+drift. So `order` is kept here and moved here, the same command is sent to the
+process, and every event that names a position is applied on arrival. The
+process is still the authority: if the two ever disagree, the event wins.
 """
 
 from __future__ import annotations
 
+import os.path
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, Signal
 
 from app.io import ops
-from app.io.protocol import Conflict, Event, Progress, Transfer
+from app.io.protocol import Conflict, Event, JobKind, Progress
 
 
 #: Longest file name shown in a one-line readout. Past this the middle goes,
@@ -34,29 +43,77 @@ def shorten(name: str, limit: int = NAME_LIMIT) -> str:
     return f"{name[:head]}...{name[-(limit - 3 - head):]}"
 
 
+#: What each kind is called while it runs, and what it is called in a list.
+#: One table rather than a chain of conditionals in four places, because every
+#: one of those places was getting the same four cases slightly differently.
+VERBS: dict[JobKind, tuple[str, str]] = {
+    JobKind.COPY: ("Copying", "Copy"),
+    JobKind.MOVE: ("Moving", "Move"),
+    JobKind.RECYCLE: ("Recycling", "Recycle"),
+    JobKind.ERASE: ("Erasing", "Erase"),
+}
+
+
 @dataclass
 class JobState:
-    """One transfer, as much as is known about it."""
+    """One job, as much as is known about it."""
 
     id: int
-    kind: Transfer
+    kind: JobKind
     destination: str
+    sources: tuple[str, ...] = ()
     state: str = "queued"       # queued, scanning, running, waiting, done
     files: int = 0
-    total: int = 0              # bytes to move, once the scan has finished
-    done: int = 0               # bytes moved
-    current: str = ""           # the file being written
+    total: int = 0              # bytes to move, or items to remove
+    done: int = 0               # bytes moved, or items removed
+    current: str = ""           # the file being written or removed
     copied: int = 0
     skipped: int = 0
     failed: int = 0
     cancelled: bool = False
+    held: bool = False
+    #: Whether pause, hold and cancel can reach this job *now*. A recycle is one
+    #: shell call, so once it has started nothing can interrupt it, and a panel
+    #: that offered the buttons anyway would be describing a queue that does not
+    #: exist. False only while such a step is actually running.
+    interruptible: bool = True
     problems: list[str] = field(default_factory=list)
+    #: Names Windows refused rather than failed at. Kept apart from `problems`
+    #: because only these are worth offering to retry as administrator, and an
+    #: offer made about a file that has simply gone would be a consent prompt
+    #: that could not have helped.
+    denied: list[str] = field(default_factory=list)
 
     @property
     def percent(self) -> int:
         if self.total <= 0:
             return 0
         return min(100, int(self.done * 100 / self.total))
+
+    @property
+    def counts_items(self) -> bool:
+        """Whether `done` and `total` are items rather than bytes.
+
+        A delete's cost is the number of files, not their size: 40,000 tiny
+        files take far longer than one big one, and a bar drawn from bytes
+        would sit still and then jump.
+        """
+        return self.kind.removes
+
+    @property
+    def folders(self) -> set[str]:
+        """The folders this job changes, for whoever has to re-list them.
+
+        The destination, and the folder each source came out of. A copy leaves
+        its sources alone, but working that out per kind here would put the
+        knowledge in two places -- and a pane showing a folder that did not
+        change is re-listed for nothing, which costs one listing and no
+        correctness.
+        """
+        touched = {os.path.dirname(source) for source in self.sources}
+        if self.destination:
+            touched.add(self.destination)
+        return {folder for folder in touched if folder}
 
     @property
     def brief(self) -> str:
@@ -73,13 +130,17 @@ class JobState:
         return self._label(self.current)
 
     def _label(self, current: str) -> str:
-        verb = "Copying" if self.kind is Transfer.COPY else "Moving"
+        verb = VERBS[self.kind][0]
+        if self.state == "done":
+            return "Finished"
+        if self.held:
+            return f"{verb}: held"
         if self.state == "scanning":
             return f"{verb}: counting what is there"
         if self.state == "waiting":
             return f"{verb} {current} — waiting for an answer"
-        if self.state == "done":
-            return "Finished"
+        if self.state == "queued":
+            return f"{verb}: waiting its turn"
         return f"{verb} {current}" if current else verb
 
 
@@ -105,10 +166,56 @@ class TransferQueue(QObject):
     # -------------------------------------------------------------- commands
 
     def copy(self, sources: Iterable[str], destination: str) -> int:
-        return self._start(Transfer.COPY, sources, destination)
+        return self._start(JobKind.COPY, sources, destination)
 
     def move(self, sources: Iterable[str], destination: str) -> int:
-        return self._start(Transfer.MOVE, sources, destination)
+        return self._start(JobKind.MOVE, sources, destination)
+
+    def recycle(self, sources: Iterable[str]) -> int:
+        """To the Recycle Bin. No destination: the shell knows where that is."""
+        return self._start(JobKind.RECYCLE, sources, "")
+
+    def erase(self, sources: Iterable[str]) -> int:
+        """Permanently, item by item."""
+        return self._start(JobKind.ERASE, sources, "")
+
+    def hold(self, job_id: int) -> None:
+        """Keep a job where it is in the queue but do not let it run.
+
+        Optimistic, like `move_job`: the flag goes up here and the command goes
+        to the process, because a button that only responded once a message had
+        crossed a process boundary and come back would feel broken on a busy
+        queue. The HELD event that follows sets the same flag again.
+        """
+        job = self.jobs.get(job_id)
+        if job is None or job.state == "done":
+            return
+        job.held = True
+        self._transfers.hold(job_id)
+        self.changed.emit()
+
+    def release(self, job_id: int) -> None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return
+        job.held = False
+        self._transfers.release(job_id)
+        self.changed.emit()
+
+    def move_job(self, job_id: int, delta: int) -> None:
+        """Move a waiting job up or down the queue.
+
+        Refused for the job that is running, and for a finished one. The
+        running job has already left the process's own list, so a reorder
+        there would silently do nothing and the two lists would disagree from
+        then on -- which is exactly the drift this class exists to avoid.
+        """
+        job = self.jobs.get(job_id)
+        if job is None or job.state != "queued":
+            return
+        self._reorder_locally(job_id, delta)
+        self._transfers.reorder(job_id, delta)
+        self.changed.emit()
 
     def pause(self) -> None:
         self.paused = True
@@ -144,13 +251,26 @@ class TransferQueue(QObject):
         return bool(self.active)
 
     def current(self) -> JobState | None:
-        """The job a one-line readout should be about."""
-        running = self.active
-        return running[0] if running else None
+        """The job a one-line readout should be about.
+
+        The one that is actually running, not merely the first that has not
+        finished: with holds in the queue those are no longer the same job, and
+        a status bar that named a held one while another was copying would be
+        pointing at the wrong thing.
+        """
+        running = [job for job in self.active if job.state not in ("queued",)]
+        if running:
+            return running[0]
+        waiting = self.active
+        return waiting[0] if waiting else None
 
     def totals(self) -> tuple[int, int]:
-        """Bytes done and bytes to do, across everything still running."""
-        running = self.active
+        """Bytes done and bytes to do, across the transfers still running.
+
+        Transfers only. A delete counts items, and adding items to bytes gives
+        a number that is not a quantity of anything.
+        """
+        running = [job for job in self.active if not job.counts_items]
         return (sum(job.done for job in running), sum(job.total for job in running))
 
     def forget_finished(self) -> None:
@@ -161,11 +281,53 @@ class TransferQueue(QObject):
 
     # -------------------------------------------------------------- internals
 
-    def _start(self, kind: Transfer, sources: Iterable[str], destination: str) -> int:
+    def _place(self, job_id: int, position: int) -> None:
+        """Put an id at the process's idea of its position among the waiting.
+
+        The process's positions count only what is still in its own list, so
+        they are offsets into the waiting jobs rather than into `order`, which
+        also holds the running one and everything already finished. Translating
+        rather than trusting the number outright is what keeps a finished job in
+        the list from pushing a waiting one to the wrong place.
+        """
+        if job_id not in self.order:
+            return
+        waiting = [i for i in self.order
+                   if self.jobs[i].state == "queued" and i != job_id]
+        position = max(0, min(len(waiting), position))
+        self.order.remove(job_id)
+        if position < len(waiting):
+            self.order.insert(self.order.index(waiting[position]), job_id)
+        else:
+            self.order.append(job_id)
+
+    def _reorder_locally(self, job_id: int, delta: int) -> None:
+        """Move an id within `order`, clamped, and only among the waiting.
+
+        The clamp is against the whole list rather than against the waiting
+        part of it, and that is on purpose: `move_job` has already refused
+        anything that is not waiting, and the running job is at the front, so
+        an "up" from the first waiting job lands back where it started rather
+        than in front of the thing writing files.
+        """
+        if job_id not in self.order:
+            return
+        index = self.order.index(job_id)
+        first_waiting = min(
+            (i for i, j in enumerate(self.order) if self.jobs[j].state == "queued"),
+            default=index,
+        )
+        target = max(first_waiting, min(len(self.order) - 1, index + delta))
+        if target == index:
+            return
+        self.order.insert(target, self.order.pop(index))
+
+    def _start(self, kind: JobKind, sources: Iterable[str], destination: str) -> int:
         sources = tuple(sources)
         job_id = self._transfers.submit(kind, sources, destination)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
-                                     files=len(sources))
+                                     sources=sources, files=len(sources),
+                                     total=len(sources) if kind.removes else 0)
         self.order.append(job_id)
         self.changed.emit()
         return job_id
@@ -180,14 +342,35 @@ class TransferQueue(QObject):
         if job is None:
             return
 
-        if event.kind is Progress.STARTED:
+        if event.kind is Progress.QUEUED:
+            # The process's own position, which is the authority. It only ever
+            # differs from this side's after a reorder that crossed one in
+            # flight, and applying it here is what stops that becoming
+            # permanent.
+            job.state = "queued"
+            self._place(event.job, int(event.payload.get("position", 0)))
+        elif event.kind is Progress.HELD:
+            job.held = True
+        elif event.kind is Progress.RELEASED:
+            job.held = False
+        elif event.kind is Progress.STARTED:
             job.state = "running"
+            job.held = False
         elif event.kind is Progress.SCANNING:
             job.state = "scanning"
         elif event.kind is Progress.SCANNED:
             job.files = int(event.payload.get("files", 0))
-            job.total = int(event.payload.get("bytes", 0))
             job.state = "running"
+            if job.counts_items:
+                job.total = job.files
+            else:
+                job.total = int(event.payload.get("bytes", 0))
+        elif event.kind is Progress.REMOVING:
+            job.state = "running"
+            job.current = str(event.payload.get("name", ""))
+            job.done = int(event.payload.get("done", job.done))
+            job.total = max(job.total, int(event.payload.get("total", 0)))
+            job.interruptible = bool(event.payload.get("interruptible", True))
         elif event.kind is Progress.COPYING:
             job.state = "running"
             job.current = str(event.payload.get("name", ""))
@@ -203,8 +386,15 @@ class TransferQueue(QObject):
             job.failed += 1
             name = event.payload.get("name", "")
             job.problems.append(f"{name}: {event.message}" if name else event.message)
+            if event.payload.get("denied"):
+                # A recycle refuses as a whole and names nothing, so the job's
+                # own sources are what an elevated retry would be about.
+                job.denied.extend([name] if name
+                                  else [os.path.basename(s) for s in job.sources])
         elif event.kind is Progress.DONE:
             job.state = "done"
+            job.held = False
+            job.interruptible = True
             job.copied = int(event.payload.get("copied", 0))
             job.skipped = int(event.payload.get("skipped", 0))
             job.failed = max(job.failed, int(event.payload.get("failed", 0)))

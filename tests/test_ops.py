@@ -20,7 +20,7 @@ import pytest
 
 from app.io.ops import Runner, _partial_name, _unique
 from app.io.ops import Transfers
-from app.io.protocol import Conflict, Event, Progress, Transfer
+from app.io.protocol import Conflict, Event, Progress, JobKind
 
 
 def run_job(kind, sources, destination, *, conflict=Conflict.SKIP,
@@ -77,7 +77,7 @@ def pair(tmp_path):
 
 def test_a_tree_arrives_whole(pair):
     source, destination = pair
-    events = run_job(Transfer.COPY, [str(source)], str(destination))
+    events = run_job(JobKind.COPY, [str(source)], str(destination))
 
     assert final(events).kind is Progress.DONE
     assert final(events).payload["failed"] == 0
@@ -86,7 +86,7 @@ def test_a_tree_arrives_whole(pair):
 
 def test_the_total_is_known_before_anything_is_copied(pair):
     source, destination = pair
-    events = run_job(Transfer.COPY, [str(source)], str(destination))
+    events = run_job(JobKind.COPY, [str(source)], str(destination))
 
     kinds = [event.kind for event in events]
     scanned = kinds.index(Progress.SCANNED)
@@ -97,7 +97,7 @@ def test_the_total_is_known_before_anything_is_copied(pair):
 def test_skip_leaves_what_was_there(pair):
     source, destination = pair
     (destination / "a.txt").write_text("mine")
-    events = run_job(Transfer.COPY, [str(source / "a.txt")], str(destination),
+    events = run_job(JobKind.COPY, [str(source / "a.txt")], str(destination),
                      conflict=Conflict.SKIP)
 
     assert final(events).payload["skipped"] == 1
@@ -107,7 +107,7 @@ def test_skip_leaves_what_was_there(pair):
 def test_overwrite_replaces_it(pair):
     source, destination = pair
     (destination / "a.txt").write_text("mine")
-    run_job(Transfer.COPY, [str(source / "a.txt")], str(destination),
+    run_job(JobKind.COPY, [str(source / "a.txt")], str(destination),
             conflict=Conflict.OVERWRITE)
 
     assert (destination / "a.txt").read_text() == "alpha"
@@ -118,13 +118,13 @@ def test_newer_only_replaces_the_older_one(pair):
     (destination / "a.txt").write_text("mine")
     old = time.time() - 3600
     os.utime(destination / "a.txt", (old, old))
-    run_job(Transfer.COPY, [str(source / "a.txt")], str(destination),
+    run_job(JobKind.COPY, [str(source / "a.txt")], str(destination),
             conflict=Conflict.NEWER)
     assert (destination / "a.txt").read_text() == "alpha"
 
     # And the other way round: a destination that is newer stays.
     (destination / "a.txt").write_text("mine again")
-    run_job(Transfer.COPY, [str(source / "a.txt")], str(destination),
+    run_job(JobKind.COPY, [str(source / "a.txt")], str(destination),
             conflict=Conflict.NEWER)
     assert (destination / "a.txt").read_text() == "mine again"
 
@@ -132,7 +132,7 @@ def test_newer_only_replaces_the_older_one(pair):
 def test_rename_keeps_both(pair):
     source, destination = pair
     (destination / "a.txt").write_text("mine")
-    run_job(Transfer.COPY, [str(source / "a.txt")], str(destination),
+    run_job(JobKind.COPY, [str(source / "a.txt")], str(destination),
             conflict=Conflict.RENAME)
 
     assert (destination / "a.txt").read_text() == "mine"
@@ -145,7 +145,7 @@ def test_an_answer_can_be_applied_to_the_rest(pair):
     for name in ("a.txt", "b.txt", "c.txt"):
         (source / name).write_text("new")
         (destination / name).write_text("old")
-    events = run_job(Transfer.COPY,
+    events = run_job(JobKind.COPY,
                      [str(source / name) for name in ("a.txt", "b.txt", "c.txt")],
                      str(destination), conflict=Conflict.ASK,
                      answer=(Conflict.OVERWRITE, True))
@@ -158,7 +158,7 @@ def test_an_answer_can_be_applied_to_the_rest(pair):
 
 def test_a_move_within_a_volume_is_a_rename(pair):
     source, destination = pair
-    events = run_job(Transfer.MOVE, [str(source)], str(destination))
+    events = run_job(JobKind.MOVE, [str(source)], str(destination))
 
     assert final(events).payload["failed"] == 0
     assert not source.exists(), "the source survived a move"
@@ -174,7 +174,7 @@ def test_a_move_that_cannot_rename_copies_then_removes(pair):
     """
     source, destination = pair
     (destination / "a.txt").write_text("old")
-    events = run_job(Transfer.MOVE, [str(source / "a.txt")], str(destination),
+    events = run_job(JobKind.MOVE, [str(source / "a.txt")], str(destination),
                      conflict=Conflict.OVERWRITE)
 
     assert final(events).payload["copied"] == 1
@@ -184,7 +184,7 @@ def test_a_move_that_cannot_rename_copies_then_removes(pair):
 
 def test_a_source_that_cannot_be_read_fails_that_item_only(pair):
     source, destination = pair
-    events = run_job(Transfer.COPY,
+    events = run_job(JobKind.COPY,
                      [str(source / "a.txt"), str(source / "nothing-here.txt")],
                      str(destination))
 
@@ -195,7 +195,7 @@ def test_a_source_that_cannot_be_read_fails_that_item_only(pair):
 
 
 def test_every_job_ends_even_when_the_destination_is_gone(tmp_path):
-    events = run_job(Transfer.COPY, [str(tmp_path / "absent")],
+    events = run_job(JobKind.COPY, [str(tmp_path / "absent")],
                      str(tmp_path / "also-absent"))
     assert final(events).kind is Progress.DONE
 
@@ -230,7 +230,7 @@ def test_a_cancel_inside_a_file_leaves_nothing_half_written(tmp_path):
     from app.io.ops import Item, Totals, _Cancelled
     from app.io.protocol import Job
 
-    job = Job(id=7, kind=Transfer.COPY, sources=(str(source),),
+    job = Job(id=7, kind=JobKind.COPY, sources=(str(source),),
               destination=str(tmp_path), conflict=Conflict.OVERWRITE)
     item = Item(str(source), str(target), size=source.stat().st_size)
 

@@ -81,9 +81,13 @@ DEFAULTS: dict[str, Any] = {
     "timeout.open": 30.0,
     "timeout.mkdir": 20.0,
     "timeout.rename": 20.0,
-    # Long, and deliberately: a recursive delete over SMB is not quick, and the
-    # deadline here is what the watchdog would kill a worker over in the middle
-    # of the shell operation. It is the ceiling on a delete, not a target.
+    # The ceiling on a delete run through a *worker* -- which since 0.14 is
+    # the elevated retry and the harness's own `delete` command, and not the
+    # Del key. An ordinary delete is a job in the queue now, and a job has no
+    # deadline; it has a person watching it. This was the reason for the
+    # change: a recycle of 30,000 files on a share took longer than any number
+    # that could sensibly go here, so the pane reported a failure while the
+    # shell carried on deleting.
     "timeout.delete": 300.0,
     "timeout.drives": 10.0,
     "timeout.free_space": 10.0,

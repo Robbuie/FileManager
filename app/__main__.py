@@ -88,15 +88,17 @@ def main() -> int:
     # One scan for the window, for the shell menu's reason: one breadcrumb
     # dropdown is open at a time whichever pane it hangs off.
     siblings = Siblings(bridge, config)
+    # Before the panes, because a pane holds it: there is one queue in the
+    # application and a delete goes into it the same way a copy does.
+    transfers = TransferQueue()
     left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes,
-                siblings, file_icons=file_icons)
+                siblings, file_icons=file_icons, transfers=transfers)
     right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes,
-                 siblings, file_icons=file_icons)
+                 siblings, file_icons=file_icons, transfers=transfers)
     volumes = Volumes(bridge, config)
     # The drive meters in the rail. It measures local fixed disks only unless
     # somebody asks for more, which is what keeps a rail from probing a server.
     capacity = Capacity(bridge, config)
-    transfers = TransferQueue()
     updates = Updates(config, __version__)
     # One list for the window, not one per pane: a favourite is a place rather
     # than a side of the window.
