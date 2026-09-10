@@ -74,6 +74,7 @@ python -m app.io.harness list S:\Jobs --timeout 20       # rows, first batch, ra
 python -m app.io.harness list S:\Jobs --kill-after 2000  # kill mid-listing
 python -m app.io.harness soak S:\Jobs --count 40 --interval 3 --retry
 python -m app.io.harness icons S:\Jobs                    # kinds in a folder, and their icons
+python -m app.io.harness fileicons "C:\Program Files"     # the icons files carry themselves
 python -m app.io.harness folders S:\Jobs --limit 200      # what a chevron drops down
 python -m app.io.harness copy S:\Jobs\big D:\scratch --conflict rename
 python -m app.io.harness move S:\Jobs\big D:\scratch --cancel-after 50000000
@@ -433,6 +434,17 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   a 50,000-round-trip listing waiting to happen, and `_shell_icon` refuses
   one. Reading the icon out of an executable or a shortcut is the exception,
   and has to be a per-path request against that file's own volume.
+- **That exception is `Op.FILE_ICON`, and its bound is the kind list.**
+  `SELF_ICON_KINDS` in `protocol.py` is what makes reading a file for its
+  picture affordable: a folder of drawings matches none of it and sends
+  nothing, so the ordinary case costs what it did before this existed. Both
+  ends check it, for `elevate.ACTIONS`' reason. Everything else about it is
+  the overlays' bookkeeping -- the rows on screen, one request per folder, a
+  short deadline, one picture per distinct picture -- with one difference:
+  the answers are keyed on the row's own mtime and size rather than dropped
+  when the folder is listed again, because an icon cannot change unless the
+  file does. Adding a kind to that set is a decision about cost, not a
+  formatting change; `.dll` is left out deliberately and says why.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
 - **A drive letter can be present and dead at the same time.** Presence in
@@ -451,9 +463,10 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    sizes on demand, selecting a group (0.10), the restyle -- flat listing,
    breadcrumb path bar, age and size-bar columns (0.11), and the navigation
    rail with drive capacity meters, grouped favourites and sibling dropdowns
-   on the breadcrumb chevrons (0.12). What is left before this replaces
-   Double Commander day to day: per-file icons for the types that carry their
-   own, and a transfer that outlives the window.
+   on the breadcrumb chevrons (0.12), and the icons that live inside a file
+   rather than in the association database -- programs, shortcuts, .ico files
+   (unreleased). What is left before this replaces Double Commander day to
+   day: a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

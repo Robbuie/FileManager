@@ -275,6 +275,8 @@ class PaneWidget(QFrame):
 
         if self._pane.overlays is not None:
             self._pane.overlays.changed.connect(self._view.viewport().update)
+        if self._pane.file_icons is not None:
+            self._pane.file_icons.changed.connect(self._view.viewport().update)
         if self._pane.sizes is not None:
             # A repaint rather than a model signal, for the reason the icons
             # give: the view asks the model about the rows it is drawing and

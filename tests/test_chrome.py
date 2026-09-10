@@ -152,6 +152,31 @@ def test_every_colour_the_delegate_asks_for_exists_in_every_theme():
                 assert parse_colour(tokens[name]).isValid(), f"{name} in {theme}"
 
 
+def test_the_age_chip_steps_down_in_the_unit_its_font_was_set_in(app):
+    """A pixel-sized font answers -1 when asked for its point size, and every
+    font in this application is pixel-sized because the sheet says `13px`. A
+    step measured in points therefore ignored the density and drew the same
+    small chip at every setting.
+    """
+    from PySide6.QtGui import QFont
+
+    from app.ui.rows import _one_step_smaller
+
+    pixels = QFont()
+    pixels.setPixelSize(13)
+    stepped = _one_step_smaller(pixels)
+    assert stepped.pixelSize() == 12
+    assert stepped.pointSizeF() == -1
+
+    points = QFont()
+    points.setPointSizeF(11.0)
+    assert _one_step_smaller(points).pointSizeF() == 10.0
+
+    tiny = QFont()
+    tiny.setPixelSize(6)
+    assert _one_step_smaller(tiny).pixelSize() >= 8
+
+
 def test_the_delegate_takes_a_radius_off_the_tokens(app):
     rows = RowDelegate()
     rows.apply_tokens(sheet.tokens("dark", "blue", "normal"))

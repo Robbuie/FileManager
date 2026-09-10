@@ -40,6 +40,7 @@ def main() -> int:
     from app.core.capacity import Capacity
     from app.core.config import Config
     from app.core.favorites import Favorites
+    from app.core.fileicons import FileIcons
     from app.core.icons import Icons
     from app.core.menu import ShellMenu
     from app.core.overlays import Overlays
@@ -73,6 +74,11 @@ def main() -> int:
     bridge = Bridge(pool)
     icons = Icons(bridge, config)
     overlays = Overlays(bridge, config)
+    # The pictures inside executables and shortcuts. One cache for the window
+    # like the other two: what an .exe looks like does not depend on which
+    # pane is looking at it, and the cache is what stops the second pane
+    # reading the file again.
+    file_icons = FileIcons(bridge, config)
     # One shell menu for the window, not one per pane: there is one shell host
     # behind it and one menu on screen at a time whichever pane it belongs to.
     shell_menu = ShellMenu(bridge, config)
@@ -83,9 +89,9 @@ def main() -> int:
     # dropdown is open at a time whichever pane it hangs off.
     siblings = Siblings(bridge, config)
     left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes,
-                siblings)
+                siblings, file_icons=file_icons)
     right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes,
-                 siblings)
+                 siblings, file_icons=file_icons)
     volumes = Volumes(bridge, config)
     # The drive meters in the rail. It measures local fixed disks only unless
     # somebody asks for more, which is what keeps a rail from probing a server.
@@ -110,6 +116,7 @@ def main() -> int:
     # difference between a crisp listing and a soft one.
     icons.start(scale=float(app.devicePixelRatio()))
     overlays.start(scale=float(app.devicePixelRatio()))
+    file_icons.start(scale=float(app.devicePixelRatio()))
     updates.start_if_wanted()
 
     try:

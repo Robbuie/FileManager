@@ -216,8 +216,9 @@ class ListingModel(QAbstractTableModel):
         self._rows: list[Entry] = []     # what the filter lets through
         self._icons = None               # set by the pane; None draws no icons
         self._overlays = None            # the same, for the badges on them
+        self._file_icons = None          # and for the few files carrying one
         self._sizes = None               # recursive folder sizes, once asked for
-        self._folder = ""                # what an overlay is asked about
+        self._folder = ""                # what the per-path requests ask about
         self._has_parent = False
         self._sort_column = Column.NAME
         self._sort_order = Qt.AscendingOrder
@@ -248,6 +249,19 @@ class ListingModel(QAbstractTableModel):
         """
         self._overlays = provider
 
+    def set_file_icons(self, provider) -> None:
+        """Where an executable's own icon comes from, or None to draw every
+        row as its kind.
+
+        A third provider rather than something the icon cache does, because
+        the cost is a third thing again: this one opens the file. Keeping it
+        separate is what lets it be turned off on its own, and what stops a
+        change to the by-kind cache quietly making a request per row.
+        `provider.icon(folder, entry)` is called during a paint and answers
+        from what it already has.
+        """
+        self._file_icons = provider
+
     def set_sizes(self, provider) -> None:
         """Where a folder's recursive size comes from, or None for a model
         that only ever says `<DIR>`.
@@ -262,10 +276,11 @@ class ListingModel(QAbstractTableModel):
     def set_folder(self, path: str) -> None:
         """Which folder these rows are in.
 
-        The model does not otherwise know or care -- rows are names. Overlays
-        are the exception: the shell is asked about a file, so the name has to
-        be put back together with the folder it is in, and the folder is told
-        to the model rather than worked out from anything here.
+        The model does not otherwise know or care -- rows are names. The two
+        per-path requests are the exception: an overlay and a file's own icon
+        are both asked about a file, so the name has to be put back together
+        with the folder it is in, and the folder is told to the model rather
+        than worked out from anything here.
         """
         self._folder = path or ""
 
@@ -538,6 +553,14 @@ class ListingModel(QAbstractTableModel):
                 badged = self._overlays.icon(self._folder, entry.name)
                 if badged is not None:
                     return badged
+            if self._file_icons is not None and self._folder:
+                # Under the badge and over the kind. A badged picture already
+                # has this file's own icon underneath it -- the shell drew it
+                # from the real path -- so asking for both would be the same
+                # read twice for a picture that is already correct.
+                own = self._file_icons.icon(self._folder, entry)
+                if own is not None:
+                    return own
             return self._icons.icon(entry)
         if role == self.AgeStepRole:
             return age_step(entry.mtime) if column == Column.AGE else None

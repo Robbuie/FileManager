@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         self._panes = (left, right)
         self._icons = left.icons
         self._overlays = left.overlays
+        self._file_icons = left.file_icons
         self._shell_menu = left.menu
         self._volumes = volumes
         self._transfers = transfers
@@ -360,6 +361,14 @@ class MainWindow(QMainWindow):
                             "than about its type.")
         overlays.triggered.connect(self._set_overlays)
         view.addAction(overlays)
+        file_icons = QAction("Icons from the file itself", self, checkable=True)
+        file_icons.setChecked(bool(self._config.get("icons.per_file")))
+        file_icons.setEnabled(self._file_icons is not None)
+        file_icons.setToolTip("Programs, shortcuts and .ico files draw their own "
+                              "icon rather than the one for their type. Reads "
+                              "the file, for the rows on screen only.")
+        file_icons.triggered.connect(self._set_file_icons)
+        view.addAction(file_icons)
         shell_commands = QAction("Explorer context menu", self, checkable=True)
         shell_commands.setChecked(bool(self._config.get("menu.shell")))
         shell_commands.setEnabled(self._shell_menu is not None)
@@ -558,6 +567,17 @@ class MainWindow(QMainWindow):
         self._config.set("icons.overlays", bool(checked))
         if self._overlays is not None:
             self._overlays.reload()
+
+    def _set_file_icons(self, checked: bool) -> None:
+        """Turn the per-file pictures off, or back on, without a restart.
+
+        The second switch of the three, and the one to reach for in a folder
+        of programs on a share that has gone slow: this is the request that
+        opens the file, and off means every row draws as its kind again.
+        """
+        self._config.set("icons.per_file", bool(checked))
+        if self._file_icons is not None:
+            self._file_icons.reload()
 
     def _offer_elevation(self, pane):
         """Windows refused something. Ask, then run that one operation elevated.

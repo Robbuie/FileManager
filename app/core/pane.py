@@ -38,7 +38,7 @@ class Tab:
     """One folder being looked at, with where it has been."""
 
     def __init__(self, path: str, icons=None, overlays=None, sizes=None, *,
-                 locked: bool = False) -> None:
+                 locked: bool = False, file_icons=None) -> None:
         self.path = paths.normalize(path)
         #: A locked tab keeps its folder. Navigating away from one opens a new
         #: tab at the target rather than refusing to move, which is what makes
@@ -48,6 +48,7 @@ class Tab:
         self.model = ListingModel()
         self.model.set_icons(icons)
         self.model.set_overlays(overlays)
+        self.model.set_file_icons(file_icons)
         self.model.set_sizes(sizes)
         self.model.set_folder(self.path)
         self.history: list[str] = [self.path]
@@ -88,7 +89,8 @@ class Pane(QObject):
     elevationOffered = Signal(object, str)
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
-                 menu=None, sizes=None, siblings=None, parent=None) -> None:
+                 menu=None, sizes=None, siblings=None, parent=None,
+                 file_icons=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -97,6 +99,10 @@ class Pane(QObject):
         # the picture for a .pdf is the same on both sides of the window.
         self.icons = icons
         self.overlays = overlays
+        # Shared for the icons' reason rather than the overlays': what an
+        # executable looks like is the same on both sides of the window, and
+        # the cache is what stops the second pane reading the file again.
+        self.file_icons = file_icons
         # Shared for a different reason: there is one shell host, and one
         # context menu can be open at a time whichever pane it belongs to.
         self.menu = menu
@@ -135,10 +141,12 @@ class Pane(QObject):
                 if not isinstance(path, str) or not path:
                     continue
                 tabs.append(Tab(path, self.icons, self.overlays, self.sizes,
-                                locked=bool(item.get("locked"))))
+                                locked=bool(item.get("locked")),
+                                file_icons=self.file_icons))
         if not tabs:
             tabs.append(Tab(self._config.get(f"{self._side}.path"),
-                            self.icons, self.overlays, self.sizes))
+                            self.icons, self.overlays, self.sizes,
+                            file_icons=self.file_icons))
         return tabs
 
     def session(self) -> list[dict]:
@@ -510,7 +518,7 @@ class Pane(QObject):
         if len(self.tabs) >= MAX_TABS:
             return
         tab = Tab(path or self.current.path, self.icons, self.overlays,
-                  self.sizes, locked=locked)
+                  self.sizes, locked=locked, file_icons=self.file_icons)
         self.tabs.append(tab)
         self.tabsChanged.emit()
         if background:

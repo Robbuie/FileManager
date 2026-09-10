@@ -5,6 +5,59 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.13.0]
+
+The rows a person recognises by their picture. Everything drawn in the listing
+until now came from the association database, which is a fact about this
+machine and therefore free; this release adds the few kinds whose picture is a
+fact about the file, and spends a file read on each of them.
+
+### Added
+- **Programs, shortcuts and icon files draw their own icon.** Until now every
+  row drew the picture for its type, which is right for a folder of drawings
+  and useless for a folder of installers: twenty rows of the same generic
+  executable icon, and the only way to tell them apart is to read the names.
+  An `.exe`, `.lnk`, `.ico`, `.cur`, `.scr`, `.msc`, `.cpl` or `.url` now shows
+  what is inside it.
+
+  This is the second request in the application that opens a file, after the
+  overlay badges, and it is bounded the same way with one addition that does
+  most of the work: **only those kinds are ever asked about**. A folder of
+  50,000 drawings sends nothing at all and costs exactly what it did before.
+  Beyond that it is the rows on screen rather than the folder, one request per
+  folder against that folder's own worker, a short deadline, and one picture
+  per distinct picture -- a Start-menu folder of forty shortcuts to the same
+  program is one image, not forty.
+
+  What is remembered is keyed on the file's own modified time and size, which
+  is where this differs from the badges and the difference is worth stating: a
+  badge changes while the file does not, so badges are thrown away whenever a
+  folder is listed again. An icon is inside the file and cannot change unless
+  the file does -- so a rebuilt program shows its new icon the moment its new
+  row arrives, and refreshing a folder that has not changed reads nothing.
+
+  `View > Icons from the file itself` turns it off, which is the switch to
+  reach for in a folder of programs on a share that has gone slow. With it off
+  every row draws as its kind again, exactly as before.
+- `tools\diagnose_font.py` runs the application with two hooks in it and
+  writes `Claude outputs\font-diagnosis.txt`: every font-size warning Qt
+  prints, with the Python stack that was running at the time, and every call
+  that asks a font for a size of zero or less. Qt prints those warnings from
+  C++ with no stack of their own, which is otherwise nothing to go on.
+- `python -m app.io.harness fileicons <folder>` reports how many of a folder's
+  rows could carry their own icon, how many answered, how many distinct
+  pictures came back, and what the whole thing cost. The first number is the
+  one to watch on an ordinary folder: it should be zero.
+
+### Fixed
+- **The age chip follows the density again.** It is meant to draw one step
+  smaller than the row it sits in, and it stepped down in *points* -- but
+  every font here is sized in pixels, because the sheet says `13px` and Qt
+  honours that as pixels. A pixel-sized font answers -1 when it is asked for
+  its point size, so the step landed on the floor of the calculation and the
+  chip drew at the same small fixed size at every density. It now steps in
+  whichever unit the font was actually set in.
+
 ## [0.12.0]
 
 The navigation rail, and the chevrons in the path bar becoming targets. Both

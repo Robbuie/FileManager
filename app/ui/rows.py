@@ -93,6 +93,29 @@ def parse_px(value: str | None, fallback: int) -> int:
         return fallback
 
 
+def _one_step_smaller(base: QFont) -> QFont:
+    """The same font, one unit down, in whichever unit it was set in.
+
+    A font carries a size in points *or* in pixels, never both, and asking a
+    pixel-sized font for its point size gets -1 rather than a conversion.
+    Every font in this application is pixel-sized, because the sheet writes
+    `font-size: 13px` and Qt honours that as pixels -- so a step measured in
+    points here would ignore the density entirely and draw the same small
+    chip at every setting. This asks the font which unit it is in and steps
+    in that one.
+
+    The floors are there so the chip stays legible if a later density goes
+    smaller than any of the three today.
+    """
+    font = QFont(base)
+    pixels = base.pixelSize()
+    if pixels > 0:
+        font.setPixelSize(max(8, pixels - 1))
+    else:
+        font.setPointSizeF(max(7.0, base.pointSizeF() - 1.0))
+    return font
+
+
 class RowDelegate(QStyledItemDelegate):
     """Draws the listing's rows. Give it tokens before it paints anything."""
 
@@ -255,8 +278,7 @@ class RowDelegate(QStyledItemDelegate):
 
         font = self._chip_font
         if font is None:
-            font = QFont(option.font)
-            font.setPointSizeF(max(7.0, option.font.pointSizeF() - 1.0))
+            font = _one_step_smaller(option.font)
             self._chip_font = font
 
         metrics = option.fontMetrics

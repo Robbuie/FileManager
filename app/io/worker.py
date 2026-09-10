@@ -22,6 +22,7 @@ delivering is late even if it started a moment ago.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import queue
 import shutil
@@ -39,6 +40,7 @@ from app.io.protocol import (
     Reply,
     Request,
     Status,
+    own_icon_kind,
 )
 
 #: The shell, for opening a file the way Explorer does. Optional at import so
@@ -170,6 +172,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         outbox.put(Reply(request.id, Status.OK, payload={"stalled": limit}))
     elif request.op is Op.ICON:
         _icon(request, outbox)
+    elif request.op is Op.FILE_ICON:
+        _file_icons(request, outbox)
     else:
         outbox.put(Reply(request.id, Status.ERROR, message=f"unknown op {request.op!r}"))
 
@@ -525,6 +529,99 @@ def _icon(request: Request, outbox: Any) -> None:
     outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": icons},
                      message="" if icons else (problems[0] if problems else
                                                "the shell had no icon for any of these")))
+
+
+def _file_icons(request: Request, outbox: Any) -> None:
+    """The icons a few files carry inside themselves.
+
+    `_icon` above answers from the extension and never opens anything, which
+    is what makes it safe to ask for while a share is being listed. The cost
+    of that is the row a person actually recognises: an executable, a
+    shortcut, an icon file. Their picture is in the file, so it has to be
+    read, and this is the request that reads it.
+
+    What keeps that affordable is not this function -- it is the caller asking
+    only about the rows on screen, and only about the kinds in
+    `SELF_ICON_KINDS`. What this function adds is the last two bounds:
+
+      * **the deadline is checked between files**, so a share that goes quiet
+        costs the pictures it had not reached and nothing else;
+      * **the answer is a picture per distinct picture**, keyed on a digest of
+        the pixels, so a Start-menu folder of forty shortcuts to the same
+        program comes back as one image rather than forty.
+    """
+    names = [str(name) for name in (request.args.get("names") or [])]
+    size = 32 if int(request.args.get("size", 16) or 16) > 16 else 16
+    empty = {"size": size, "rows": {}, "images": {}}
+    if not names:
+        outbox.put(Reply(request.id, Status.OK, payload=empty))
+        return
+    if win32shell is None or win32gui is None or win32ui is None or shellcon is None:
+        outbox.put(Reply(request.id, Status.ERROR, payload=empty,
+                         message="file icons need pywin32 on Windows"))
+        return
+
+    _ensure_com()
+    deadline = time.monotonic() + request.timeout
+    rows: dict[str, str] = {}
+    images: dict[str, bytes] = {}
+    problems: list[str] = []
+
+    for name in names:
+        if time.monotonic() > deadline:
+            outbox.put(Reply(request.id, Status.TIMEOUT,
+                             payload={"size": size, "rows": rows, "images": images},
+                             message="the shell did not answer within the deadline"))
+            return
+        # Both guards, and both matter. The kind is checked here as well as in
+        # the caller because a bound only one end enforces is a bound a later
+        # caller can lose; the separators because a name here comes from a
+        # listing and is joined onto the folder, so anything path-shaped is
+        # refused rather than followed.
+        if any(ch in name for ch in _SEPARATORS) or not own_icon_kind(name):
+            continue
+        pixels = _path_icon(paths.join(request.path, name), size, problems)
+        if pixels is None:
+            continue
+        key = hashlib.sha1(pixels).hexdigest()[:16]
+        rows[name] = key
+        images.setdefault(key, pixels)
+    outbox.put(Reply(request.id, Status.OK,
+                     payload={"size": size, "rows": rows, "images": images},
+                     message=problems[0] if problems and not images else ""))
+
+
+def _path_icon(path: str, size: int, problems: list[str]) -> bytes | None:
+    """One file's own icon, as premultiplied BGRA.
+
+    `SHGetFileInfo` again, and the difference from `_shell_icon` is the one
+    flag that is not there: without `SHGFI_USEFILEATTRIBUTES` the shell opens
+    the path and reads what is inside it. That is the whole point here and the
+    reason this request goes to the volume the file is on rather than to the
+    local worker.
+
+    A shortcut is why the shell is asked at all rather than the icon being
+    pulled out with `ExtractIconEx`: a `.lnk` holds a target and possibly an
+    icon location, resolving it is the shell's job, and doing it here would
+    mean reimplementing that badly for the one case it matters.
+    """
+    flags = shellcon.SHGFI_ICON
+    flags |= shellcon.SHGFI_LARGEICON if size > 16 else shellcon.SHGFI_SMALLICON
+    try:
+        answer = win32shell.SHGetFileInfo(path, 0, flags)
+    except Exception as exc:  # noqa: BLE001 - a file that has just gone is not an error
+        problems.append(f"{path}: {_describe(exc)}")
+        return None
+    handle = _icon_handle(answer)
+    if not handle:
+        return None
+    try:
+        return _icon_pixels(handle, size, problems)
+    finally:
+        try:
+            win32gui.DestroyIcon(handle)
+        except Exception:  # noqa: BLE001 - already gone is the outcome wanted
+            pass
 
 
 #: `SHGFI_OVERLAYINDEX` and the image list flags that go with it. Not in

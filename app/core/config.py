@@ -112,6 +112,11 @@ DEFAULTS: dict[str, Any] = {
     # and a share that is answering slowly should lose the badges rather than
     # hold the worker.
     "timeout.overlay": 8.0,
+    # A file's own icon, for the rows on screen. Short for the overlays'
+    # reason and one of its own: this one opens the file, so a share that has
+    # gone quiet has to lose the pictures quickly rather than hold its worker
+    # while somebody scrolls.
+    "timeout.file_icon": 8.0,
     # One refused operation, run again as administrator. It covers the
     # operation itself; the wait for the consent prompt is added on top of it
     # in the worker.
@@ -141,6 +146,12 @@ DEFAULTS: dict[str, Any] = {
     # control. The one icon request that carries a path, so it is bounded to
     # the rows on screen and this is the switch that turns it off entirely.
     "icons.overlays": True,
+
+    # The icon an executable, a shortcut or an .ico carries inside itself. The
+    # second request that opens a file, so it is bounded to the rows on screen
+    # and to the handful of kinds that could answer differently from their
+    # type -- and this is the switch that stops it entirely.
+    "icons.per_file": True,
 
     # The real Explorer context menu. Off means the pane's own verbs and
     # nothing else, which is the answer when a shell extension misbehaves --

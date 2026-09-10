@@ -74,6 +74,26 @@ class Op(str, Enum):
     #: is not picklable. A key the shell had nothing for is absent.
     ICON = "icon"
 
+    #: The icon a file carries itself, for `args["names"]` in the folder at
+    #: `path`, at `args["size"]`.
+    #:
+    #: The exception ICON exists to avoid, made explicit and bounded rather
+    #: than smuggled in. An executable, a shortcut and an .ico do not draw as
+    #: their type: the picture is inside the file, so the shell has to open it,
+    #: and that is a read against the volume the rows came from. Which makes
+    #: this the second request in the application that carries a path -- and it
+    #: is bounded the same way OVERLAY is, with one addition that does most of
+    #: the work: only the handful of kinds in `SELF_ICON_KINDS` are ever asked
+    #: about, so a folder of 50,000 documents sends nothing at all.
+    #:
+    #: The reply is `{"size": n, "rows": {name: key}, "images": {key: bgra}}`,
+    #: the shape OVERLAY answers in and for the same reason: a key is a digest
+    #: of the picture, so a folder holding forty shortcuts to the same program
+    #: is one image rather than forty. A name whose icon could not be read is
+    #: absent from `rows`; the caller draws the icon for its kind, which is
+    #: what it was already drawing.
+    FILE_ICON = "file_icon"
+
     #: Hand a path to the shell and let Windows decide what opens it. In a
     #: worker like everything else: ShellExecute against a path on a share that
     #: has gone away blocks exactly as a listing does, and the association
@@ -225,6 +245,25 @@ BATCH_SIZE = 1000
 ICON_FOLDER = "folder"
 ICON_FILE = "file"
 
+#: The kinds whose icon is inside the file rather than in the association
+#: database. Everything else draws by kind and costs nothing per row, so this
+#: set is the whole bound on FILE_ICON: a name outside it is never asked about.
+#:
+#: It is short on purpose and each entry earns its place by being a kind a
+#: person recognises by its picture. Executables and shortcuts are the reason
+#: this exists at all -- a folder of installers or a Start-menu folder is
+#: unreadable when every row is the generic one. An `.ico` or `.cur` is a
+#: picture of itself. A `.scr` is an executable wearing another extension, a
+#: `.msc` and a `.cpl` are consoles and control panels that ship their own,
+#: and a `.url` carries the site's.
+#:
+#: `.dll` is deliberately not here even though most of them contain icons:
+#: Explorer draws the generic one too, and a folder like System32 would be
+#: several thousand file reads for pictures nobody looks at.
+SELF_ICON_KINDS = frozenset({
+    ".exe", ".lnk", ".ico", ".cur", ".scr", ".msc", ".cpl", ".url",
+})
+
 #: The sizes the shell keeps a system image list for. Anything else is one of
 #: these scaled, and looks it, so a caller picks between them rather than
 #: passing pixels and hoping.
@@ -288,6 +327,31 @@ def icon_key(entry: Entry) -> str:
     if not dot or not stem or not suffix:
         return ICON_FILE
     return f".{suffix.lower()}"
+
+
+def own_icon_kind(name: str) -> bool:
+    """Whether a bare name is one of the kinds whose picture is in the file.
+
+    Takes a name rather than an entry because both ends need it and only one
+    of them has an entry: the model asks about a row, the worker is handed a
+    list of names, and the harness has read a listing. One definition, so a
+    kind added here is asked for and answered without a second edit.
+    """
+    stem, dot, suffix = name.rpartition(".")
+    return bool(dot and stem) and f".{suffix.lower()}" in SELF_ICON_KINDS
+
+
+def carries_own_icon(entry: Entry) -> bool:
+    """Whether this row's picture is inside the file rather than in the
+    association database.
+
+    Beside `icon_key` because it is the same vocabulary and the same decision
+    made once: what the cache keys on, and what is worth a read against the
+    file itself. A folder never is -- a folder with a custom icon says so in a
+    `desktop.ini` the shell reads when it enumerates, and reaching for that
+    here would mean a read per folder row.
+    """
+    return not entry.is_dir and own_icon_kind(entry.name)
 
 
 # --------------------------------------------------------------------------

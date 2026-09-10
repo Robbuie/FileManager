@@ -39,6 +39,7 @@ from app.io.protocol import (
     Reply,
     Status,
     icon_key,
+    own_icon_kind,
 )
 
 _SETTLED = {Status.OK, Status.TIMEOUT, Status.CANCELLED,
@@ -479,6 +480,60 @@ def cmd_overlays(args: argparse.Namespace) -> int:
         pool.shutdown()
 
 
+def cmd_fileicons(args: argparse.Namespace) -> int:
+    """List a folder and read the icon out of every file that carries one.
+
+    The number to watch is the first one printed: how many of the rows are a
+    kind that could carry its own icon at all. In a folder of drawings or
+    documents it is zero, and zero is the design working -- nothing is opened,
+    and the listing draws by kind exactly as it did before this existed. In a
+    Start-menu folder it is all of them, which is the case worth timing over a
+    share.
+
+    The second number is how many distinct pictures came back against how many
+    files answered. Forty shortcuts to the same program should be one image;
+    one image per file means the digest is not doing its job and this costs
+    what a naive version would.
+    """
+    pool = WorkerPool()
+    try:
+        listing = _run(pool, Op.LIST, args.path, timeout=args.timeout,
+                       keep_names=args.rows)
+        _report_outcome(args.path, listing)
+        names = listing.names[: args.rows]
+        wanted = [name for name in names if own_icon_kind(name)]
+        _report("rows read", len(names))
+        _report("own icons", f"{len(wanted)} of {len(names)} rows")
+        if not wanted:
+            return _exit_code(listing)
+
+        icons = _run(pool, Op.FILE_ICON, args.path, timeout=args.icon_timeout,
+                     args={"names": wanted, "size": args.size})
+        payload = icons.payload if isinstance(icons.payload, dict) else {}
+        rows = payload.get("rows") or {}
+        images = payload.get("images") or {}
+        _report("status", icons.status.value)
+        if icons.message:
+            _report("message", icons.message)
+        _report("answered", f"{len(rows)} of {len(wanted)}")
+        _report("images", f"{len(images)} distinct")
+        _report("elapsed", f"{icons.elapsed:.3f}s")
+        for name in wanted:
+            key = rows.get(name)
+            if not key:
+                print(f"  {name:<40} -")
+                continue
+            pixels = images.get(key)
+            # The alpha bytes again: a picture that arrived the right length
+            # and fully transparent is the failure that looks like success.
+            drawn = (f"{sum(1 for value in pixels[3::4] if value)} visible pixels"
+                     if pixels else "no image")
+            print(f"  {name:<40} {key:<16} {drawn}")
+        return _exit_code(icons)
+    finally:
+        pool.shutdown()
+
+
 def cmd_elevate(args: argparse.Namespace) -> int:
     """Run one operation with administrator rights, prompt and all.
 
@@ -839,6 +894,14 @@ def build_parser() -> argparse.ArgumentParser:
     overlays.add_argument("--size", type=int, default=16, choices=[16, 32])
     overlays.add_argument("--overlay-timeout", type=float, default=8.0)
     overlays.set_defaults(func=cmd_overlays)
+
+    own = with_path("fileicons", "the icons files carry themselves, and what "
+                                 "reading them costs")
+    own.add_argument("--rows", type=int, default=200, metavar="N",
+                     help="how many rows of the folder to consider")
+    own.add_argument("--size", type=int, default=16, choices=[16, 32])
+    own.add_argument("--icon-timeout", type=float, default=8.0)
+    own.set_defaults(func=cmd_fileicons)
 
     # Not `with_path`: the action reads better in front of the path, and the
     # order of positionals is the order they are added.
