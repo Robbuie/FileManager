@@ -18,9 +18,10 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 
+from app.core.clipboard import refusal
 from app.core.listing import ListingModel, format_size
 from app.io import elevate, paths
-from app.io.protocol import Op, Reply, Status
+from app.io.protocol import Conflict, Op, Reply, Status
 
 #: What a status line says while a listing is in flight. Named because the
 #: widget styles on it.
@@ -38,7 +39,7 @@ class Tab:
     """One folder being looked at, with where it has been."""
 
     def __init__(self, path: str, icons=None, overlays=None, sizes=None, *,
-                 locked: bool = False, file_icons=None) -> None:
+                 locked: bool = False, file_icons=None, clipboard=None) -> None:
         self.path = paths.normalize(path)
         #: A locked tab keeps its folder. Navigating away from one opens a new
         #: tab at the target rather than refusing to move, which is what makes
@@ -50,6 +51,7 @@ class Tab:
         self.model.set_overlays(overlays)
         self.model.set_file_icons(file_icons)
         self.model.set_sizes(sizes)
+        self.model.set_cut(clipboard)
         self.model.set_folder(self.path)
         self.history: list[str] = [self.path]
         self.position = 0
@@ -90,7 +92,7 @@ class Pane(QObject):
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
                  menu=None, sizes=None, siblings=None, parent=None,
-                 file_icons=None, transfers=None) -> None:
+                 file_icons=None, transfers=None, clipboard=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -122,6 +124,11 @@ class Pane(QObject):
         # delete started from the right are two jobs in one list, which is the
         # whole point of having a list.
         self.transfers = transfers
+        # Shared for the sixth reason, which is Windows': there is one system
+        # clipboard. A file cut in the left pane is greyed in the right one
+        # and in every tab showing that folder, because all of them are asking
+        # the same object about the same clipboard.
+        self.clipboard = clipboard
         self.tabs: list[Tab] = self._restore()
         self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
                          len(self.tabs) - 1)
@@ -147,11 +154,13 @@ class Pane(QObject):
                     continue
                 tabs.append(Tab(path, self.icons, self.overlays, self.sizes,
                                 locked=bool(item.get("locked")),
-                                file_icons=self.file_icons))
+                                file_icons=self.file_icons,
+                                clipboard=self.clipboard))
         if not tabs:
             tabs.append(Tab(self._config.get(f"{self._side}.path"),
                             self.icons, self.overlays, self.sizes,
-                            file_icons=self.file_icons))
+                            file_icons=self.file_icons,
+                            clipboard=self.clipboard))
         return tabs
 
     def session(self) -> list[dict]:
@@ -413,6 +422,71 @@ class Pane(QObject):
         else:
             self.transfers.recycle(paths_)
 
+    def to_clipboard(self, names: list[str], *, cut: bool = False) -> int:
+        """Put the named items on the system clipboard. Returns how many.
+
+        Names for `delete`'s reason: a row number stops meaning anything the
+        moment the listing is replaced, and the clipboard outlives the
+        listing by design -- copying here and pasting ten minutes later in
+        Explorer has to work.
+        """
+        if not names or self.clipboard is None:
+            return 0
+        items = self.paths_for(names)
+        placed = self.clipboard.cut(items) if cut else self.clipboard.copy(items)
+        if not placed:
+            return 0
+        word = "cut" if cut else "copied"
+        self._set_status(self.current, f"{word} {len(items)} item(s)", IDLE)
+        return len(items)
+
+    def paste(self) -> str:
+        """Paste into this folder. Empty when a job started, or why it did not.
+
+        The destination is this pane's folder and there is no prompt, which is
+        the one place this application picks a destination without asking --
+        and it is not really picking one. `Ctrl+V` in a folder is a person
+        pointing at it; a dialog asking "into here?" after they have already
+        said where would be the kind of confirmation that trains people to
+        dismiss confirmations. What is refused instead is the paste that could
+        not be undone by looking at it: a folder into itself or into its own
+        subtree, and a cut pasted back where it came from.
+
+        A copy pasted into the folder it came from is the way a duplicate is
+        made, so it goes in with `RENAME` rather than asking about every name
+        the user has already collided with on purpose.
+        """
+        if self.clipboard is None or self.transfers is None:
+            return "no clipboard"
+        sources, cut = self.clipboard.contents()
+        destination = self.current.path
+        why = refusal(sources, destination, cut=cut)
+        if why:
+            # On this pane's own line, not the window's. A refused paste is
+            # the pane answering, and the pane answers where it answers
+            # everything else -- under the listing, beside the folder it is
+            # about. The window's status bar is the far corner of the window
+            # from the pane that was right-clicked, and six seconds later it
+            # is gone: reported there, a refusal reads as a key that did
+            # nothing, which is exactly what it is not.
+            self._set_status(self.current, why, BAD)
+            return why
+        same = {paths.resolve(paths.parent(item) or "").lower() for item in sources}
+        conflict = Conflict.RENAME \
+            if not cut and same == {paths.resolve(destination).lower()} \
+            else Conflict.ASK
+        if cut:
+            self.transfers.move(sources, destination, conflict=conflict)
+            # The way Explorer does it: a cut is spent once it has been
+            # pasted. Leaving it there would offer to move the same files
+            # again, out of a folder they are no longer in.
+            self.clipboard.clear()
+        else:
+            self.transfers.copy(sources, destination, conflict=conflict)
+        word = "moving" if cut else "copying"
+        self._set_status(self.current, f"{word} {len(sources)} item(s) here", BUSY)
+        return ""
+
     def measure(self, names: list[str]) -> None:
         """Count what is under the named folders in this one.
 
@@ -536,7 +610,8 @@ class Pane(QObject):
         if len(self.tabs) >= MAX_TABS:
             return
         tab = Tab(path or self.current.path, self.icons, self.overlays,
-                  self.sizes, locked=locked, file_icons=self.file_icons)
+                  self.sizes, locked=locked, file_icons=self.file_icons,
+                  clipboard=self.clipboard)
         self.tabs.append(tab)
         self.tabsChanged.emit()
         if background:

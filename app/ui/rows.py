@@ -56,6 +56,11 @@ BAND_INSET = 3
 #: a run of rows rather than one tall block.
 BAND_GAP = 1
 
+#: How faded a row cut to the clipboard is drawn. Explorer's own figure is
+#: close to this. Lower and the name stops being readable on the dark themes,
+#: which turns "this is going somewhere" into "this row is broken".
+CUT_OPACITY = 0.45
+
 
 def parse_colour(value: str | None) -> QColor:
     """A token into a `QColor`, taking both forms the token set produces.
@@ -180,6 +185,15 @@ class RowDelegate(QStyledItemDelegate):
         painter.save()
         if selected or hovered:
             self._band(painter, option, index, selected)
+
+        # A cut row is faded, which is what Explorer does and therefore what
+        # these eyes already read as "this is going somewhere". Opacity rather
+        # than a muted colour: it has to work on the icon as well as the text,
+        # and a second set of greyed tokens per theme is five more numbers to
+        # keep in step for no gain. The band underneath keeps its strength --
+        # a cut row that is also the selected row still has to look selected.
+        if index.data(ListingModel.CutRole):
+            painter.setOpacity(CUT_OPACITY)
 
         if index.column() == Column.AGE:
             self._age(painter, opt, index)

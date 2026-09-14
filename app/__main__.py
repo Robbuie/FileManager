@@ -47,6 +47,7 @@ def main() -> int:
     from app.core.pane import Pane
     from app.core.siblings import Siblings
     from app.core.sizes import FolderSizes
+    from app.core.clipboard import Clipboard
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
     from app.core.volumes import Volumes
@@ -91,10 +92,16 @@ def main() -> int:
     # Before the panes, because a pane holds it: there is one queue in the
     # application and a delete goes into it the same way a copy does.
     transfers = TransferQueue()
+    # Before the panes for the queue's reason and one of its own: there is one
+    # system clipboard, so a file cut in one pane has to be greyed in the
+    # other, and both panes paste from the same place.
+    clipboard = Clipboard()
     left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes,
-                siblings, file_icons=file_icons, transfers=transfers)
+                siblings, file_icons=file_icons, transfers=transfers,
+                clipboard=clipboard)
     right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes,
-                 siblings, file_icons=file_icons, transfers=transfers)
+                 siblings, file_icons=file_icons, transfers=transfers,
+                 clipboard=clipboard)
     volumes = Volumes(bridge, config)
     # The drive meters in the rail. It measures local fixed disks only unless
     # somebody asks for more, which is what keeps a rail from probing a server.

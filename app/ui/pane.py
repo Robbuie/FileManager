@@ -57,10 +57,21 @@ from PySide6.QtWidgets import (
 #: those are. Only the top level is filtered: a verb inside somebody's submenu
 #: means what that extension says it means.
 #:
-#: Cut, Copy and Paste are deliberately not in here. The shell's Copy is the
-#: clipboard and this application's Copy is the other pane, which is why the
-#: pane's own entries say so.
-SHELL_VERBS_WE_HAVE = frozenset({"open", "delete", "rename", "refresh"})
+#: Cut, Copy and Paste were deliberately *not* in here until 0.15, because
+#: until 0.15 this application's Copy meant the other pane and the shell's
+#: meant the clipboard -- two different commands that happened to share a
+#: word. Now the pane has both, named apart ("Copy" and "Copy to other pane"),
+#: so the shell's three are the same three and the menu was showing each of
+#: them twice.
+#:
+#: Dropping the shell's Paste is the one worth stating plainly: it is not only
+#: a duplicate, it is the wrong implementation. The shell's paste runs in the
+#: menu host and copies the files itself, with no queue, no progress and no
+#: cancel -- which over a share is exactly the wait this application exists to
+#: escape, arriving through its own context menu.
+SHELL_VERBS_WE_HAVE = frozenset({
+    "open", "delete", "rename", "refresh", "cut", "copy", "paste",
+})
 
 #: Milliseconds of not typing before a quick search forgets what was typed.
 #: Long enough to think about the next letter of a long name, short enough
@@ -73,6 +84,10 @@ class PaneWidget(QFrame):
 
     activated = Signal(object)          # this widget, when it takes focus
     transferRequested = Signal(str)     # "copy" or "move", from F5 and F6
+    #: "copy", "cut" or "paste", from Ctrl+C, Ctrl+X and Ctrl+V. A signal
+    #: rather than a call for the reason every other key here is one: the
+    #: window owns the clipboard and the queue, and the pane owns the keys.
+    clipboardRequested = Signal(str)
     addFavoriteRequested = Signal()     # from the favorites bar's own menu
     manageFavoritesRequested = Signal()
 
@@ -283,6 +298,11 @@ class PaneWidget(QFrame):
             # no others, which is what stays cheap at 50,000 rows.
             self._pane.sizes.changed.connect(self._view.viewport().update)
             self._pane.sizes.changed.connect(self._render_status)
+        if self._pane.clipboard is not None:
+            # The same repaint, for the same reason: a cut changes how a
+            # handful of rows are drawn and nothing about what they contain,
+            # and the rows it changes may well be in the other pane.
+            self._pane.clipboard.changed.connect(self._view.viewport().update)
         if self._pane.menu is not None:
             self._pane.menu.ready.connect(self._on_shell_items)
             self._pane.menu.unavailable.connect(self._on_shell_unavailable)
@@ -550,6 +570,10 @@ class PaneWidget(QFrame):
                 menu.addAction("Open in new tab\tCtrl+Enter",
                                lambda: self._open_row_in_tab(row, background=False))
             menu.addSeparator()
+            menu.addAction("Copy\tCtrl+C",
+                           lambda: self.clipboardRequested.emit("copy"))
+            menu.addAction("Cut\tCtrl+X",
+                           lambda: self.clipboardRequested.emit("cut"))
             menu.addAction("Copy to other pane\tF5",
                            lambda: self.transferRequested.emit("copy"))
             menu.addAction("Move to other pane\tF6",
@@ -559,6 +583,15 @@ class PaneWidget(QFrame):
             menu.addAction("Delete permanently\tShift+Del",
                            lambda: self.delete_selection(permanent=True))
             menu.addSeparator()
+        # Paste is offered whether or not a row was clicked: pasting into the
+        # empty part of a listing is how a folder with nothing in it gets its
+        # first file, and a menu that only offered it on top of an existing
+        # row would be missing it exactly then.
+        paste = menu.addAction("Paste\tCtrl+V",
+                               lambda: self.clipboardRequested.emit("paste"))
+        paste.setEnabled(self._pane.clipboard is not None
+                         and self._pane.clipboard.has_files())
+        menu.addSeparator()
         if on_row and self._pane.sizes is not None:
             counted = menu.addAction("Folder size\tSpace", self.measure_selection)
             counted.setToolTip("Walk what is under it and put the total in the "
@@ -711,6 +744,23 @@ class PaneWidget(QFrame):
         if self._path.hasFocus() or self._filter.hasFocus():
             super().keyPressEvent(event)
             return
+        # Ctrl+C, Ctrl+X and Ctrl+V, and only past the guard above -- the
+        # path bar and the filter box need all three to mean what they mean
+        # everywhere else, and a window shortcut would take them away. Shift
+        # is excluded because Ctrl+Shift+C is the copy-path key, which is a
+        # window shortcut and has to keep reaching it.
+        if event.modifiers() & Qt.ControlModifier and \
+                not event.modifiers() & Qt.ShiftModifier:
+            if key == Qt.Key_C:
+                self.clipboardRequested.emit("copy")
+                return
+            if key == Qt.Key_X:
+                self.clipboardRequested.emit("cut")
+                return
+            if key == Qt.Key_V:
+                self.clipboardRequested.emit("paste")
+                return
+
         shift = bool(event.modifiers() & Qt.ShiftModifier)
         if key == Qt.Key_F5:
             self.transferRequested.emit("copy")

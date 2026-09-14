@@ -576,23 +576,41 @@ def _items():
         MenuItem(id=4, kind=MENU_COMMAND, text="Rename", verb="rename"),
         MenuItem(id=5, kind=MENU_COMMAND, text="Delete", verb="delete"),
         MenuItem(id=0, kind=MENU_SEPARATOR),
+        MenuItem(id=6, kind=MENU_COMMAND, text="Copy as path", verb="copyaspath"),
     ]
 
 
 def test_the_shell_entries_this_pane_already_offers_are_dropped():
-    """Open, Rename and Delete are on the menu twice otherwise, in the shell's
-    words and in this application's, meaning the same thing.
+    """Open, Cut, Rename and Delete are on the menu twice otherwise, in the
+    shell's words and in this application's, meaning the same thing.
+
+    Cut joined the list in 0.15. Before that this application's Copy meant the
+    other pane and the shell's meant the clipboard -- two commands sharing a
+    word -- so dropping the shell's would have taken away the only clipboard
+    entry there was.
     """
     from app.ui.pane import SHELL_VERBS_WE_HAVE, _tidy
 
     kept = _tidy(_items(), drop_verbs=SHELL_VERBS_WE_HAVE)
     # The separator between them survives; the ones the drops left stranded do
-    # not. Cut stays: the clipboard is not something this pane offers.
+    # not. Copy as path stays: it is a different command with a similar name,
+    # and matching on the verb rather than the label is what tells them apart.
     assert [(item.kind, item.text) for item in kept] == [
         ("command", "7-Zip"),
         ("separator", ""),
-        ("command", "Cut"),
+        ("command", "Copy as path"),
     ]
+
+
+def test_the_shell_clipboard_verbs_are_dropped():
+    """The pane has its own three since 0.15, and the shell's Paste is not
+    merely a duplicate -- it copies the files in the menu host with no queue,
+    no progress and no cancel, which over a share is the wait this application
+    exists to escape arriving through its own context menu.
+    """
+    from app.ui.pane import SHELL_VERBS_WE_HAVE
+
+    assert {"cut", "copy", "paste"} <= SHELL_VERBS_WE_HAVE
 
 
 def test_the_gap_a_dropped_entry_leaves_is_closed_up():
@@ -617,7 +635,7 @@ def test_a_submenu_keeps_the_verbs_the_extension_chose():
 
     kept = _tidy(_items(), drop_verbs=frozenset())
     assert [item.text for item in kept if item.kind != "separator"] == [
-        "Open", "7-Zip", "Cut", "Rename", "Delete",
+        "Open", "7-Zip", "Cut", "Rename", "Delete", "Copy as path",
     ]
 
 

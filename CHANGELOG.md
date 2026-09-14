@@ -5,6 +5,106 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.15.0]
+
+Ctrl+C, Ctrl+X and Ctrl+V, talking to Explorer in both directions. Until now
+this application was the only window on the machine where those three keys did
+nothing, which made it feel like a separate thing rather than part of Windows.
+
+### Added
+- **Copy and cut put files on the Windows clipboard**, in the format Explorer
+  reads: the paths as `CF_HDROP`, and `Preferred DropEffect` saying whether it
+  was a copy or a cut. That second part is the whole difference between Ctrl+X
+  and Ctrl+C, and an application that leaves it out has a cut that quietly
+  copies -- which the user finds out about when the original is still there.
+
+  Nothing is put on as text. `Ctrl+Shift+C` is the key that copies a path as
+  text and it stays a separate gesture, because an application that quietly
+  does both surprises whatever is on the other end of the paste.
+- **Paste puts a job in the queue.** Ctrl+V in a folder copies or moves what is
+  on the clipboard into it, through the same queue a copy from F5 goes into --
+  so it reports as it goes, it can be held, paused and cancelled, and a paste
+  of 30,000 files over a share is a job rather than a frozen window.
+
+  There is no dialog. The destination is the folder the pane is standing in,
+  which is a person pointing at it; a prompt asking "into here?" after they
+  have already said where trains people to dismiss prompts. What is refused
+  instead is the paste that cannot be undone by looking at it:
+
+  - A folder pasted into itself, or into a folder inside it. That copy is a
+    walk that keeps finding what it has just written, and it ends when the
+    disk is full.
+  - A cut pasted back where it came from, which is nothing happening reported
+    as a move.
+  - An empty clipboard, which gets a word rather than a key that appears not
+    to have arrived.
+
+  A refusal is said on **the pane's own status line**, under the listing it is
+  about, in the same place and the same colour as any other thing that pane
+  declines to do. Copy and cut report themselves there too. Nothing goes to
+  the window's status bar: it is the far corner of the window from the pane
+  that was just right-clicked, and six seconds later it is gone, which reads
+  as a key that did nothing.
+
+  All of that is compared on the resolved path, because `S:\Jobs` and
+  `\\server\jobs` are one folder and a check that believed otherwise would let
+  a folder be pasted into itself through a drive letter.
+
+  A copy pasted into the folder it came from is not refused -- it is how a
+  duplicate is made -- and it goes in asking the queue to rename rather than
+  asking about every name it is about to collide with on purpose.
+- **A cut row is drawn faded**, in both panes and in every tab showing that
+  folder, the way Explorer draws one. The mark is a fact about the clipboard
+  rather than about a pane, and it is recomputed from whatever is on the
+  clipboard whenever it changes -- so a cut made in Explorer greys the row
+  here too, and a copy made anywhere takes the mark down.
+- **Copy, Cut and Paste in the File menu and in the right-click menu.** Paste
+  is offered on the empty part of a listing as well as on a row, because
+  pasting into an empty folder is exactly when there is no row to click.
+- `python tools/preview.py --cut` renders the window with a few rows marked
+  cut, which is the only way to see whether the fade is readable against the
+  rows around it in each theme.
+- `python tools/diagnose_clipboard.py` prints what is actually on the Windows
+  clipboard, with `CF_HDROP` and `Preferred DropEffect` decoded, and its
+  `--put` and `--put-cut` forms write the clipboard the way Explorer does --
+  by hand, through Windows rather than Qt -- so this application's reading can
+  be tested without Explorer in the way. Copy and paste between two programs
+  has three ways to fail that look identical from either end: the copy wrote
+  nothing, it wrote a format the other program does not read, or the data was
+  gone by the time the paste asked. This says which.
+
+### Changed
+- **The shell's Cut, Copy and Paste are no longer drawn in the right-click
+  menu.** The pane has its own three now, so the menu was offering each of
+  them twice. They were deliberately left in before 0.15, when this
+  application's Copy meant the other pane and the shell's meant the clipboard:
+  two commands that shared a word, and dropping the shell's would have taken
+  away the only clipboard entry there was.
+
+  Paste is the one worth stating plainly: it was not only a duplicate, it was
+  the wrong implementation. The shell's paste copies the files in the menu
+  host with no queue, no progress and no cancel -- which over a share is the
+  wait this application exists to escape, arriving through its own context
+  menu.
+
+  Matched on the shell's verb rather than the label, as the other four already
+  are, which is why `Copy as path` survives: a different command with a
+  similar name.
+- `TransferQueue.copy` and `.move` take a conflict rule, so a paste into the
+  folder the files came from can say "rename" rather than asking about every
+  name.
+
+### Notes
+- The three keys are handled by the pane rather than as window shortcuts, for
+  the reason the function keys are: a window shortcut on Ctrl+C would take
+  copy away from the path bar and the filter box, and there the cost is worse
+  than a lost keystroke -- it is a folder full of files pasted somewhere
+  because somebody meant to paste text into a field.
+- Explorer keeps its own rows greyed after this application has pasted its
+  cut. Telling it otherwise means reporting a `Performed DropEffect` back
+  through the data object, which is not something a clipboard read can do.
+  Refreshing the Explorer window clears it.
+
 ## [0.14.0]
 
 The queue stops being a copy queue and becomes the one place work is listed.

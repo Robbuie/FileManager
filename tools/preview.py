@@ -27,11 +27,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 def render(path: str, out: str, *, theme: str, accent: str, density: str,
            width: int, height: int, settle_ms: int, tabs: int = 1,
-           menu: bool = False, queue: bool = False) -> str:
+           menu: bool = False, queue: bool = False, cut: bool = False) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
     from app.core.bridge import Bridge
+    from app.core.clipboard import Clipboard
     from app.core.capacity import Capacity
     from app.core.config import Config
     from app.core.favorites import Favorites
@@ -80,11 +81,14 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     ])
     sizes = FolderSizes(bridge, config)
     siblings = Siblings(bridge, config)
+    clipboard = Clipboard()
     capacity = Capacity(bridge, config)
     window = MainWindow(
         config,
-        Pane(bridge, config, "left", icons, overlays, None, sizes, siblings),
-        Pane(bridge, config, "right", icons, overlays, None, sizes, siblings),
+        Pane(bridge, config, "left", icons, overlays, None, sizes, siblings,
+             clipboard=clipboard),
+        Pane(bridge, config, "right", icons, overlays, None, sizes, siblings,
+             clipboard=clipboard),
         volumes, TransferQueue(), None, Favorites(config), capacity)
     volumes.refresh()
     icons.start()
@@ -102,6 +106,11 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     # an empty table, which would look like a bug that is not there.
     QTimer.singleShot(settle_ms, app.quit)
     app.exec()
+
+    if cut:
+        _cut_some_rows(window, clipboard)
+        QTimer.singleShot(200, app.quit)
+        app.exec()
 
     if queue:
         panel = _show_queue(window)
@@ -132,6 +141,32 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     image.save(out)
     pool.shutdown()
     return out
+
+
+def _cut_some_rows(window, clipboard) -> None:
+    """Mark the first few rows of both panes as cut.
+
+    Put straight into the models rather than on the real clipboard, for
+    `_show_queue`'s reason: going through the clipboard would mean going
+    through `paths.parent`, which is Windows-shaped, so on any other machine
+    the picture would come back with nothing faded and look like the feature
+    was broken. What is being looked at is the fade -- too faint and the name
+    stops being readable on the dark themes, too strong and it does not read
+    as cut at all -- and that has nothing to do with where the names came from.
+    """
+    class Marked:
+        def __init__(self, names):
+            self._names = frozenset(names)
+
+        def cut_names(self, folder):  # noqa: ARG002 - one folder in a preview
+            return self._names
+
+    for pane in window._panes:  # noqa: SLF001 - a development tool, not the app
+        model = pane.current.model
+        names = [entry.name for entry in
+                 (model.entry(row) for row in range(min(model.rowCount(), 8)))
+                 if entry is not None][:3]
+        model.set_cut(Marked(names))
 
 
 def _show_queue(window):
@@ -201,8 +236,10 @@ def _show_menu(window) -> None:
 
     widget = window._widgets[0]  # noqa: SLF001 - a development tool, not the app
     items = [
-        # Two of these are dropped by the pane because it offers them itself,
-        # which is the point of drawing them here.
+        # Four of these are dropped by the pane because it offers them itself,
+        # which is the point of drawing them here. Paste is in the list for
+        # the same reason and is the one worth checking: the shell's paste has
+        # no queue behind it.
         MenuItem(id=8, text="Open", verb="open", default=True),
         MenuItem(id=1, text="Open with Code"),
         MenuItem(id=0, kind=MENU_SEPARATOR),
@@ -218,6 +255,8 @@ def _show_menu(window) -> None:
         MenuItem(id=0, kind=MENU_SEPARATOR),
         MenuItem(id=9, text="Cut", verb="cut"),
         MenuItem(id=10, text="Copy", verb="copy"),
+        MenuItem(id=12, text="Paste", verb="paste"),
+        MenuItem(id=13, text="Copy as path", verb="copyaspath"),
         MenuItem(id=11, text="Rename", verb="rename"),
         MenuItem(id=7, text="Properties", verb="properties"),
     ]
@@ -250,6 +289,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--menu", action="store_true",
                         help="open a context menu with invented shell entries, "
                              "to see how it draws")
+    parser.add_argument("--cut", action="store_true",
+                        help="put the first few rows on the clipboard as a cut, "
+                             "to see how faded they are against the rest")
     parser.add_argument("--all-themes", action="store_true",
                         help="one image per theme, to check the greys together")
     args = parser.parse_args(argv)
@@ -258,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         print(render(args.path, args.out, theme=args.theme, accent=args.accent,
                      density=args.density, width=args.width, height=args.height,
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
-                     queue=args.queue))
+                     queue=args.queue, cut=args.cut))
         return 0
 
     from app.theme.tokens import THEMES
@@ -268,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
         print(render(args.path, out, theme=name, accent=args.accent,
                      density=args.density, width=args.width, height=args.height,
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
-                     queue=args.queue))
+                     queue=args.queue, cut=args.cut))
     return 0
 
 

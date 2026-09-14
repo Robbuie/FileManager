@@ -209,6 +209,10 @@ class ListingModel(QAbstractTableModel):
     #: This file's size as a fraction of the largest file in the listing, or
     #: None for a folder and for a listing with nothing to scale against.
     SizeShareRole = Qt.UserRole + 4
+    #: Whether this row is on the clipboard as a cut, which the delegate draws
+    #: faded. A fact about the clipboard rather than about the listing, so it
+    #: is asked of a provider rather than stored on the entry.
+    CutRole = Qt.UserRole + 5
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -218,6 +222,7 @@ class ListingModel(QAbstractTableModel):
         self._overlays = None            # the same, for the badges on them
         self._file_icons = None          # and for the few files carrying one
         self._sizes = None               # recursive folder sizes, once asked for
+        self._cut = None                 # the clipboard, for the faded rows
         self._folder = ""                # what the per-path requests ask about
         self._has_parent = False
         self._sort_column = Column.NAME
@@ -261,6 +266,16 @@ class ListingModel(QAbstractTableModel):
         from what it already has.
         """
         self._file_icons = provider
+
+    def set_cut(self, provider) -> None:
+        """Where "this row was cut" comes from, or None to fade nothing.
+
+        A fourth provider, and the cheapest of them: `provider.cut_names(folder)`
+        answers with a set it already has, so a row costs a lookup. It is asked
+        per row for the same reason the others are -- the model does not know
+        when the clipboard changed, and the widget above it does.
+        """
+        self._cut = provider
 
     def set_sizes(self, provider) -> None:
         """Where a folder's recursive size comes from, or None for a model
@@ -540,6 +555,10 @@ class ListingModel(QAbstractTableModel):
             return entry.is_dir
         if role == self.EntryRole:
             return entry
+        if role == self.CutRole:
+            if self._cut is None or not self._folder:
+                return False
+            return entry.name in self._cut.cut_names(self._folder)
         if role == Qt.DecorationRole:
             # Only the name column: an icon in every column is four pictures
             # of the same file on one row.

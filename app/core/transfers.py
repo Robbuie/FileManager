@@ -165,11 +165,13 @@ class TransferQueue(QObject):
 
     # -------------------------------------------------------------- commands
 
-    def copy(self, sources: Iterable[str], destination: str) -> int:
-        return self._start(JobKind.COPY, sources, destination)
+    def copy(self, sources: Iterable[str], destination: str, *,
+             conflict: Conflict = Conflict.ASK) -> int:
+        return self._start(JobKind.COPY, sources, destination, conflict=conflict)
 
-    def move(self, sources: Iterable[str], destination: str) -> int:
-        return self._start(JobKind.MOVE, sources, destination)
+    def move(self, sources: Iterable[str], destination: str, *,
+             conflict: Conflict = Conflict.ASK) -> int:
+        return self._start(JobKind.MOVE, sources, destination, conflict=conflict)
 
     def recycle(self, sources: Iterable[str]) -> int:
         """To the Recycle Bin. No destination: the shell knows where that is."""
@@ -322,9 +324,19 @@ class TransferQueue(QObject):
             return
         self.order.insert(target, self.order.pop(index))
 
-    def _start(self, kind: JobKind, sources: Iterable[str], destination: str) -> int:
+    def _start(self, kind: JobKind, sources: Iterable[str], destination: str, *,
+               conflict: Conflict = Conflict.ASK) -> int:
+        """Start a job. `conflict` is the rule the process applies without
+        asking; `ASK` is the default and the only one that stops.
+
+        Carried here rather than left to the process's own default because of
+        one case: a copy pasted into the folder it came from collides with
+        every name, and asking about each of them is a dialog the user has
+        already answered by pressing Ctrl+V in that folder.
+        """
         sources = tuple(sources)
-        job_id = self._transfers.submit(kind, sources, destination)
+        job_id = self._transfers.submit(kind, sources, destination,
+                                        conflict=conflict)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
                                      sources=sources, files=len(sources),
                                      total=len(sources) if kind.removes else 0)

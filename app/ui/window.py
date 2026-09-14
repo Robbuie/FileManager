@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
                 lambda message: self.statusBar().showMessage(message, 8000))
         for widget in self._widgets:
             widget.transferRequested.connect(self._on_transfer_requested)
+            widget.clipboardRequested.connect(self._on_clipboard_requested)
             widget.addFavoriteRequested.connect(self._add_favorite)
             widget.manageFavoritesRequested.connect(self._manage_favorites)
         transfers.conflict.connect(self._on_conflict)
@@ -208,6 +209,19 @@ class MainWindow(QMainWindow):
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
+        files.addSeparator()
+        # Hints again, all three. Ctrl+C, Ctrl+X and Ctrl+V as window
+        # shortcuts would take copy, cut and paste away from the path bar and
+        # the filter box, which is the same failure Delete is kept off the
+        # window for -- and there the cost is only a lost keystroke, while
+        # here it is a paste of files into a folder because the user meant to
+        # paste text into a field.
+        self._hint(files, "Copy\tCtrl+C",
+                   lambda: self._on_clipboard_requested("copy"))
+        self._hint(files, "Cut\tCtrl+X",
+                   lambda: self._on_clipboard_requested("cut"))
+        self._hint(files, "Paste\tCtrl+V",
+                   lambda: self._on_clipboard_requested("paste"))
         files.addSeparator()
         self._action(files, "Queue", "Ctrl+J", self._show_queue)
         files.addSeparator()
@@ -735,6 +749,30 @@ class MainWindow(QMainWindow):
             self._transfers.copy(sources, destination)
         else:
             self._transfers.move(sources, destination)
+
+    def _on_clipboard_requested(self, what: str) -> None:
+        """Ctrl+C, Ctrl+X and Ctrl+V, in the pane that has the keyboard.
+
+        **The pane says what happened, not this window.** All three report on
+        the pane's own status line, which is under the listing they are about,
+        and none of them says anything here. The window's status bar was tried
+        first and was wrong twice over: a successful copy was announced in two
+        places at once, and a refused paste was announced only in the far
+        corner of the window from the pane that had just been right-clicked,
+        for six seconds. It read as a key that had done nothing.
+
+        None of the three puts a dialog up. A copy that did would be unusable,
+        and a paste already reports itself twice over without one -- as a job
+        in the queue, and again when the folder relists.
+        """
+        widget, pane = self._current_widget(), self._current_pane()
+        if what == "paste":
+            pane.paste()
+            return
+        names = widget.selected_names()
+        if not names:
+            return
+        pane.to_clipboard(names, cut=what == "cut")
 
     def _on_conflict(self, job_id: int, payload: dict) -> None:
         dialog = ConflictDialog(payload.get("name", ""), payload.get("source", {}),
