@@ -199,6 +199,17 @@ class Pane(QObject):
     def display(self, path: str | None = None) -> str:
         return paths.display(path or self.current.path, prefer_letter=not self.show_unc)
 
+    def resolved(self, path: str | None = None) -> str:
+        """The form real work keys on: `display`'s opposite number.
+
+        For a caller that has to act on the *volume* rather than draw it -- a
+        reconnect, which has to know which share the pane is standing in even
+        when the pane is showing a drive letter. It reads the same local
+        session table `display` already reads on this thread and touches no
+        server.
+        """
+        return paths.resolve(path or self.current.path)
+
     def set_show_unc(self, value: bool) -> None:
         self._config.set(f"{self._side}.show_unc", bool(value))
         self.pathChanged.emit(self.display())

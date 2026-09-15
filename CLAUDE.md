@@ -90,6 +90,7 @@ python -m app.io.harness run S:\Jobs compare --other D:\Archive --dry-run
 python -m app.io.harness run S:\Jobs terminal            # which program, and where
 python -m app.io.harness network                         # connections, letters or not
 python -m app.io.harness connect \\tsclient\C            # attach to a share again
+python -m app.io.harness space D:\scratch --need 8e9    # would a copy fit
 ```
 
 The transfer commands run the real engine: the queue, the scan, the conflict
@@ -310,7 +311,7 @@ F2   rename                F5   copy to the other pane
 F7   new folder            F6   move to the other pane
 F8   delete (Recycle Bin)  Del  the same; Shift+Del is permanent
 Ins  mark and move down    Tab  the other pane
-Ctrl+R  refresh            Ctrl+Shift+R  reconnect
+Ctrl+R  refresh            Ctrl+Shift+R  reconnect the share, then re-list
 Ctrl+F  filter             Ctrl+L  edit the path
 Ctrl+J  the job queue     Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
@@ -588,6 +589,28 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   row that took F5 would be a copy key that silently stopped copying, and
   nothing about pressing it once would say why. Adding a key to this
   application from now on means adding it to that set in the same commit.
+- **A path past 260 characters needs the `\\?\` prefix, and the shell refuses
+  that prefix.** Both halves are load-bearing. Without it the file calls fail
+  on a folder that is plainly there -- `os.scandir` says "The system cannot
+  find the path specified", so a length arrives disguised as a bug in whatever
+  reached it first. With it in the wrong place, `SHFileOperation`,
+  `SHGetFileInfo`, `IContextMenu`, `ShellExecuteEx` and the thumbnail provider
+  fail or come back empty, and a delete that silently did nothing is the worst
+  possible way to find that out. So `paths.api` is applied at the **file**
+  calls -- scandir, stat, open, mkdir, rename, remove, disk_usage -- and
+  nowhere else: never on the way to the shell, never on a worker key, never on
+  anything the window draws. It is idempotent, so a path built out of one that
+  has already been through it costs nothing to pass again.
+  `paths.EXTENDED_PATHS` is what makes the whole of it testable off Windows.
+- **A transfer that will not fit is refused before it starts, and the
+  arithmetic is deliberately naive.** The total is what would be written into
+  an empty folder: finding out which items merely overwrite something is one
+  `exists` per file, which on a share is the fifty thousand round trips the
+  listing path exists to avoid. So a copy onto files that are already there can
+  be refused on a total it would not really have needed -- the same false
+  positive Explorer has, for the same reason. The other half matters more: a
+  destination that **will not say** how much room it has proceeds. An unknown
+  is not a refusal.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
 - **`GetLogicalDrives` reports letters, and not everything reachable has one.**
@@ -631,8 +654,11 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    and a thumbnail grid (0.16), and the external commands with the pane
    compare beside them (0.17), and the listing's columns -- draggable,
    remembered, fitted to what is on screen (0.18), and the network locations
-   that have no drive letter (0.19). What is left before this replaces Double
-   Commander day to day: a transfer that outlives the window.
+   that have no drive letter (0.19), and the io-layer correctness pass -- long
+   paths, a copy refused before it starts when the destination has no room, and
+   Ctrl+Shift+R actually reattaching to the share (0.20). What is left before
+   this replaces Double Commander day to day: a transfer that outlives the
+   window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

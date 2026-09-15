@@ -27,6 +27,7 @@ from typing import Any, Iterable
 
 from PySide6.QtCore import QObject, Signal
 
+from app.core.listing import format_size
 from app.io import ops
 from app.io.protocol import Conflict, Event, JobKind, Progress
 
@@ -72,6 +73,12 @@ class JobState:
     failed: int = 0
     cancelled: bool = False
     held: bool = False
+    #: Why the job was turned away before anything moved -- today, the
+    #: destination not having room for it. Kept as its own field rather than
+    #: as one more line in `problems` because it is the *whole* outcome: the
+    #: status bar says this instead of "0 copied, 0 skipped", which is what a
+    #: refusal would otherwise read as.
+    refused: str = ""
     #: Whether pause, hold and cancel can reach this job *now*. A recycle is one
     #: shell call, so once it has started nothing can interrupt it, and a panel
     #: that offered the buttons anyway would be describing a queue that does not
@@ -403,6 +410,17 @@ class TransferQueue(QObject):
                 # own sources are what an elevated retry would be about.
                 job.denied.extend([name] if name
                                   else [os.path.basename(s) for s in job.sources])
+        elif event.kind is Progress.REFUSED:
+            # Written here rather than in the ops process because this is the
+            # side that knows how the application writes a size, and a sentence
+            # composed there would be a second answer to that question.
+            needed = int(event.payload.get("needed", 0))
+            free = int(event.payload.get("free", 0))
+            where = str(event.payload.get("destination", ""))
+            job.refused = (f"not enough room in {where}: "
+                           f"{format_size(needed)} to write, "
+                           f"{format_size(free)} free")
+            job.problems.append(job.refused)
         elif event.kind is Progress.DONE:
             job.state = "done"
             job.held = False

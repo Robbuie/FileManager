@@ -59,6 +59,7 @@ import os
 import time
 from typing import Any
 
+from app.io import paths
 from app.io.protocol import (
     FAMILY_IMAGE,
     FAMILY_PAGES,
@@ -132,7 +133,7 @@ def preview(path: str, *, box: int, deadline: float,
     because rung 5 cannot fail on a file that opens.
     """
     try:
-        size = os.path.getsize(path)
+        size = os.path.getsize(paths.api(path))
     except OSError as exc:
         return Preview(form=PreviewForm.NONE, note=_short(exc))
 
@@ -170,7 +171,7 @@ def thumbnail(path: str, size: int, *, deadline: float,
     time.
     """
     try:
-        if os.path.getsize(path) > MAX_THUMBNAIL_BYTES:
+        if os.path.getsize(paths.api(path)) > MAX_THUMBNAIL_BYTES:
             return None
     except OSError:
         return None
@@ -240,7 +241,7 @@ def _raw(path: str, size: int, box: int, deadline: float,
     avoid.
     """
     del text_bytes, page
-    with open(path, "rb") as handle:
+    with open(paths.api(path), "rb") as handle:
         head = handle.read(min(size, RAW_SCAN_BYTES))
     best: tuple[int, int] | None = None          # (length, start)
     at = head.find(JPEG_START)
@@ -423,7 +424,7 @@ def _bytes(path: str, size: int, box: int, deadline: float,
     """
     del box, deadline, page
     want = max(text_bytes, PREVIEW_HEX_BYTES)
-    with open(path, "rb") as handle:
+    with open(paths.api(path), "rb") as handle:
         head = handle.read(min(size, want) or PREVIEW_HEX_BYTES)
 
     encoding = _bom(head)

@@ -81,6 +81,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
+from app.io import paths
 from app.io.protocol import (
     CHUNK,
     PROGRESS_INTERVAL,
@@ -357,9 +358,18 @@ class Runner:
                 files = sum(1 for item in items if not item.is_dir)
                 self._emit(job.id, Progress.SCANNED,
                            {"files": files, "bytes": total_bytes})
-                self._transfer(job, items, totals, total_bytes)
-                if job.kind is JobKind.MOVE:
-                    self._prune(job, items, totals)
+                short = self._room_for(job, total_bytes)
+                if short is not None:
+                    needed, free = short
+                    totals.failed += files
+                    self._emit(job.id, Progress.REFUSED, {
+                        "destination": job.destination,
+                        "needed": needed, "free": free,
+                    })
+                else:
+                    self._transfer(job, items, totals, total_bytes)
+                    if job.kind is JobKind.MOVE:
+                        self._prune(job, items, totals)
         except _Cancelled:
             totals.cancelled = True
             self.cancelled.discard(job.id)
@@ -480,7 +490,7 @@ class Runner:
             if delay:
                 self._wait(job, delay)
             try:
-                os.remove(path)
+                os.remove(paths.api(path))
                 return
             except OSError as exc:
                 if isinstance(exc, PermissionError) and not cleared:
@@ -490,8 +500,8 @@ class Runner:
                     # nothing it was the second kind.
                     cleared = True
                     try:
-                        os.chmod(path, 0o600)
-                        os.remove(path)
+                        os.chmod(paths.api(path), 0o600)
+                        os.remove(paths.api(path))
                         return
                     except OSError:
                         pass
@@ -528,11 +538,11 @@ class Runner:
         for source in sources:
             self._checkpoint(job)
             target = os.path.join(job.destination, os.path.basename(source))
-            if os.path.exists(target):
+            if os.path.exists(paths.api(target)):
                 remaining.append(source)   # a conflict is decided in the copy path
                 continue
             try:
-                os.rename(source, target)
+                os.rename(paths.api(source), paths.api(target))
             except OSError:
                 # Cross-volume, in-use, or anything else: the copy path will
                 # attempt it properly and report what actually went wrong.
@@ -544,6 +554,9 @@ class Runner:
                 "done": totals.bytes, "total": totals.bytes,
             })
         return remaining
+
+    def _room_for(self, job: Job, needed: int) -> tuple[int, int] | None:
+        return room_for(job.destination, needed)
 
     def _scan(self, job: Job, sources: Iterable[str], *,
               destination: str | None = None):
@@ -567,12 +580,13 @@ class Runner:
             self._checkpoint(job)
             target = os.path.join(destination, os.path.basename(source)) if destination else ""
             try:
-                if os.path.isdir(source) and not os.path.islink(source):
+                if (os.path.isdir(paths.api(source))
+                        and not os.path.islink(paths.api(source))):
                     items.append(Item(source, target, is_dir=True))
                     self._walk(job, source, target, items, unreadable)
                 else:
                     items.append(Item(source, target,
-                                      size=os.path.getsize(source)))
+                                      size=os.path.getsize(paths.api(source))))
             except OSError as exc:
                 unreadable.append((source, _describe(exc)))
         return items, unreadable
@@ -580,7 +594,7 @@ class Runner:
     def _walk(self, job: Job, source: str, target: str, items: list[Item],
               unreadable: list[tuple[str, str]]) -> None:
         try:
-            scanner = os.scandir(source)
+            scanner = os.scandir(paths.api(source))
         except OSError as exc:
             unreadable.append((source, _describe(exc)))
             return
@@ -604,7 +618,7 @@ class Runner:
             self._checkpoint(job)
             if item.is_dir:
                 try:
-                    os.makedirs(item.target, exist_ok=True)
+                    os.makedirs(paths.api(item.target), exist_ok=True)
                 except OSError as exc:
                     totals.failed += 1
                     self._emit(job.id, Progress.FAILED_ITEM,
@@ -613,7 +627,7 @@ class Runner:
                 continue
 
             target = item.target
-            if os.path.exists(target):
+            if os.path.exists(paths.api(target)):
                 action = self._decide(job, item)
                 if action is Conflict.SKIP:
                     totals.skipped += 1
@@ -681,7 +695,8 @@ class Runner:
         done_before = totals.bytes
         partial = _partial_name(target)
         try:
-            with open(item.source, "rb") as source, open(partial, "wb") as sink:
+            with (open(paths.api(item.source), "rb") as source,
+                  open(paths.api(partial), "wb") as sink):
                 while True:
                     self._checkpoint(job)
                     chunk = source.read(CHUNK)
@@ -691,8 +706,8 @@ class Runner:
                     totals.bytes += len(chunk)
                     self._tick(job, name, totals.bytes - done_before, item.size,
                                totals.bytes, total_bytes)
-            shutil.copystat(item.source, partial)
-            os.replace(partial, target)
+            shutil.copystat(paths.api(item.source), paths.api(partial))
+            os.replace(paths.api(partial), paths.api(target))
         except BaseException:
             _discard(partial)
             raise
@@ -708,10 +723,10 @@ class Runner:
         file manager that cannot be apologised for.
         """
         try:
-            if os.path.getsize(written) != item.size:
+            if os.path.getsize(paths.api(written)) != item.size:
                 raise OSError(f"{os.path.basename(written)} is not the "
                               f"size it should be; the original was kept")
-            os.remove(item.source)
+            os.remove(paths.api(item.source))
         except OSError as exc:
             totals.failed += 1
             self._emit(job.id, Progress.FAILED_ITEM,
@@ -728,7 +743,7 @@ class Runner:
         for item in sorted((i for i in items if i.is_dir),
                            key=lambda i: len(i.source), reverse=True):
             try:
-                os.rmdir(item.source)
+                os.rmdir(paths.api(item.source))
             except OSError:
                 pass  # not empty, and that is information rather than a fault
 
@@ -745,7 +760,8 @@ class Runner:
             rule = self._ask(job, item)
         if rule is Conflict.NEWER:
             try:
-                newer = os.path.getmtime(item.source) > os.path.getmtime(item.target)
+                newer = (os.path.getmtime(paths.api(item.source))
+                         > os.path.getmtime(paths.api(item.target)))
             except OSError:
                 newer = True
             return Conflict.OVERWRITE if newer else Conflict.SKIP
@@ -924,6 +940,38 @@ class Transfers:
 # --------------------------------------------------------------------------
 
 
+def room_for(destination: str, needed: int) -> tuple[int, int] | None:
+    """`(needed, free)` when the destination cannot hold that many bytes, else
+    None.
+
+    The totals are known the moment the scan ends and the destination is one
+    call away from saying how much room it has, so the cheap thing is to ask
+    here: a refusal before anything is written leaves nothing half-done,
+    nothing to clean up afterwards, and a number somebody can act on -- rather
+    than a failure at ninety per cent with the folder already half full and no
+    obvious way to tell what landed.
+
+    Two imprecisions, both deliberate. A file that overwrites another frees
+    what it replaces, and this does not know which items will: finding out is
+    one `exists` per file, which on a share is the fifty thousand round trips
+    the listing path exists to avoid. So the total is what would be written
+    into an empty folder -- the arithmetic Explorer does, and it can refuse a
+    copy that would in fact have fitted. And a destination that will not say
+    how much room it has **proceeds**: an unknown is not a refusal, and a
+    share that reports nothing is not a share with nothing left on it.
+
+    A module function rather than a method because the harness asks the same
+    question, and a second copy of this comparison would be a second answer.
+    """
+    if needed <= 0 or not destination:
+        return None
+    try:
+        free = shutil.disk_usage(paths.api(destination)).free
+    except (OSError, ValueError):
+        return None
+    return None if free >= needed else (needed, int(free))
+
+
 def _unique(target: str) -> str:
     """`report.pdf` -> `report (2).pdf`, the way Windows names a second copy.
 
@@ -938,7 +986,7 @@ def _unique(target: str) -> str:
     while True:
         candidate = f"{stem} ({index})" + (f".{suffix}" if suffix else "")
         full = os.path.join(folder, candidate)
-        if not os.path.exists(full):
+        if not os.path.exists(paths.api(full)):
             return full
         index += 1
 
@@ -953,7 +1001,7 @@ PARTIAL_SUFFIX = ".fm-part"
 def _partial_name(target: str) -> str:
     candidate = target + PARTIAL_SUFFIX
     index = 2
-    while os.path.exists(candidate):
+    while os.path.exists(paths.api(candidate)):
         candidate = f"{target}{PARTIAL_SUFFIX}{index}"
         index += 1
     return candidate
@@ -964,7 +1012,7 @@ def _discard(path: str) -> None:
     it could not remove is one nothing refers to.
     """
     try:
-        os.remove(path)
+        os.remove(paths.api(path))
     except OSError:
         pass
 
@@ -997,7 +1045,7 @@ def _worth_retrying(exc: OSError) -> bool:
 def _describe_file(path: str) -> dict:
     """Enough about a file to choose between two of them."""
     try:
-        stat = os.stat(path)
+        stat = os.stat(paths.api(path))
     except OSError:
         return {"path": path, "size": None, "mtime": None}
     return {"path": path, "size": stat.st_size, "mtime": stat.st_mtime}

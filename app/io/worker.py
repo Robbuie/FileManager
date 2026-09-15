@@ -214,7 +214,7 @@ def _list(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
     seen = 0
 
     try:
-        scanner = os.scandir(request.path)
+        scanner = os.scandir(paths.api(request.path))
     except OSError as exc:
         outbox.put(_failure(request, exc))
         return
@@ -270,7 +270,7 @@ def _folders(request: Request, outbox: Any, control: Any, cancelled: set[int]) -
     more = False
 
     try:
-        scanner = os.scandir(request.path)
+        scanner = os.scandir(paths.api(request.path))
     except OSError as exc:
         outbox.put(_failure(request, exc))
         return
@@ -339,17 +339,17 @@ def _row(entry: os.DirEntry) -> Entry | None:
 
 def _stat(request: Request, outbox: Any) -> None:
     try:
-        stat = os.stat(request.path, follow_symlinks=False)
+        stat = os.stat(paths.api(request.path), follow_symlinks=False)
     except OSError as exc:
         outbox.put(_failure(request, exc))
         return
     outbox.put(Reply(request.id, Status.OK, payload=Entry(
         name=os.path.basename(request.path.rstrip("\\")) or request.path,
-        is_dir=os.path.isdir(request.path),
+        is_dir=os.path.isdir(paths.api(request.path)),
         size=stat.st_size,
         mtime=stat.st_mtime,
         attributes=getattr(stat, "st_file_attributes", 0),
-        is_link=os.path.islink(request.path),
+        is_link=os.path.islink(paths.api(request.path)),
     )))
 
 
@@ -367,7 +367,7 @@ def _dir_size(request: Request, outbox: Any, control: Any, cancelled: set[int]) 
     while stack:
         current = stack.pop()
         try:
-            scanner = os.scandir(current)
+            scanner = os.scandir(paths.api(current))
         except OSError as exc:
             if current == request.path:
                 outbox.put(_failure(request, exc))
@@ -694,7 +694,7 @@ def _drives(request: Request, outbox: Any) -> None:
 
 def _free_space(request: Request, outbox: Any) -> None:
     try:
-        usage = shutil.disk_usage(request.path)
+        usage = shutil.disk_usage(paths.api(request.path))
     except (OSError, ValueError) as exc:
         outbox.put(_failure(request, exc if isinstance(exc, OSError) else OSError(str(exc))))
         return
@@ -876,7 +876,7 @@ def _preview(request: Request, outbox: Any) -> None:
     deadline = time.monotonic() + request.timeout
 
     try:
-        size = os.path.getsize(request.path)
+        size = os.path.getsize(paths.api(request.path))
     except OSError as exc:
         outbox.put(_failure(request, exc))
         return
@@ -1261,7 +1261,7 @@ def _mkdir(request: Request, outbox: Any) -> None:
     quietly build the two folders it implies.
     """
     try:
-        os.mkdir(request.path)
+        os.mkdir(paths.api(request.path))
     except OSError as exc:
         outbox.put(_failure(request, exc))
         return
@@ -1283,12 +1283,12 @@ def _rename(request: Request, outbox: Any) -> None:
         return
     target = os.path.join(os.path.dirname(request.path), name)
     if (os.path.normcase(target) != os.path.normcase(request.path)
-            and os.path.exists(target)):
+            and os.path.exists(paths.api(target))):
         outbox.put(Reply(request.id, Status.ERROR,
                          message=f"{name} already exists in this folder"))
         return
     try:
-        os.rename(request.path, target)
+        os.rename(paths.api(request.path), paths.api(target))
     except OSError as exc:
         outbox.put(_failure(request, exc))
         return
@@ -1339,10 +1339,11 @@ def _delete(request: Request, outbox: Any) -> None:
     removed = 0
     for target in targets:
         try:
-            if os.path.isdir(target) and not os.path.islink(target):
-                shutil.rmtree(target)
+            if (os.path.isdir(paths.api(target))
+                    and not os.path.islink(paths.api(target))):
+                shutil.rmtree(paths.api(target))
             else:
-                os.remove(target)
+                os.remove(paths.api(target))
         except OSError as exc:
             outbox.put(Reply(request.id, _status_for(exc), payload={"deleted": removed},
                              message=f"{os.path.basename(target)}: {_describe(exc)}"))

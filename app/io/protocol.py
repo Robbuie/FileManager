@@ -558,6 +558,15 @@ class Progress(str, Enum):
     CONFLICT = "conflict"    # a question; the job waits for an Answer
     FAILED_ITEM = "item"     # one item failed; the job carries on
 
+    #: The job was refused before anything was written, because the
+    #: destination does not have room for it: {"destination", "needed",
+    #: "free"}, in bytes. A DONE follows as it does for every other ending, so
+    #: nothing downstream needs a second way for a job to finish -- and the
+    #: numbers are carried raw rather than as a sentence, because the side
+    #: that draws them is the side that already knows how this application
+    #: writes a size.
+    REFUSED = "refused"
+
     #: The queue as a whole stopped and started. Carried on job 0, because they
     #: are about the queue rather than about any job in it.
     PAUSED = "paused"

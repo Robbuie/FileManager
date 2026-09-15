@@ -5,6 +5,70 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.20.0]
+
+The io layer, made honest about three things it was quietly wrong about. No new
+surface to speak of -- one keystroke behaves differently and one refusal is new
+-- and all three are cheaper to do now than after archives puts a virtual path
+layer on top of the same code.
+
+### Added
+- **Long paths.** Windows' file calls stop at 260 characters unless a path
+  carries the `\\?\` prefix, and nothing in this application used it. A folder
+  tree on a share goes past that without anybody trying -- a job number, a
+  discipline, a revision and a drawing name is most of it before the file is
+  named -- and what makes it worth a release rather than a note is *how* it
+  failed: `os.scandir` answers a folder that is plainly there with "The system
+  cannot find the path specified", so the length arrived disguised as a bug in
+  whichever feature reached it first.
+
+  Every real filesystem call in `app/io` goes through `paths.api` now: the
+  listing, the sizes, the previews, and the whole copy, move and delete engine.
+  The prefix reaches the file calls and nothing else. **The shell does not take
+  it** -- `SHFileOperation`, `SHGetFileInfo`, `IContextMenu`, `ShellExecuteEx`
+  and the thumbnail provider all answer a prefixed path with a failure or with
+  nothing -- so the Recycle Bin, the context menu and the icons still get the
+  plain path, and so does the path bar: `\\?\UNC\server\share` is not something
+  anybody can type back.
+- **A copy is refused before it starts when the destination has no room for
+  it.** The queue knows the byte total the moment its scan ends and the volume
+  is one call away from saying how much room it has, so it asks then: nothing
+  half-written, nothing to clean up, and a number to act on instead of a
+  failure at ninety per cent with the folder already half full. The status line
+  says what was needed and what was free.
+
+  A destination that will not say how much room it has **proceeds**. An unknown
+  is not a refusal, and a share that reports nothing is not a share with
+  nothing left on it.
+- **`harness space`**, which asks the same question the queue asks, through the
+  same function: what a volume has left, and with `--need` the verdict a
+  transfer of that size would get before one is started.
+- **`harness resolve` now prints the form a file call gets**, and the path's
+  length, and says when it is past the limit.
+
+### Changed
+- **Ctrl+Shift+R reconnects the share, then re-lists.** It used to restart the
+  volume's worker and ask for the listing again, which is the right answer for
+  a worker that wedged and the wrong one for a session that has died: the
+  worker was never the problem, and the second listing fails exactly as the
+  first one did. It attaches to the share first now, and the listing follows on
+  its own -- the same operation the rail's Reconnect performs, rather than a
+  second one that looks similar.
+
+  The *share* is what is reconnected, not the folder the pane is standing in:
+  Windows attaches to `\\server\share` and knows nothing about what is
+  underneath it. And it works from the pane's resolved path, so a pane showing
+  `S:\Jobs` is recognised as standing in the share that letter is mapped to. A
+  local pane keeps the old behaviour, which is still right for a disk that
+  stopped answering.
+
+### Fixed
+- **A reconnected share re-lists a pane that is showing a drive letter.** The
+  rail's Reconnect matched panes against the path it had just reconnected, so a
+  pane displaying `S:\Jobs` was never recognised as being in
+  `\\dc01\projects` -- and sat on its error message after the reconnect that
+  should have cleared it.
+
 ## [0.19.0]
 
 Network locations that have no drive letter -- which, it turns out, is most of

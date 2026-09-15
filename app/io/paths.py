@@ -158,6 +158,94 @@ def drive_letter(path: str) -> str | None:
     return match.group(1) + ":" if match else None
 
 
+def share_root(path: str) -> str | None:
+    r"""`\\server\share` for anything on a share, else None.
+
+    What a reconnect is attempted against. Windows attaches to a *share*, not
+    to a folder inside one, so the answer for `\\server\share\jobs\1234` is the
+    share above it. Resolution is the caller's job: a drive letter has to be
+    resolved first or a path that is on a share after all answers None here.
+    """
+    parts = split_unc(path)
+    if parts is None:
+        return None
+    return "\\\\" + parts[0] + "\\" + parts[1]
+
+
+# --------------------------------------------------------------------------
+# The extended-length form.
+#
+# Windows' file calls stop at 260 characters unless a path carries the `\\?\`
+# prefix, and a folder tree on a share goes past that without anybody trying --
+# a job number, a discipline, a revision and a drawing name is most of it
+# before the file is named. What makes it worth handling rather than ignoring
+# is how it fails: `os.scandir` answers a folder that is plainly there with
+# "The system cannot find the path specified", so it arrives looking like a bug
+# in whichever feature reached it first rather than like a length.
+#
+# Two properties of the prefix decide where it may be used.
+#
+# It turns path normalization *off*: the string goes to the filesystem as it
+# stands, so it has to be fully qualified and already tidy. `normalize` is what
+# makes that true here, which is why this is built on it rather than on
+# whatever was typed.
+#
+# And **the shell does not take it**. `SHFileOperation`, `SHGetFileInfo`,
+# `IContextMenu`, `ShellExecuteEx` and `IShellItemImageFactory` answer a
+# prefixed path with a failure or with nothing. So the prefix belongs at the
+# file calls -- scandir, stat, open, mkdir, rename, remove -- and nowhere else.
+# It never reaches the shell, never reaches a worker key, and never reaches the
+# window: a path bar reading `\\?\UNC\server\share` would be showing somebody
+# an implementation detail they cannot type back.
+# --------------------------------------------------------------------------
+
+#: The limit the prefix exists to get past.
+MAX_PATH = 260
+
+#: Whether a file call gets the prefixed form. Off anywhere but Windows, which
+#: is the only place the prefix is understood and the only place the limit
+#: exists -- and a module flag rather than an `os.name` test at each call site,
+#: so a test can turn it on and read what the io layer would have sent.
+EXTENDED_PATHS = os.name == "nt"
+
+_EXTENDED_PREFIX = "\\\\?\\"
+_DEVICE_PREFIX = "\\\\.\\"
+
+
+def extended(path: str) -> str:
+    r"""The `\\?\` spelling of a path, on any platform.
+
+    Pure string work and it always rewrites; `api` below is what decides
+    whether a call actually gets it. Anything the prefix would be wrong for is
+    returned unchanged rather than guessed at: a path that already carries it,
+    a device path, and anything not fully qualified -- the prefix means "do not
+    work out what this is relative to", and a relative path under it is simply
+    not found.
+    """
+    if not path:
+        return path
+    text = normalize(path)
+    if text.startswith(_EXTENDED_PREFIX) or text.startswith(_DEVICE_PREFIX):
+        return text
+    if split_unc(text) is not None:
+        return _EXTENDED_PREFIX + "UNC\\" + text[2:]
+    if _DRIVE_RE.match(text) and text[2:3] == "\\":
+        return _EXTENDED_PREFIX + text
+    return text
+
+
+def api(path: str) -> str:
+    r"""What to hand a Win32 file call: the extended form where Windows is
+    listening, the path itself otherwise.
+
+    Every real filesystem call in `app/io` goes through this, and every call
+    that goes to the *shell* deliberately does not. It is idempotent, so a
+    path built from one that has already been through it -- `entry.path` from a
+    scan, a target joined onto a folder -- costs nothing to pass again.
+    """
+    return extended(path) if EXTENDED_PATHS else path
+
+
 # --------------------------------------------------------------------------
 # The letter -> UNC table.
 #

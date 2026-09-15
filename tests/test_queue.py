@@ -568,3 +568,19 @@ def test_a_finished_job_stays_in_the_list_until_it_is_cleared(panel):
     assert rows_in(dialog) == [job_id]
     mirror.forget_finished()
     assert rows_in(dialog) == []
+
+
+def test_a_refusal_becomes_the_whole_outcome(mirror):
+    """The numbers cross the process boundary raw and the sentence is written
+    here, because this is the side that already knows how the application
+    writes a size. And it is the job's outcome rather than one more line in
+    its problems: "0 copied, 0 skipped" is what a refusal would otherwise read
+    as in the status bar."""
+    job = mirror.copy([r"C:\work\big"], r"D:\small")
+    mirror._deliver(Event(job=job, kind=Progress.REFUSED, payload={
+        "destination": r"D:\small", "needed": 8 * 1024 ** 3, "free": 512 * 1024 ** 2,
+    }))
+    state = mirror.jobs[job]
+    assert "not enough room" in state.refused
+    assert "8.0 G" in state.refused and "512.0 M" in state.refused
+    assert state.problems == [state.refused]

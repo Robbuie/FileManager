@@ -25,7 +25,7 @@ from app.core import commands as core_commands
 from app.core import compare as core_compare
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
-from app.io import elevate
+from app.io import elevate, paths
 from app.io.protocol import THUMB_SIZES, JobKind, Op
 from app.theme import sheet
 from app.theme.tokens import (
@@ -52,6 +52,10 @@ def _outcome(job) -> str:
     """
     where = job.destination or (os.path.dirname(job.sources[0]) if job.sources else "")
     verb = "removed" if job.kind.removes else "copied"
+    if job.refused:
+        # Its own sentence, and it already names the destination -- putting
+        # `where` in front of it would say the folder twice.
+        return job.refused
     if job.cancelled:
         summary = f"cancelled after {job.copied:,} item(s)"
     elif job.failed:
@@ -392,7 +396,7 @@ class MainWindow(QMainWindow):
         self._action(go, "Back", "Alt+Left", lambda: self._current_pane().go_back())
         self._action(go, "Forward", "Alt+Right", lambda: self._current_pane().go_forward())
         self._action(go, "Refresh", "Ctrl+R", lambda: self._current_pane().refresh())
-        self._action(go, "Reconnect", "Ctrl+Shift+R", lambda: self._current_pane().retry())
+        self._action(go, "Reconnect", "Ctrl+Shift+R", self._reconnect_pane)
         go.addSeparator()
         self._action(go, "Edit path", "Ctrl+L", lambda: self._current_widget().focus_path())
         self._action(go, "Other pane", "Tab", self._switch_pane)
@@ -638,6 +642,33 @@ class MainWindow(QMainWindow):
         if self._network is not None:
             self._network.remove(path)
 
+    def _reconnect_pane(self) -> None:
+        r"""Ctrl+Shift+R, and what it means depends on where the pane is.
+
+        What this used to do was restart the volume's worker and ask for the
+        listing again. That is the right answer for a worker that wedged and
+        the wrong one for a session that has gone: the worker was never the
+        problem, and the second listing fails exactly as the first one did.
+        A share is reattached first now, and the listing follows on its own --
+        `_on_reconnected` retries every pane standing in it, which is also what
+        makes the rail's Reconnect and this key the same operation rather than
+        two.
+
+        The *share* is what gets reconnected, not the folder: Windows attaches
+        to `\\server\share` and the folder inside it is only where the pane
+        happens to be standing. And the pane's resolved path is what is asked,
+        so this works identically on `S:\Jobs` and on the UNC it is mapped to.
+
+        A local path has nothing to reconnect to and keeps the old behaviour,
+        which is still the right one for a disk that stopped answering.
+        """
+        pane = self._current_pane()
+        share = paths.share_root(pane.resolved())
+        if share and self._network is not None:
+            self._reconnect(share)
+            return
+        pane.retry()
+
     def _reconnect(self, path: str) -> None:
         if self._network is None:
             return
@@ -657,8 +688,11 @@ class MainWindow(QMainWindow):
             return
         self.statusBar().showMessage(f"{path} is connected", 6000)
         # The pane on it, if there is one, can stop saying it is not there.
+        # Against the *resolved* path: a pane showing `S:\Jobs` is standing in
+        # the share that was just reconnected, and comparing what it displays
+        # would leave exactly that pane sitting on its error.
         for pane in self._panes:
-            if pane.current.path.lower().startswith(path.lower()):
+            if pane.resolved().lower().startswith(path.lower()):
                 pane.retry()
 
     def _sync_rail_mark(self, *_ignored) -> None:

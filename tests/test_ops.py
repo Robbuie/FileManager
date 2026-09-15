@@ -252,3 +252,83 @@ def test_the_second_copy_of_a_name_is_numbered(tmp_path):
 
     (tmp_path / "README").write_text("x")
     assert os.path.basename(_unique(str(tmp_path / "README"))) == "README (2)"
+
+
+# --------------------------------------------------------------------------
+# Room at the destination, asked before anything is written.
+# --------------------------------------------------------------------------
+
+
+def _runner(events):
+    return Runner(Inbox(), events)
+
+
+def test_a_job_too_big_for_the_destination_is_refused_before_it_starts(
+        pair, monkeypatch):
+    """The whole point of asking early: nothing is written, nothing has to be
+    cleaned up afterwards, and the answer names a number somebody can act on
+    instead of a failure at ninety per cent."""
+    import shutil as shutil_module
+
+    source, destination = pair
+    monkeypatch.setattr(shutil_module, "disk_usage",
+                        lambda _p: _Usage(total=1000, used=999, free=1))
+
+    events: "queue.Queue[Event]" = queue.Queue()
+    runner = _runner(events)
+    from app.io.protocol import Job
+
+    runner._move_or_copy(Job(id=1, kind=JobKind.COPY, sources=(str(source),),
+                             destination=str(destination),
+                             conflict=Conflict.SKIP))
+
+    kinds = []
+    while not events.empty():
+        kinds.append(events.get_nowait())
+    refusals = [e for e in kinds if e.kind is Progress.REFUSED]
+    assert refusals, "the job started anyway"
+    assert refusals[0].payload["free"] == 1
+    assert refusals[0].payload["needed"] > 1
+    assert kinds[-1].kind is Progress.DONE
+    assert tree(destination) == {}, "a refused job wrote something"
+
+
+def test_a_destination_that_will_not_say_is_allowed_to_proceed(pair, monkeypatch):
+    """An unknown is not a refusal. A share that reports nothing about its
+    free space is not a share with nothing left on it, and a copy blocked on
+    that would be this application inventing a reason to say no."""
+    import shutil as shutil_module
+
+    source, destination = pair
+
+    def refuse(_path):
+        raise OSError("this volume does not answer that")
+
+    monkeypatch.setattr(shutil_module, "disk_usage", refuse)
+    events: "queue.Queue[Event]" = queue.Queue()
+    runner = _runner(events)
+    from app.io.protocol import Job
+
+    runner._move_or_copy(Job(id=2, kind=JobKind.COPY, sources=(str(source),),
+                             destination=str(destination),
+                             conflict=Conflict.SKIP))
+    assert tree(destination), "the copy was refused on an unknown"
+
+
+def test_room_is_only_asked_about_when_there_is_something_to_write(tmp_path):
+    """A delete has no destination and an empty scan has nothing to write, and
+    neither should cost a call against the volume."""
+    runner = _runner(queue.Queue())
+    from app.io.protocol import Job
+
+    job = Job(id=3, kind=JobKind.COPY, sources=(), destination=str(tmp_path))
+    assert runner._room_for(job, 0) is None
+    assert runner._room_for(Job(id=4, kind=JobKind.ERASE, sources=(),
+                                destination=""), 500) is None
+
+
+class _Usage:
+    """What `shutil.disk_usage` answers with, as much of it as is read."""
+
+    def __init__(self, total, used, free):
+        self.total, self.used, self.free = total, used, free

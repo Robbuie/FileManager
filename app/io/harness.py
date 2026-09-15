@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import argparse
 import queue
+import shutil
 import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.io import elevate, paths
+from app.io import elevate, ops, paths
 from app.io.pool import WorkerPool
 from app.io.protocol import (
     MENU_SEPARATOR,
@@ -179,7 +180,40 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     _report("volume", paths.volume_key(args.path))
     _report("as letter", paths.display(args.path, prefer_letter=True))
     _report("as unc", paths.display(args.path, prefer_letter=False))
+    resolved = paths.resolve(args.path)
+    _report("file call", paths.api(resolved))
+    _report("length", f"{len(resolved)} characters"
+                      + (f" -- past {paths.MAX_PATH}, so the prefix is what "
+                         f"makes it reachable" if len(resolved) >= paths.MAX_PATH
+                         else ""))
     return 0
+
+
+def cmd_space(args: argparse.Namespace) -> int:
+    """Whether a transfer of a given size would be refused, before running one.
+
+    The same call the queue makes, through the same function, so what this
+    prints is what a copy would decide -- which is the only reason it is worth
+    printing.
+    """
+    try:
+        usage = shutil.disk_usage(paths.api(paths.resolve(args.path)))
+    except (OSError, ValueError) as exc:
+        print(f"{args.path}: {exc}")
+        print("An unknown is not a refusal: a transfer here would proceed.")
+        return 1
+    _report("total", f"{usage.total:,} bytes")
+    _report("used", f"{usage.used:,} bytes")
+    _report("free", f"{usage.free:,} bytes")
+    if not args.need:
+        return 0
+    short = ops.room_for(paths.resolve(args.path), args.need)
+    if short is None:
+        _report("verdict", f"{args.need:,} bytes would be written")
+        return 0
+    needed, free = short
+    _report("verdict", f"refused: {needed:,} bytes to write, {free:,} free")
+    return 1
 
 
 def cmd_drives(args: argparse.Namespace) -> int:
@@ -1114,6 +1148,14 @@ def build_parser() -> argparse.ArgumentParser:
     resolve = sub.add_parser("resolve", help="show how a path is resolved and keyed")
     resolve.add_argument("path")
     resolve.set_defaults(func=cmd_resolve)
+
+    space = sub.add_parser(
+        "space", help="what a volume has left, and whether a transfer would fit")
+    space.add_argument("path", help="the destination folder")
+    space.add_argument("--need", type=int, default=0, metavar="BYTES",
+                       help="bytes a job would write; prints the verdict the "
+                            "queue would reach before starting one")
+    space.set_defaults(func=cmd_space)
 
     drives = sub.add_parser("drives", help="enumerate drive letters without probing them")
     drives.add_argument("--refresh", action="store_true",
