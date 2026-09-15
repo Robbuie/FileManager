@@ -64,6 +64,12 @@ nothing on a share, and what it leaves behind is a selection that F5 copies.
   seconds). Both editable in the settings file for anybody who wants to.
 
 ### Fixed
+- **The side buttons on the mouse walk the history**, back and forward, in the
+  tab of whichever pane the pointer is over -- including the inactive one,
+  which becomes active as it goes. They did nothing before: the history behind
+  Alt+Left has always been there, but no widget in Qt answers those buttons by
+  itself and nothing here was listening, so Windows delivered them and they
+  were dropped. Reported from the window while using 0.17.
 - The test suite could segfault inside `QApplication.processEvents()` when the
   garbage collector happened to destroy a Qt object with a running timer at the
   wrong moment. Collected between tests instead. Nothing in the application

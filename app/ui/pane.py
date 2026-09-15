@@ -106,6 +106,17 @@ def _leaf(path: str) -> str:
     return path
 
 
+#: The two buttons on the side of a mouse, and what they mean here. Every
+#: browser and Explorer itself answer them with back and forward, so a file
+#: manager that ignores them is one where the thumb does nothing -- which reads
+#: as the application being unfinished rather than as a missing feature.
+#:
+#: Qt names them `BackButton` and `ForwardButton`; Windows calls them XBUTTON1
+#: and XBUTTON2. They arrive as ordinary mouse events and no widget in Qt does
+#: anything with them by default.
+HISTORY_BUTTONS = {Qt.BackButton: -1, Qt.ForwardButton: 1}
+
+
 def shortcut_text(event) -> str:
     """What key was pressed, spelled the way the command table spells it.
 
@@ -675,6 +686,51 @@ class PaneWidget(QFrame):
         the drive picker. Each of those says so here instead.
         """
         self.activated.emit(self)
+
+    def _history_button(self, button) -> bool:
+        """Back or forward for the side buttons, or False for anything else.
+
+        Claims the pane first, and that is the whole reason this is not a
+        window-level shortcut. The buttons are pressed with the pointer over a
+        pane, and the pane under the pointer is the one whose history the
+        person means -- including when it is the *inactive* one, which the
+        window cannot otherwise learn about, because a side button does not
+        move the focus the way a click on a row does.
+
+        The history is the tab's own, so this walks the tab in front of that
+        pane and no other. A locked tab refuses, which `Tab.can_go_back`
+        already decides.
+        """
+        step = HISTORY_BUTTONS.get(button)
+        if step is None:
+            return False
+        self._claim()
+        if step < 0:
+            self._pane.go_back()
+        else:
+            self._pane.go_forward()
+        return True
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Swallow a side button on the way down, and act on the way up.
+
+        Both halves matter. Acting on release is the middle click's rule -- a
+        press that started here and finished somewhere else should do nothing.
+        Swallowing the press is this one's own: left to itself
+        `QAbstractItemView` treats an unknown button as a click on a row and
+        clears the selection, so a thumb press would quietly unmark a selection
+        somebody had just spent a minute building.
+        """
+        if event.button() in HISTORY_BUTTONS:
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._history_button(event.button()):
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def _on_row_entered(self, index) -> None:
         self._rows.set_hovered_row(index)
@@ -1815,6 +1871,18 @@ class PaneWidget(QFrame):
         # working in both views because the selection model is shared. That is
         # exactly why this was invisible: the commands were all fine, and only
         # the keys that have to be caught *before* a view were not.
+        # The side buttons, first and for every widget this filter watches.
+        # First because the two views answer a mouse button before this widget
+        # ever sees it -- the same rule the keys below sit under -- and for
+        # every widget because a thumb press means back wherever in the pane
+        # the pointer happens to be resting.
+        if event.type() in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease,
+                            QEvent.MouseButtonDblClick) \
+                and event.button() in HISTORY_BUTTONS:
+            if event.type() == QEvent.MouseButtonRelease:
+                self._history_button(event.button())
+            return True
+
         if watched in (self._view, self._grid) and event.type() == QEvent.KeyPress:
             # Space, before the view: `QAbstractItemView` answers it by
             # toggling the selection, so a key press that never reaches this

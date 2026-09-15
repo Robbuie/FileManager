@@ -284,3 +284,101 @@ def test_the_menu_is_rebuilt_without_leaving_actions_behind(window) -> None:
     claiming = [action for action in window.actions()
                 if action.shortcut().toString() == "Ctrl+Shift+F2"]
     assert len(claiming) <= 1
+
+
+# ----------------------------------------------------- the mouse side buttons
+#
+# Reported from the window on 15 September: the thumb buttons did nothing. They
+# were handled nowhere -- the history behind Alt+Left has always worked, and no
+# widget in Qt answers `BackButton` by itself, so the events were simply
+# dropped. These press the real buttons at the real widgets for the reason
+# `press` above exists.
+
+def click(widget, button, kind=None):
+    """A mouse button at a widget, pressed and released where it started."""
+    from PySide6.QtCore import QEvent, QPointF
+    from PySide6.QtGui import QMouseEvent
+
+    where = QPointF(widget.rect().center())
+    for which in ([kind] if kind else [QEvent.MouseButtonPress,
+                                       QEvent.MouseButtonRelease]):
+        QApplication.sendEvent(widget, QMouseEvent(
+            which, where, widget.mapToGlobal(where), button, button,
+            Qt.NoModifier))
+
+
+def walked(window, pane_index=0):
+    """Put two folders in a tab's history, so there is something to go back to."""
+    pane = window._panes[pane_index]
+    pane.navigate("C:\\Jobs\\24-118")
+    QApplication.processEvents()
+    return pane
+
+
+def test_the_back_button_walks_the_tabs_own_history(window) -> None:
+    pane = walked(window)
+    assert pane.current.path == "C:\\Jobs\\24-118"
+    click(window._widgets[0]._view.viewport(), Qt.BackButton)
+    assert pane.current.path == "C:\\Jobs"
+
+
+def test_the_forward_button_comes_back(window) -> None:
+    pane = walked(window)
+    click(window._widgets[0]._view.viewport(), Qt.BackButton)
+    click(window._widgets[0]._view.viewport(), Qt.ForwardButton)
+    assert pane.current.path == "C:\\Jobs\\24-118"
+
+
+def test_the_side_buttons_work_in_the_grid_too(window) -> None:
+    """0.16's lesson again: a second view answers the commands and not the
+    gestures unless somebody presses them there.
+    """
+    pane = walked(window)
+    widget = window._widgets[0]
+    widget.set_view_mode("grid")
+    QApplication.processEvents()
+    click(widget._grid.viewport(), Qt.BackButton)
+    assert pane.current.path == "C:\\Jobs"
+
+
+def test_a_side_button_over_the_inactive_pane_walks_that_one(window) -> None:
+    """And makes it active. A side button does not move the focus the way a
+    click on a row does, so without the claim the window would keep sending
+    every keystroke to the pane that used to have it.
+    """
+    right = walked(window, 1)
+    window._set_active(0)
+    click(window._widgets[1]._view.viewport(), Qt.BackButton)
+    assert right.current.path == "D:\\Archive"
+    assert window._active == 1
+
+
+def test_a_side_press_does_not_clear_the_selection(window) -> None:
+    """The reason the press is swallowed rather than only the release. Left to
+    itself the view reads an unknown button as a click on a row.
+    """
+    from PySide6.QtCore import QEvent
+
+    fill(window._panes[0], [entry("a.txt"), entry("b.txt")])
+    widget = window._widgets[0]
+    widget.select_all()
+    marked = set(widget.selected_names())
+    assert marked
+    click(widget._view.viewport(), Qt.BackButton, kind=QEvent.MouseButtonPress)
+    assert set(widget.selected_names()) == marked
+
+
+def test_a_locked_tab_refuses_the_side_buttons(window) -> None:
+    """`Tab.can_go_back` already decides this; what is checked here is that the
+    mouse goes through it rather than around it.
+    """
+    pane = walked(window)
+    pane.set_locked(pane.index, True)
+    click(window._widgets[0]._view.viewport(), Qt.BackButton)
+    assert pane.current.path == "C:\\Jobs\\24-118"
+
+
+def test_the_other_mouse_buttons_are_left_alone(window) -> None:
+    pane = walked(window)
+    click(window._widgets[0]._view.viewport(), Qt.RightButton)
+    assert pane.current.path == "C:\\Jobs\\24-118"

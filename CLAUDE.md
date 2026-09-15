@@ -311,6 +311,8 @@ Ctrl+R  refresh            Ctrl+Shift+R  reconnect
 Ctrl+F  filter             Ctrl+L  edit the path
 Ctrl+J  the job queue     Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
+Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
+which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
 F3   view the file under the cursor
 Ctrl+P  the preview pane      Ctrl+Shift+P  the thumbnail grid
@@ -444,6 +446,15 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   the rows on screen rather than the folder, one request per folder, a short
   deadline, one picture per badge-on-a-kind, and the answers dropped when the
   folder is listed again. Anything added there keeps all five.
+- **A mouse button nothing claims is a mouse button Qt drops.** The side
+  buttons did nothing until 0.17 -- not because the history was missing, but
+  because no widget in Qt answers `BackButton` by itself and nothing here was
+  listening. Two things the fix has to keep: the **press** is swallowed as well
+  as the release, because `QAbstractItemView` reads an unknown button as a
+  click on a row and clears the selection; and the handler **claims the pane**,
+  because a side button does not move the focus the way a click on a row does,
+  so without it a thumb press over the inactive pane would walk that pane while
+  every keystroke still went to the other one.
 - **A control that takes no focus is invisible to the active-pane rule.**
   Every borderless control in a pane is `NoFocus` so the listing keeps the
   keyboard, and the window works out the active pane from
