@@ -45,8 +45,10 @@ def main() -> int:
     from app.core.menu import ShellMenu
     from app.core.overlays import Overlays
     from app.core.pane import Pane
+    from app.core.previews import Previews
     from app.core.siblings import Siblings
     from app.core.sizes import FolderSizes
+    from app.core.thumbnails import Thumbnails
     from app.core.clipboard import Clipboard
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
@@ -96,12 +98,20 @@ def main() -> int:
     # system clipboard, so a file cut in one pane has to be greyed in the
     # other, and both panes paste from the same place.
     clipboard = Clipboard()
+    # One decode outstanding for the window, for the siblings' reason: an
+    # abandoned read still holds the volume the next one wants, so moving the
+    # cursor in one pane has to cancel the other pane's read rather than queue
+    # behind it.
+    previews = Previews(bridge, config)
+    # One picture cache for the window, for the icons' reason: what a photograph
+    # looks like at 128 pixels does not depend on which pane is looking at it.
+    thumbnails = Thumbnails(bridge, config)
     left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes,
                 siblings, file_icons=file_icons, transfers=transfers,
-                clipboard=clipboard)
+                clipboard=clipboard, previews=previews, thumbnails=thumbnails)
     right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes,
                  siblings, file_icons=file_icons, transfers=transfers,
-                 clipboard=clipboard)
+                 clipboard=clipboard, previews=previews, thumbnails=thumbnails)
     volumes = Volumes(bridge, config)
     # The drive meters in the rail. It measures local fixed disks only unless
     # somebody asks for more, which is what keeps a rail from probing a server.

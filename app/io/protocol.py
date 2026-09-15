@@ -178,6 +178,38 @@ class Op(str, Enum):
     #: application.
     ELEVATE = "elevate"
 
+    #: What one file looks like, decoded as far as it can be: an image, the
+    #: text it holds, or the first few hundred bytes of it. `path` is the file
+    #: itself rather than its folder, because this request is about one file
+    #: and there is nothing to batch -- the viewer shows one thing and the
+    #: preview pane shows one thing.
+    #:
+    #: The reply is a `Preview`. What crosses is a *scaled* picture rather than
+    #: the file: `args["box"]` is the longest edge wanted, the worker decodes to
+    #: that size and re-encodes as PNG, and `Preview.width`/`height` say how
+    #: big the real thing is. A 6,000 x 4,000 photograph is forty megabytes of
+    #: pixels and about a hundred kilobytes at the size a window can show, and
+    #: the difference is per file on every arrow key.
+    #:
+    #: The read is the reason this is a worker op at all. Decoding is CPU and
+    #: would be safe anywhere; opening a file on a share that has gone is the
+    #: forty-five second block this application exists to escape, and it is the
+    #: same block whether what follows is a listing or a photograph.
+    PREVIEW = "preview"
+
+    #: Small pictures for `args["names"]` in the folder at `path`, at
+    #: `args["size"]`, for the grid view.
+    #:
+    #: Shaped like FILE_ICON rather than like PREVIEW, and the shape is the
+    #: point: a grid of a hundred cells asking one request each is a hundred
+    #: requests against one volume, so this batches a screenful into one and
+    #: keys the pictures on a digest, which is what makes a folder of forty
+    #: copies of the same drawing forty cells and one image. The reply is
+    #: `{"size": n, "rows": {name: key}, "images": {key: png}}`, absent for a
+    #: name nothing could be made of -- and an absent name draws the icon for
+    #: its kind, which is what the listing was drawing anyway.
+    THUMBNAIL = "thumbnail"
+
     #: Fault injection, and the harness is the only thing allowed to send it.
     #: It exists because the failure this application is built around -- a call
     #: that has not returned and never will -- cannot otherwise be produced on
@@ -497,3 +529,276 @@ CHUNK = 1024 * 1024
 #: thousands of events for a folder of small files, and the status bar cannot
 #: read faster than a person can.
 PROGRESS_INTERVAL = 0.15
+
+
+# --------------------------------------------------------------------------
+# Previews.
+#
+# The vocabulary the viewer, the preview pane and the grid all speak, here for
+# `icon_key`'s reason: the worker answers in these terms and the caches are
+# keyed on them, so what counts as an image and what counts as text is decided
+# once rather than in each of the three places that ask.
+# --------------------------------------------------------------------------
+
+
+class PreviewForm(str, Enum):
+    """What was made of a file. Three shapes, and one for nothing.
+
+    The three are not a guess about the file's type -- they are what the
+    decoder actually produced. A `.jpg` that is really a renamed text file
+    comes back as TEXT, and a `.txt` full of nulls comes back as HEX, because
+    both were decided by reading the bytes rather than by trusting the name.
+    """
+
+    IMAGE = "image"
+    TEXT = "text"
+    HEX = "hex"
+    NONE = "none"     # the file is there and nothing could be made of it
+
+
+#: The families a name belongs to, which is what picks the order the providers
+#: are tried in. Not the same question as `PreviewForm`: this is a guess from
+#: the extension about which decoder is worth trying first, and the form is
+#: what came back.
+FAMILY_IMAGE = "image"
+FAMILY_RAW = "raw"
+FAMILY_PAGES = "pages"
+FAMILY_TEXT = "text"
+FAMILY_SHELL = "shell"
+FAMILY_UNKNOWN = ""
+
+
+#: What Qt's own image plugins read. Deliberately a written-out list rather
+#: than `QImageReader.supportedImageFormats()`, even though that would be
+#: exactly right: the list is needed in the *caller* to decide whether a row is
+#: worth asking about at all, and the caller has no business importing an image
+#: reader to find out. The worker still asks Qt rather than trusting this, so a
+#: machine whose Qt reads one more format reads it.
+#:
+#: `.pdf` is in here and is not a mistake. PySide6 ships Qt's PDF plugin, which
+#: registers itself as an image format and renders a page like any other
+#: picture -- so page one of a drawing set costs what a photograph costs and no
+#: dependency was added to get it.
+PREVIEW_IMAGE_KINDS = frozenset({
+    ".png", ".jpg", ".jpeg", ".jfif", ".gif", ".bmp", ".webp", ".tif", ".tiff",
+    ".ico", ".cur", ".svg", ".svgz", ".tga", ".pbm", ".pgm", ".ppm", ".xbm",
+    ".xpm", ".icns", ".wbmp", ".pdf",
+})
+
+#: Camera raw. These are not decoded -- they are *unwrapped*. Every one of
+#: these formats carries a full JPEG preview of the shot inside it, written by
+#: the camera, and pulling that out is a scan for two byte markers. Demosaicing
+#: the sensor data properly would mean a dependency in the installer, several
+#: seconds per frame, and a slightly different picture from the one the camera
+#: showed on its own screen. The embedded preview is what every other viewer
+#: shows first for the same reasons.
+PREVIEW_RAW_KINDS = frozenset({
+    ".cr2", ".cr3", ".nef", ".nrw", ".arw", ".srf", ".sr2", ".dng", ".orf",
+    ".raf", ".rw2", ".pef", ".srw", ".raw", ".x3f", ".erf", ".mrw", ".3fr",
+})
+
+#: Kinds with more than one page, where the count is worth saying. Read by the
+#: same plugin as an image; separate only because the viewer offers page keys.
+PREVIEW_PAGE_KINDS = frozenset({".pdf"})
+
+#: Kinds read as text without sniffing first. Everything not in here that turns
+#: out to be text is still shown as text -- the sniff decides that -- so this
+#: list is not the bound on what can be read. What it does is settle the
+#: ambiguous ones in favour of the source rather than the picture: an `.svg` is
+#: in `PREVIEW_IMAGE_KINDS` and draws, and an `.html` is here and does not,
+#: because somebody opening an `.html` in a file manager is looking at markup.
+PREVIEW_TEXT_KINDS = frozenset({
+    ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".json",
+    ".xml", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".properties",
+    ".py", ".pyw", ".c", ".h", ".cpp", ".hpp", ".cc", ".cs", ".java", ".js",
+    ".mjs", ".ts", ".tsx", ".jsx", ".go", ".rs", ".rb", ".php", ".lua", ".pl",
+    ".sql", ".sh", ".bash", ".zsh", ".bat", ".cmd", ".ps1", ".psm1", ".vbs",
+    ".html", ".htm", ".css", ".scss", ".less", ".diff", ".patch", ".gitignore",
+    ".gitattributes", ".editorconfig", ".env", ".dockerfile", ".makefile",
+    ".m", ".r", ".jl", ".tex", ".bib", ".asc", ".srt", ".vtt", ".reg", ".iss",
+    ".spec", ".pro", ".qss", ".scr", ".lsp", ".mel", ".nc", ".gcode", ".stp",
+    ".step", ".igs", ".iges", ".dxf", ".plt", ".hpgl", ".ctb", ".pc3",
+})
+
+#: Kinds worth asking Windows about, because Windows has a handler for them and
+#: this application never will. A frame from a video, the first slide of a
+#: deck, a `.psd` with no sidecar, whatever the camera vendor's codec pack
+#: added -- all of it is somebody else's decoder already installed on the
+#: machine, reached through `IShellItemImageFactory`.
+#:
+#: The list is what stops that being a read per row. A shell thumbnail opens
+#: the file and runs a third-party provider inside it, so it is asked for by
+#: name like an overlay is, and only for kinds where there is likely to be an
+#: answer. A kind outside every set here gets the sniff, which is a few hundred
+#: bytes.
+PREVIEW_SHELL_KINDS = frozenset({
+    ".mp4", ".m4v", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".mpg",
+    ".mpeg", ".m2ts", ".mts", ".ts", ".vob", ".3gp", ".ogv",
+    ".docx", ".doc", ".dotx", ".xlsx", ".xls", ".xltx", ".pptx", ".ppt",
+    ".potx", ".odt", ".ods", ".odp", ".rtf", ".pub", ".vsdx", ".msg",
+    ".psd", ".psb", ".ai", ".eps", ".indd", ".cdr", ".heic", ".heif", ".avif",
+    ".jxr", ".hdp", ".wdp", ".dwg", ".dwf", ".rvt", ".skp", ".ifc", ".3ds",
+    ".stl", ".obj", ".fbx", ".mp3", ".flac", ".m4a", ".wma", ".epub", ".mobi",
+    ".xps", ".oxps", ".zip", ".7z", ".rar",
+})
+
+
+def preview_family(name: str) -> str:
+    """Which decoder is worth trying first for a bare name.
+
+    Takes a name rather than an entry for `own_icon_kind`'s reason: the model
+    asks about a row, the worker is handed a path, and the harness has read a
+    listing. One definition, so a kind added above is asked for and answered
+    without a second edit.
+
+    The order of these tests is the only thing in this function, and two of
+    them are worth saying out loud. Text is checked before the shell, so a
+    `.reg` or a `.dxf` is the file rather than whatever picture Windows would
+    draw of it. Raw is checked before the image plugins, because a `.dng` is a
+    TIFF as far as Qt is concerned and Qt would hand back the camera's
+    thumbnail strip at 160 pixels wide and call it the photograph.
+    """
+    kind = _suffix(name)
+    if not kind:
+        return FAMILY_UNKNOWN
+    if kind in PREVIEW_RAW_KINDS:
+        return FAMILY_RAW
+    if kind in PREVIEW_TEXT_KINDS:
+        return FAMILY_TEXT
+    if kind in PREVIEW_IMAGE_KINDS:
+        return FAMILY_IMAGE
+    if kind in PREVIEW_SHELL_KINDS:
+        return FAMILY_SHELL
+    return FAMILY_UNKNOWN
+
+
+def draws_a_thumbnail(entry: Entry) -> bool:
+    """Whether this row could show a picture in the grid, and so is worth a read.
+
+    The bound on the grid, and the only one that does real work -- the same job
+    `carries_own_icon` does for FILE_ICON. A folder never is: what a folder
+    looks like is its icon, and the alternative (a stack of the first four
+    things inside it) is four listings per cell.
+
+    A text file is not a thumbnail either, even though the decoder would gladly
+    make one. Ninety cells of grey lines at 128 pixels are ninety identical
+    grey squares, and the icon for the kind says more in less space. The viewer
+    and the preview pane do show text, because there they are readable.
+    """
+    if entry.is_dir:
+        return False
+    return preview_family(entry.name) in (FAMILY_IMAGE, FAMILY_RAW, FAMILY_SHELL)
+
+
+def _suffix(name: str) -> str:
+    """The lowered extension with its dot, or "" for a name without one.
+
+    `icon_key`'s rule, and for its reason: a leading dot is part of a name, so
+    `.gitignore` is a file with no extension. It is in `PREVIEW_TEXT_KINDS`
+    anyway, which costs nothing and is wrong -- the sniff would have said text
+    regardless, and a reader who goes looking for why it is listed should find
+    this sentence rather than a bug.
+    """
+    stem, dot, suffix = name.rpartition(".")
+    if not dot or not stem or not suffix:
+        return ""
+    return f".{suffix.lower()}"
+
+
+@dataclass(frozen=True, slots=True)
+class Preview:
+    """What one file turned out to look like.
+
+    One dataclass with three shapes in it rather than three classes, because
+    every caller handles all three: the viewer switches on `form` and so does
+    the preview pane, and a union would put that switch in the type system and
+    then need it again anyway. Which fields carry anything follows from `form`
+    and from nothing else.
+
+    Nothing here is a Qt object. `image` is PNG bytes because a `QPixmap` does
+    not cross a process boundary and raw pixels at the size of a photograph
+    would be the whole file arriving after all.
+    """
+
+    form: PreviewForm = PreviewForm.NONE
+
+    #: Which provider answered: "qt", "raw", "shell", "text", "hex". For the
+    #: harness and for the one line the viewer shows, because "this came from
+    #: the shell" is the difference between a missing codec pack and a bug.
+    source: str = ""
+
+    #: The file's own size in bytes, so a caller that has no listing to hand --
+    #: the viewer, opened on one path -- can still say how big it is.
+    size: int = 0
+
+    # IMAGE ----------------------------------------------------------------
+    image: bytes | None = None      # PNG, at most `box` on its longest edge
+    width: int = 0                  # the real picture, not the one enclosed
+    height: int = 0
+    #: The longest edge of what is actually in `image`. Smaller than
+    #: `max(width, height)` means the caller is looking at a scaled copy and
+    #: should say so rather than let somebody zoom into softness and wonder.
+    shown: int = 0
+    #: Pages for a document, frames for an animation. 0 when there is one, so
+    #: that "more than one" is a truthy test rather than a comparison.
+    pages: int = 0
+
+    # TEXT -----------------------------------------------------------------
+    text: str = ""
+    #: What the bytes were decoded as, and how that was decided: "utf-8-sig"
+    #: names a byte order mark, "utf-8" names a successful strict decode,
+    #: "cp1252" names the fallback. Shown, because a file that came out as
+    #: mojibake is a question about this line.
+    encoding: str = ""
+    #: Whether the file goes on past what was read. The viewer says so; without
+    #: it a 400 MB log looks like a short one.
+    truncated: bool = False
+    lines: int = 0
+
+    # HEX ------------------------------------------------------------------
+    #: The first bytes of the file, laid out by the caller. Not formatted here:
+    #: how many columns fit is a question about the width of a window.
+    data: bytes | None = None
+
+    #: Why there is nothing, when there is nothing. A sentence for a person:
+    #: "too large to preview", "no decoder for this kind".
+    note: str = ""
+
+
+#: The longest edge a preview pane asks for. Generous rather than exact: the
+#: pane is resizable and a picture re-requested on every drag would be a read
+#: per pixel of mouse movement, so one decode covers every width the pane is
+#: likely to be dragged to and Qt scales the rest of the way for free.
+PREVIEW_BOX = 1600
+
+#: The ceiling the viewer asks for, and the honest limit on zoom. A picture
+#: larger than this is shown scaled and says so. The number is not a guess
+#: about screens: it is what keeps one decoded image under about seventy
+#: megabytes of pixels, which is the difference between a viewer that opens and
+#: one that swaps.
+VIEWER_BOX = 4096
+
+#: Cell sizes the grid offers. Four rather than a slider, because each one is a
+#: fresh read of every file on screen and a slider is a request storm with a
+#: handle on it.
+THUMB_SIZES = (96, 128, 176, 240)
+
+#: How much of a text file is read for a preview. A quarter of a megabyte is
+#: several thousand lines, which is more than anybody reads in a preview pane,
+#: and it is the whole of almost every real text file.
+PREVIEW_TEXT_BYTES = 256 * 1024
+
+#: How much of an undecodable file is read for the hex view. One screenful and
+#: a bit: the point of hex here is to see what something actually is -- a magic
+#: number, a header -- not to read the file.
+PREVIEW_HEX_BYTES = 4096
+
+#: How far into a camera raw file the embedded JPEG is looked for. The preview
+#: lives in the header area of every format in `PREVIEW_RAW_KINDS`; reading the
+#: whole of a 60 MB frame to find it would cost more than decoding it.
+RAW_SCAN_BYTES = 24 * 1024 * 1024
+
+#: How many bytes are enough to tell text from binary. A NUL or a run of
+#: control characters in the first kilobyte settles it, and no real text file
+#: hides its first NUL past here.
+SNIFF_BYTES = 1024

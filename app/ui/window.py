@@ -24,7 +24,7 @@ from app import __version__
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
 from app.io import elevate
-from app.io.protocol import JobKind, Op
+from app.io.protocol import THUMB_SIZES, JobKind, Op
 from app.theme import sheet
 from app.theme.tokens import (
     ACCENT_LABELS,
@@ -35,6 +35,7 @@ from app.ui import dialogs
 from app.ui.pane import PaneWidget
 from app.ui.rail import NavigationRail
 from app.ui.transfers import ConflictDialog, QueueDialog, TransferBar, TransferPrompt
+from app.ui.viewer import Viewer
 
 TITLE = "File Manager"
 
@@ -79,6 +80,13 @@ class MainWindow(QMainWindow):
         self._volumes = volumes
         self._transfers = transfers
         self._queue_dialog: QueueDialog | None = None
+        self._previews = left.previews
+        self._thumbnails = left.thumbnails
+        #: The viewer, built the first time F3 is pressed and kept afterwards.
+        #: Kept rather than remade because it holds the zoom and the window
+        #: geometry, and a viewer that opened at a different size every time
+        #: would be one a person had to arrange on every use.
+        self._viewer: Viewer | None = None
 
         metrics = sheet.metrics(config.get("density"))
         self._widgets = (PaneWidget(left, volumes, metrics, favorites),
@@ -138,6 +146,7 @@ class MainWindow(QMainWindow):
             widget.clipboardRequested.connect(self._on_clipboard_requested)
             widget.addFavoriteRequested.connect(self._add_favorite)
             widget.manageFavoritesRequested.connect(self._manage_favorites)
+            widget.viewRequested.connect(self._on_view_requested)
         transfers.conflict.connect(self._on_conflict)
         transfers.finished.connect(self._on_transfer_finished)
         if updates is not None:
@@ -352,6 +361,49 @@ class MainWindow(QMainWindow):
         self._action(go, "Copy path", "Ctrl+Shift+C", self._copy_path)
 
         view = self.menuBar().addMenu("&View")
+        view.setToolTipsVisible(True)
+        # A hint rather than a shortcut, like every other function key: a window
+        # shortcut on F3 would take the key from the path bar and the filter box.
+        # Those two do not use F3 -- but the argument that matters is that every
+        # function key in this application is the pane's, so which pane the
+        # viewer opens on is decided by the same rule as which pane F5 copies
+        # from, rather than by a second mechanism that agrees most of the time.
+        viewing = self._hint(view, "View\tF3",
+                             lambda: self._current_widget().view_current())
+        viewing.setToolTip("Open the file under the cursor: a picture with zoom, "
+                           "text with its encoding, or a hex dump. The arrow "
+                           "keys step through the folder.")
+        pane_preview = QAction("Preview pane", self, checkable=True)
+        pane_preview.setShortcut(QKeySequence("Ctrl+P"))
+        pane_preview.setShortcutContext(Qt.WindowShortcut)
+        pane_preview.setChecked(bool(self._config.get("preview.pane")))
+        pane_preview.setToolTip("A panel beside the listing showing whatever the "
+                                "cursor is on. Reads the file, so it follows the "
+                                "cursor rather than every row that goes past.")
+        pane_preview.triggered.connect(self._set_preview_pane)
+        view.addAction(pane_preview)
+        grid = QAction("Thumbnail grid", self, checkable=True)
+        grid.setShortcut(QKeySequence("Ctrl+Shift+P"))
+        grid.setShortcutContext(Qt.WindowShortcut)
+        grid.setChecked(self._config.get("left.view") == "grid")
+        grid.setToolTip("The same rows as cells with pictures in them. The sort, "
+                        "the filter and the selection are the listing's own.")
+        grid.triggered.connect(self._set_grid_view)
+        self._grid_action = grid
+        view.addAction(grid)
+        cells = view.addMenu("Cell size")
+        cells.setEnabled(self._thumbnails is not None)
+        size_group = QActionGroup(self)
+        size_group.setExclusive(True)
+        current_cell = int(self._config.get("preview.thumb_size"))
+        for size in THUMB_SIZES:
+            entry = QAction(f"{size} px", self, checkable=True)
+            entry.setChecked(size == current_cell)
+            entry.triggered.connect(
+                lambda _checked=False, n=size: self._set_cell_size(n))
+            size_group.addAction(entry)
+            cells.addAction(entry)
+        view.addSeparator()
         # Both are the pane's own keys, shown rather than claimed. Quick search
         # has no key to claim at all -- it starts when somebody types a letter
         # into the listing -- so the entry says so and does nothing.
@@ -362,9 +414,13 @@ class MainWindow(QMainWindow):
         view.addSeparator()
         typed = self._hint(view, "Quick search\tType a name", lambda: None)
         typed.setEnabled(False)
-        typed.setToolTip("Typing in the listing jumps to a name. F3 finds the "
-                         "next match, Shift+F3 the previous, Esc stops.")
-        self._hint(view, "Find next\tF3", lambda: None).setEnabled(False)
+        typed.setToolTip("Typing in the listing jumps to a name. Ctrl+G finds "
+                         "the next match and Ctrl+Shift+G the previous, whether "
+                         "or not you have just typed; Enter also steps while "
+                         "the search is still live. Esc forgets the name, and "
+                         "so does leaving the folder. F3 was this until 0.16 "
+                         "and is the viewer now.")
+        self._hint(view, "Find next\tCtrl+G", lambda: None).setEnabled(False)
         view.addSeparator()
         self._action(view, "Filter", "Ctrl+F", lambda: self._current_widget().focus_filter())
         self._action(view, "Clear filter", "Ctrl+Shift+F",
@@ -408,6 +464,22 @@ class MainWindow(QMainWindow):
                               "the file, for the rows on screen only.")
         file_icons.triggered.connect(self._set_file_icons)
         view.addAction(file_icons)
+        thumbs = QAction("Pictures in the grid", self, checkable=True)
+        thumbs.setChecked(bool(self._config.get("preview.thumbnails")))
+        thumbs.setEnabled(self._thumbnails is not None)
+        thumbs.setToolTip("Off means the grid draws the icon for each kind, "
+                          "which is still a grid and costs no reads.")
+        thumbs.triggered.connect(self._set_thumbnails)
+        view.addAction(thumbs)
+        shell_preview = QAction("Windows thumbnail handlers", self, checkable=True)
+        shell_preview.setChecked(bool(self._config.get("preview.shell")))
+        shell_preview.setToolTip("Ask Windows for a picture of the kinds this "
+                                 "application cannot decode itself: video "
+                                 "frames, Office documents, .heic, .psd. This is "
+                                 "the one part of the previewer that runs "
+                                 "somebody else's code.")
+        shell_preview.triggered.connect(self._set_shell_previews)
+        view.addAction(shell_preview)
         shell_commands = QAction("Explorer context menu", self, checkable=True)
         shell_commands.setChecked(bool(self._config.get("menu.shell")))
         shell_commands.setEnabled(self._shell_menu is not None)
@@ -618,6 +690,87 @@ class MainWindow(QMainWindow):
         if self._file_icons is not None:
             self._file_icons.reload()
 
+    # --------------------------------------------------------------- previews
+
+    def _on_view_requested(self, folder: str, names: list, at: int) -> None:
+        """F3. Build the viewer if there is not one, and show it the file.
+
+        The window owns it rather than the pane for the reason the queue panel
+        and every dialog is the window's: it is a top-level window, both panes
+        open the same one, and a viewer per pane would mean two of them on screen
+        arguing about which folder is being looked at.
+        """
+        if self._previews is None:
+            self.statusBar().showMessage(
+                "the previewer is not available in this window", 6000)
+            return
+        if self._viewer is None:
+            self._viewer = Viewer(self._previews, self._tokens, self)
+            # The listing follows the viewer's walk, so closing it leaves the
+            # cursor on the file that was last on screen. Connected once, and it
+            # asks the window which pane is active rather than remembering the
+            # one that opened it -- otherwise stepping in the viewer would move
+            # the cursor in a pane the user has since clicked away from.
+            self._viewer.showing.connect(self._on_viewer_showing)
+        self._viewer.show_file(folder, list(names), int(at))
+        self._viewer.show()
+        self._viewer.raise_()
+        self._viewer.activateWindow()
+
+    def _on_viewer_showing(self, path: str) -> None:
+        widget = self._current_widget()
+        name = os.path.basename(path.replace("\\", "/"))
+        if name:
+            widget.reveal_name(name)
+
+    def _set_preview_pane(self, checked: bool) -> None:
+        """Both panes at once, because it is one setting.
+
+        A preview panel in one pane and not the other would be two different
+        answers to the same question, and the setting is stored once. Which pane
+        the *cursor* is in still decides which panel is doing any reading, and
+        the panel in the pane nobody is using shows the last thing it was told
+        and asks for nothing.
+        """
+        for widget in self._widgets:
+            widget.show_preview(bool(checked))
+
+    def _set_grid_view(self, checked: bool) -> None:
+        """The active pane only, and this one deliberately is not both.
+
+        The opposite of the preview panel above, and the difference is what the
+        two are for. A preview panel is a place to look at one file, so having
+        one is a preference. A view mode is how a folder is being read, and the
+        case that makes a dual-pane file manager worth using is a grid of
+        photographs on one side and a listing of where they are going on the
+        other.
+        """
+        self._current_widget().set_view_mode("grid" if checked else "list")
+
+    def _set_cell_size(self, size: int) -> None:
+        self._config.set("preview.thumb_size", int(size))
+        for widget in self._widgets:
+            widget.set_cell_size(int(size))
+
+    def _set_thumbnails(self, checked: bool) -> None:
+        self._config.set("preview.thumbnails", bool(checked))
+        if self._thumbnails is not None:
+            self._thumbnails.reload()
+
+    def _set_shell_previews(self, checked: bool) -> None:
+        """Turn the third-party rung of the decoder off, and forget what it said.
+
+        Both caches are cleared, and that is the point rather than tidiness: the
+        pictures already in them came from the handler being turned off, so
+        leaving them would mean the setting appearing to do nothing until
+        somebody navigated away and back.
+        """
+        self._config.set("preview.shell", bool(checked))
+        if self._previews is not None:
+            self._previews.clear()
+        if self._thumbnails is not None:
+            self._thumbnails.reload()
+
     def _offer_elevation(self, pane):
         """Windows refused something. Ask, then run that one operation elevated.
 
@@ -709,6 +862,11 @@ class MainWindow(QMainWindow):
             # thing in the application that paints rather than styles, and the
             # third one that would silently stop following the picker.
             self._queue_dialog.apply_tokens(tokens)
+        if self._viewer is not None:
+            # And the fourth, for the same reason and with the same trap: the
+            # backdrop behind a picture is painted, so a viewer left open behind
+            # the window would keep the old theme's black on a light theme.
+            self._viewer.apply_tokens(tokens)
         self._set_active(self._active)
 
     def _on_folder_changed(self, path: str) -> None:

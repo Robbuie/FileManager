@@ -59,6 +59,9 @@ python -m app                           # the window
 python tools/preview.py --path C:\Windows\System32 --out preview.png
 python tools/preview.py --all-themes --out-dir previews
 python tools/preview.py --queue --out queue.png       # the queue panel alone
+python tools/preview.py --preview-pane --out pane.png # the preview panel, both shapes
+python tools/preview.py --grid --cell 128 --out grid.png
+python tools/preview.py --viewer image --out viewer.png   # also text, hex
 
 python packaging/build.py               # dist/: the folder, the setup exe, latest.json
 python packaging/build.py --skip-installer   # freeze only, no Inno Setup
@@ -306,6 +309,8 @@ Ctrl+F  filter             Ctrl+L  edit the path
 Ctrl+J  the job queue     Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 Ctrl+B  the navigation rail
+F3   view the file under the cursor
+Ctrl+P  the preview pane      Ctrl+Shift+P  the thumbnail grid
 
 The rail and the path bar
 click a place, a drive, a saved folder  the pane that has the keyboard goes
@@ -327,8 +332,16 @@ Ctrl+D  save this folder    Ctrl+1 .. Ctrl+9  go to the first nine
 click a bar button  go there     middle click  go there in a new tab
 right click one in the rail  move it to a group, reorder it, remove it
 
+In the viewer
+arrows  the next file, the previous one   Home / End  the first, the last
++ / -  zoom      0 or 1  one to one      F  fit      Esc  close
+PgUp / PgDn  the pages of a document
+
 Finding and marking
-type a name  jump to it    F3 / Shift+F3  the next, the previous match
+type a name  jump to it    Ctrl+G / Ctrl+Shift+G  the next, the previous match
+Ctrl+G steps the last name looked for, not only one still being typed; Enter
+steps while the search is live. Esc forgets it, and so does leaving the folder.
+F3 became the viewer in 0.16
 Space   count what is under the marked folders
 Ctrl+Shift+Space  count every folder in the listing
 Num +   select a group     Num -   unselect a group     Num *  invert
@@ -464,6 +477,47 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   when the folder is listed again, because an icon cannot change unless the
   file does. Adding a kind to that set is a decision about cost, not a
   formatting change; `.dll` is left out deliberately and says why.
+- **A preview opens a file, so the whole feature is off until somebody asks.**
+  `app/io/decode.py` is one ladder read by three surfaces, and the only thing
+  keeping it affordable is that nothing asks it anything by default: the
+  preview pane is closed, the grid is a view somebody switches to, and F3 is a
+  key somebody presses. A listing in the normal view sends nothing, so a folder
+  of 50,000 drawings costs what it cost before this existed. **Anything that
+  makes a preview happen without a person asking for it is the mistake to
+  refuse**, however convenient -- a thumbnail in the listing's icon column, a
+  preview on hover, a decode "warmed up" while the folder is idle.
+
+  Past that, the three bounds are the ones the overlays and the file icons
+  already use, plus one each of their own.
+
+  - **The pictures are scaled in the worker, before the process boundary.** A
+    6,000-pixel photograph is forty megabytes of pixels and about ninety
+    kilobytes at the size a pane can show it, and `QImageReader.setScaledSize`
+    before `read` means the large version never exists. This is most of the
+    cost of the feature and it is one call; a change that scales after the
+    boundary instead will pass every test and be thirty times slower.
+  - **The preview pane is debounced and one outstanding at a time,** and the
+    abandoned one is cancelled *at the worker* -- the breadcrumb chevron's
+    rule, for the same reason: an abandoned decode still holds the volume the
+    next row wants. One `Previews` for the window, not one per pane.
+  - **The grid's bound is `draws_a_thumbnail`,** the way FILE_ICON's is
+    `carries_own_icon`. Text is deliberately not a thumbnail: ninety cells of
+    grey lines at 128 pixels are ninety identical squares, and the icon for the
+    kind says more in less space.
+  - **Qt is imported inside the functions that need it, never at module
+    level.** `worker.py` imports `decode.py`, and `worker.py` is spawned once
+    per volume -- an unconditional PySide6 import would put fifty megabytes and
+    a fifth of a second into every worker including the ones that only list
+    folders.
+  - **The shell thumbnail rung runs in the volume's worker, not in a host.**
+    Deliberately unlike the context menu, and the line is whether anything is
+    held across a person's decision: a menu keeps a live `IContextMenu` and a
+    third-party DLL loaded until somebody clicks, and a thumbnail provider is
+    one call in and pixels out. `Op.OVERLAY` and `Op.FILE_ICON` already load
+    third-party shell code in that process on exactly that reasoning. A host
+    would buy isolation from a hang and cost a wedged file on one share taking
+    thumbnails down for every volume, which for a grid of a hundred cells is
+    the worse trade.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
 - **A drive letter can be present and dead at the same time.** Presence in
@@ -484,8 +538,10 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    rail with drive capacity meters, grouped favourites and sibling dropdowns
    on the breadcrumb chevrons (0.12), and the icons that live inside a file
    rather than in the association database -- programs, shortcuts, .ico files
-   (unreleased). What is left before this replaces Double Commander day to
-   day: a transfer that outlives the window.
+   (0.13), the job queue with deletes in it (0.14), Windows clipboard interop
+   (0.15), and the previewer -- one decoder behind an F3 viewer, a preview pane
+   and a thumbnail grid (0.16). What is left before this replaces Double
+   Commander day to day: a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

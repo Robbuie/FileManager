@@ -27,7 +27,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 def render(path: str, out: str, *, theme: str, accent: str, density: str,
            width: int, height: int, settle_ms: int, tabs: int = 1,
-           menu: bool = False, queue: bool = False, cut: bool = False) -> str:
+           menu: bool = False, queue: bool = False, cut: bool = False,
+           pane_preview: bool = False, grid: bool = False,
+           viewer: str = "", cell: int = 128) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -39,8 +41,10 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     from app.core.icons import Icons
     from app.core.overlays import Overlays
     from app.core.pane import Pane
+    from app.core.previews import Previews
     from app.core.siblings import Siblings
     from app.core.sizes import FolderSizes
+    from app.core.thumbnails import Thumbnails
     from app.core.transfers import TransferQueue
     from app.core.volumes import Volumes
     from app.io.pool import WorkerPool
@@ -83,12 +87,19 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     siblings = Siblings(bridge, config)
     clipboard = Clipboard()
     capacity = Capacity(bridge, config)
+    config.set("preview.pane", bool(pane_preview))
+    config.set("preview.thumb_size", int(cell))
+    if grid:
+        config.set("left.view", "grid")
+        config.set("right.view", "grid")
+    previews = Previews(bridge, config)
+    thumbnails = Thumbnails(bridge, config)
     window = MainWindow(
         config,
         Pane(bridge, config, "left", icons, overlays, None, sizes, siblings,
-             clipboard=clipboard),
+             clipboard=clipboard, previews=previews, thumbnails=thumbnails),
         Pane(bridge, config, "right", icons, overlays, None, sizes, siblings,
-             clipboard=clipboard),
+             clipboard=clipboard, previews=previews, thumbnails=thumbnails),
         volumes, TransferQueue(), None, Favorites(config), capacity)
     volumes.refresh()
     icons.start()
@@ -111,6 +122,25 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
         _cut_some_rows(window, clipboard)
         QTimer.singleShot(200, app.quit)
         app.exec()
+
+    if grid:
+        _fill_grid(window, thumbnails, cell)
+        QTimer.singleShot(300, app.quit)
+        app.exec()
+
+    if pane_preview:
+        _fill_preview(window)
+        QTimer.singleShot(300, app.quit)
+        app.exec()
+
+    if viewer:
+        panel = _show_viewer(window, viewer)
+        QTimer.singleShot(600, app.quit)
+        app.exec()
+        image = panel.grab()
+        image.save(out)
+        pool.shutdown()
+        return out
 
     if queue:
         panel = _show_queue(window)
@@ -167,6 +197,172 @@ def _cut_some_rows(window, clipboard) -> None:
                  (model.entry(row) for row in range(min(model.rowCount(), 8)))
                  if entry is not None][:3]
         model.set_cut(Marked(names))
+
+
+def _invented_picture(edge: int, seed: int):
+    """A picture that is obviously a picture and obviously not a real file's.
+
+    Drawn rather than read, for `_show_queue`'s reason: what is being looked at
+    is whether a grid of pictures reads as a grid -- the cell proportions, the
+    air between them, whether the two lines of name are legible under one -- and
+    that has nothing to do with which photographs this machine happens to have.
+    A real folder of images would also make the render depend on the `--path`
+    given, so the same command would produce a different picture on every
+    machine.
+
+    Each one is a different hue and carries a diagonal, so a cell that is
+    stretched or squashed is visible rather than being a plausible flat square.
+    """
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QPixmap
+
+    ratios = ((4, 3), (3, 4), (16, 9), (1, 1), (3, 2))
+    wide, tall = ratios[seed % len(ratios)]
+    scale = edge / max(wide, tall)
+    picture = QPixmap(max(1, int(wide * scale)), max(1, int(tall * scale)))
+    hue = (seed * 47) % 360
+    wash = QLinearGradient(QPointF(0, 0), QPointF(picture.width(), picture.height()))
+    wash.setColorAt(0.0, QColor.fromHsv(hue, 120, 210))
+    wash.setColorAt(1.0, QColor.fromHsv((hue + 40) % 360, 160, 120))
+    painter = QPainter(picture)
+    painter.fillRect(picture.rect(), wash)
+    painter.setPen(QPen(QColor(255, 255, 255, 90), 2))
+    painter.drawLine(0, picture.height(), picture.width(), 0)
+    painter.end()
+    return picture
+
+
+def _fill_grid(window, thumbnails, cell: int) -> None:
+    """Put invented pictures into the grid's cache for the rows on screen.
+
+    Straight into the cache rather than by letting the real request run, which
+    off Windows would come back empty -- `paths.join` is Windows-shaped, so the
+    worker would be asked about `\\tmp\\dec\\photo.jpg` and find nothing. The
+    picture would then be a grid of icons, which is a real state the grid has
+    and not the one this is for.
+
+    Every third row is left without one, on purpose. A grid where some cells are
+    pictures and some are the icon for their kind is the ordinary case in any
+    real folder, and the thing worth checking is that the two sit together
+    without the icons reading as cells that failed to load.
+    """
+    from app.core.thumbnails import _row_key
+
+    for pane in window._panes:  # noqa: SLF001 - a development tool, not the app
+        model = pane.current.model
+        for row in range(min(model.rowCount(), 60)):
+            entry = model.entry(row)
+            if entry is None or entry.is_dir or row % 3 == 2:
+                continue
+            key = f"invented-{row}"
+            thumbnails._images[key] = _invented_picture(cell, row)  # noqa: SLF001
+            thumbnails._rows[_row_key(model.folder, entry.name)] = (  # noqa: SLF001
+                entry.mtime, entry.size, key)
+    thumbnails.changed.emit()
+
+
+def _fill_preview(window) -> None:
+    """Show an invented preview in each pane's panel: a picture on one side, text
+    on the other.
+
+    Both, because the two are the shapes that have to work at the same width and
+    they look nothing alike -- a picture centred on a backdrop against forty
+    lines of monospace -- and the question the render answers is whether a panel
+    narrow enough to be worth having is wide enough for either.
+    """
+    from PySide6.QtCore import QBuffer, QByteArray
+
+    from app.io.protocol import Preview, PreviewForm
+
+    store = QByteArray()
+    buffer = QBuffer(store)
+    buffer.open(QBuffer.WriteOnly)
+    _invented_picture(900, 3).save(buffer, "PNG")
+    buffer.close()
+
+    shapes = (
+        Preview(form=PreviewForm.IMAGE, source="qt", size=4_182_355,
+                image=bytes(store.data()), width=4032, height=3024, shown=1600),
+        Preview(form=PreviewForm.TEXT, source="text", size=61_204,
+                encoding="utf-8", lines=1840, truncated=True,
+                text="\n".join([
+                    "; drawing register  rev C",
+                    "; exported 2026-09-14",
+                    "",
+                    "sheet,title,scale,revision,issued",
+                    "A-101,Site plan,1:500,C,2026-08-11",
+                    "A-102,Ground floor,1:100,C,2026-08-11",
+                    "A-103,First floor,1:100,B,2026-07-29",
+                    "A-201,North elevation,1:100,C,2026-08-11",
+                    "A-202,South elevation,1:100,C,2026-08-11",
+                    "A-301,Section A-A,1:50,A,2026-06-02",
+                    "S-101,Foundation layout,1:100,D,2026-09-01",
+                ] * 4)),
+    )
+    for widget, shape in zip(window._widgets, shapes):  # noqa: SLF001
+        name = "DSC_4417.jpg" if shape.form is PreviewForm.IMAGE \
+            else "register-rev-C.csv"
+        widget._preview.show_preview(f"S:\\Jobs\\24-118\\{name}",  # noqa: SLF001
+                                     name, shape)
+
+
+def _show_viewer(window, what: str):
+    """Open the viewer on an invented file of the kind asked for.
+
+    The three forms are three different windows to look at -- a picture with its
+    zoom readout, text with its encoding, a hex dump -- and each has its own way
+    of going wrong: a picture that is not centred, text at a size that does not
+    fit the mono column, a dump whose character column is cut off.
+
+    Pushed into the viewer's own handler rather than through a real decode, for
+    `_fill_grid`'s reason: what is on this machine should not decide what the
+    picture shows.
+    """
+    from PySide6.QtCore import QBuffer, QByteArray
+
+    from app.io.protocol import Preview, PreviewForm
+    from app.ui.viewer import Viewer
+
+    previews = window._panes[0].previews  # noqa: SLF001
+    viewer = Viewer(previews, window._tokens, window)  # noqa: SLF001
+    window._viewer = viewer  # noqa: SLF001
+
+    if what == "text":
+        name = "install.log"
+        shape = Preview(form=PreviewForm.TEXT, source="text", size=284_117,
+                        encoding="cp1252", lines=6_240, truncated=True,
+                        text="\n".join(
+                            f"2026-09-{11 + i % 3:02d} 08:{i % 60:02d}:{(i * 7) % 60:02d}"
+                            f"  worker[{i % 4}]  listed "
+                            f"\\\\vault\\projects\\2026\\{i:04d} in "
+                            f"{(i * 13) % 900}ms, {(i * 411) % 48000:,} rows"
+                            for i in range(120)))
+    elif what == "hex":
+        name = "sensor.dat"
+        shape = Preview(form=PreviewForm.HEX, source="hex", size=1_048_576,
+                        data=bytes(range(256)) * 6)
+    else:
+        name = "DSC_4417.jpg"
+        store = QByteArray()
+        buffer = QBuffer(store)
+        buffer.open(QBuffer.WriteOnly)
+        _invented_picture(1600, 2).save(buffer, "PNG")
+        buffer.close()
+        shape = Preview(form=PreviewForm.IMAGE, source="qt", size=4_182_355,
+                        image=bytes(store.data()), width=4032, height=2268,
+                        shown=1600)
+
+    viewer._folder = "S:\\Jobs\\24-118\\Site photos"  # noqa: SLF001
+    viewer._names = [  # noqa: SLF001
+        "DSC_4411.jpg", "DSC_4413.jpg", name, "install.log", "sensor.dat",
+    ]
+    viewer._at = 2  # noqa: SLF001
+    viewer._name.setText(name)  # noqa: SLF001
+    viewer._where.setText("3 of 5")  # noqa: SLF001
+    viewer._on_ready(viewer.path, shape)  # noqa: SLF001
+    viewer.resize(1040, 700)
+    viewer.show()
+    return viewer
 
 
 def _show_queue(window):
@@ -292,6 +488,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cut", action="store_true",
                         help="put the first few rows on the clipboard as a cut, "
                              "to see how faded they are against the rest")
+    parser.add_argument("--preview-pane", action="store_true",
+                        help="open the preview panel in both panes, with an "
+                             "invented picture on one side and text on the other")
+    parser.add_argument("--grid", action="store_true",
+                        help="both panes in grid view, with invented pictures in "
+                             "two cells of every three")
+    parser.add_argument("--cell", type=int, default=128, metavar="PX",
+                        help="cell size for --grid")
+    parser.add_argument("--viewer", default="", choices=["", "image", "text", "hex"],
+                        help="render the viewer instead of the window, on an "
+                             "invented file of this kind")
     parser.add_argument("--all-themes", action="store_true",
                         help="one image per theme, to check the greys together")
     args = parser.parse_args(argv)
@@ -300,7 +507,9 @@ def main(argv: list[str] | None = None) -> int:
         print(render(args.path, args.out, theme=args.theme, accent=args.accent,
                      density=args.density, width=args.width, height=args.height,
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
-                     queue=args.queue, cut=args.cut))
+                     queue=args.queue, cut=args.cut, grid=args.grid,
+                     pane_preview=args.preview_pane, viewer=args.viewer,
+                     cell=args.cell))
         return 0
 
     from app.theme.tokens import THEMES
@@ -310,7 +519,9 @@ def main(argv: list[str] | None = None) -> int:
         print(render(args.path, out, theme=name, accent=args.accent,
                      density=args.density, width=args.width, height=args.height,
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
-                     queue=args.queue, cut=args.cut))
+                     queue=args.queue, cut=args.cut, grid=args.grid,
+                     pane_preview=args.preview_pane, viewer=args.viewer,
+                     cell=args.cell))
     return 0
 
 

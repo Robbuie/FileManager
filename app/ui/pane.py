@@ -25,10 +25,19 @@ from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
 
 from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size, split_name
-from app.io.protocol import MENU_COMMAND, MENU_SEPARATOR, MENU_SUBMENU, MenuItem
+from app.io.protocol import (
+    MENU_COMMAND,
+    MENU_SEPARATOR,
+    MENU_SUBMENU,
+    PREVIEW_BOX,
+    MenuItem,
+    Preview,
+)
 from app.ui import dialogs, glyphs
 from app.ui.breadcrumb import Breadcrumb
 from app.ui.favorites import FavoritesBar
+from app.ui.grid import GridView
+from app.ui.preview import PANE_TEXT_BYTES, PreviewPanel
 from app.ui.rows import RowDelegate
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -39,6 +48,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QSplitter,
+    QStackedWidget,
     QTabBar,
     QTableView,
     QToolButton,
@@ -80,6 +91,20 @@ SHELL_VERBS_WE_HAVE = frozenset({
 SEARCH_FORGETS_AFTER = 1500
 
 
+def _leaf(path: str) -> str:
+    """The name at the end of a path.
+
+    The one piece of path arithmetic in this file, and it is here rather than in
+    `core` because it is not arithmetic about the filesystem -- it is a label for
+    a panel, taken from a string this widget was already handed. Anything that
+    decides where a path *points* still goes through `app/io/paths.py`.
+    """
+    for separator in ("\\", "/"):
+        if separator in path:
+            path = path.rsplit(separator, 1)[-1]
+    return path
+
+
 class PaneWidget(QFrame):
 
     activated = Signal(object)          # this widget, when it takes focus
@@ -90,6 +115,11 @@ class PaneWidget(QFrame):
     clipboardRequested = Signal(str)
     addFavoriteRequested = Signal()     # from the favorites bar's own menu
     manageFavoritesRequested = Signal()
+    #: F3 on a file. A signal rather than a call for the reason the clipboard
+    #: keys are signals: the viewer is a window, and windows belong to the
+    #: window. What the pane provides is the folder, the files in the order it
+    #: has them, and which one the cursor is on.
+    viewRequested = Signal(str, list, int)
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
                  favorites=None, parent: QWidget | None = None):
@@ -225,6 +255,41 @@ class PaneWidget(QFrame):
         # to rediscover from a listing that starts at Z.
         self._view.sortByColumn(int(Column.NAME), Qt.AscendingOrder)
 
+        # The same rows as cells. One model, two views, and -- once
+        # `_share_selection` has run -- one selection model, which is what makes
+        # switching view keep what was marked and lets every command in this
+        # widget go on asking `self._view.selectionModel()` without caring which
+        # view is in front.
+        self._grid = GridView(self._pane.thumbnails)
+        self._grid.activated.connect(self._on_activated)
+        self._grid.setContextMenuPolicy(Qt.CustomContextMenu)
+        self._grid.customContextMenuRequested.connect(self._on_context_menu)
+        self._grid.installEventFilter(self)
+        self._grid.viewport().installEventFilter(self)
+        self._views = QStackedWidget()
+        self._views.addWidget(self._view)
+        self._views.addWidget(self._grid)
+        if self._pane.thumbnails is not None:
+            self._grid.set_cell(int(pane.config.get("preview.thumb_size")))
+            self._pane.thumbnails.changed.connect(self._grid.viewport().update)
+
+        # The preview panel, beside the listing rather than under the window.
+        # See `app/ui/preview.py` for why it is in the pane.
+        self._preview = PreviewPanel()
+        self._preview.activated.connect(self._claim)
+        self._preview.setVisible(bool(pane.config.get("preview.pane")))
+        self._body = QSplitter(Qt.Horizontal)
+        self._body.setChildrenCollapsible(False)
+        self._body.addWidget(self._views)
+        self._body.addWidget(self._preview)
+        # The listing takes the slack; the panel keeps the width it was dragged
+        # to. Without this a window resize grows both, and a preview panel that
+        # grows with the window ends up half the pane after a maximise -- the
+        # same rule the navigation rail needed.
+        self._body.setStretchFactor(0, 1)
+        self._body.setStretchFactor(1, 0)
+        self._body.splitterMoved.connect(self._remember_preview_width)
+
         self._status = QLabel("")
         self._status.setProperty("role", "status")
         self._space = QLabel("")
@@ -269,7 +334,7 @@ class PaneWidget(QFrame):
             layout.addWidget(self._bar)
         layout.addLayout(controls)
         layout.addWidget(self._filter)
-        layout.addWidget(self._view, 1)
+        layout.addWidget(self._body, 1)
         layout.addLayout(footer)
 
         self._pane.tabsChanged.connect(self._sync_tabs)
@@ -312,6 +377,13 @@ class PaneWidget(QFrame):
             # is the same guard the shell menu needs and for the same reason.
             self._pane.siblings.ready.connect(self._on_siblings)
             self._pane.siblings.unavailable.connect(self._crumbs.sibling_problem)
+        if self._pane.previews is not None:
+            # Both panes hear both answers for the siblings' reason: there is
+            # one decode outstanding for the window, so an answer arrives at the
+            # pane that did not ask, and that pane's panel has to drop it. It
+            # decides by comparing the path against the one it is waiting for.
+            self._pane.previews.ready.connect(self._on_preview)
+            self._pane.previews.unavailable.connect(self._on_preview_problem)
 
         #: The menu currently on screen, and what its shell entries mean. Both
         #: are None whenever no menu is open, which is what tells the replies
@@ -324,6 +396,11 @@ class PaneWidget(QFrame):
         #: forgets it. A quick search that never expires means the letters
         #: typed a minute ago are still narrowing the next one.
         self._search = ""
+        #: The same term, kept past that timeout, so Ctrl+G has something to
+        #: step. The timeout is about not extending a search nobody remembers
+        #: typing; it is not a statement that the search is over. Cleared by
+        #: Escape and by a change of folder, which are.
+        self._last_search = ""
         self._search_state = "idle"
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -335,11 +412,17 @@ class PaneWidget(QFrame):
         self._watch(self._pane.current.model)
         self._watch_selection()
 
+        #: Whether the splitter has been shared out against a real width yet.
+        #: See `showEvent`.
+        self._restored = False
+        self._share_selection()
         self.apply_metrics(metrics)
         self._sync_crumbs(self._pane.current.path)
         self._sync_tabs()
         self._sync_drives()
         self._sync_status(*self._current_status())
+        self.set_view_mode(self._pane.view_mode)
+        self._restore_preview_width()
 
     # ------------------------------------------------------------------ chrome
 
@@ -369,13 +452,172 @@ class PaneWidget(QFrame):
             button.setIcon(glyphs.icon(
                 name, colour=tokens["txt_1"], muted=tokens["txt_2"], ratio=ratio))
         self._rows.apply_tokens(tokens)
+        self._grid.apply_tokens(tokens)
+        self._preview.apply_tokens(tokens)
         self._view.viewport().update()
+
+    # ------------------------------------------------------------- view mode
+
+    @property
+    def showing_grid(self) -> bool:
+        return self._views.currentWidget() is self._grid
+
+    @property
+    def listing(self):
+        """Whichever view is in front.
+
+        Only three things need this and they are the three that are about the
+        widget rather than about the data: which view takes the keyboard, which
+        one scrolls a row into sight, and which one a context menu came from.
+        Everything else goes on asking `self._view.selectionModel()`, because
+        both views share one -- see `_share_selection`.
+        """
+        return self._grid if self.showing_grid else self._view
+
+    def set_view_mode(self, mode: str) -> None:
+        """List or grid, keeping the cursor and the selection.
+
+        Both are kept for free rather than by copying anything: the selection
+        model is shared, so switching view is a `setCurrentWidget` and nothing
+        else. What has to be done by hand is scrolling the cursor back into
+        sight, because the two views have different scroll positions and a
+        switch that left the cursor off screen would look like it had moved.
+        """
+        grid = mode == "grid"
+        self._pane.set_view_mode("grid" if grid else "list")
+        self._views.setCurrentWidget(self._grid if grid else self._view)
+        current = self._view.currentIndex()
+        if current.isValid():
+            self.listing.scrollTo(current)
+        if self.listing.hasFocus() or self._views.isVisible():
+            self.listing.setFocus(Qt.OtherFocusReason)
+        self._render_status()
+
+    def set_cell_size(self, size: int) -> None:
+        if self._pane.thumbnails is not None:
+            self._pane.thumbnails.set_size(size)
+        self._grid.set_cell(size)
+
+    def _share_selection(self) -> None:
+        """Give the grid the listing's selection model.
+
+        The reason the rest of this widget did not have to change when the grid
+        arrived. One selection model means the cursor and the marks are the same
+        objects in both views, so every command already written -- F5, Del, the
+        context menu, the group-selection keys -- acts on what is marked without
+        knowing or asking which view is in front. It also means switching view
+        cannot lose a selection, because there is only one.
+
+        Called again after every `setModel`, because `setModel` makes a new
+        selection model and drops the shared one on the floor.
+        """
+        picker = self._view.selectionModel()
+        if picker is not None and self._grid.model() is not self._view.model():
+            self._grid.setModel(self._view.model())
+        if picker is not None:
+            self._grid.setSelectionModel(picker)
+
+    # ---------------------------------------------------------- preview panel
+
+    @property
+    def showing_preview(self) -> bool:
+        return self._preview.isVisible()
+
+    def show_preview(self, shown: bool) -> None:
+        """Open or close the panel. Closing cancels what it was waiting for.
+
+        Cancelled rather than left to finish, because a panel nobody can see is
+        a read nobody is waiting for -- and the abandoned decode is still
+        holding the volume the next listing wants.
+        """
+        self._pane.config.set("preview.pane", bool(shown))
+        self._preview.setVisible(bool(shown))
+        if shown:
+            self._restore_preview_width()
+            self._ask_preview()
+        else:
+            self._preview.clear()
+            if self._pane.previews is not None:
+                self._pane.previews.cancel()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Share the splitter out once the pane is the width it will be.
+
+        The same trap the navigation rail hit and the same fix. A `setSizes`
+        called from `__init__` is dividing up a widget that has not been laid
+        out yet -- its width is whatever Qt's initial guess was, usually a few
+        hundred pixels -- so a panel asked for at 320 ends up taking most of the
+        pane and the listing is squeezed to one column. Done on the first show,
+        the numbers being divided are real ones.
+        """
+        super().showEvent(event)
+        if not self._restored:
+            self._restored = True
+            self._restore_preview_width()
+
+    def _restore_preview_width(self) -> None:
+        if not self._preview.isVisible():
+            return
+        total = self._body.width()
+        if total <= 0:
+            return          # not laid out yet; `showEvent` will come back to it
+        # Never more than half the pane, whatever is stored. A preview panel
+        # wider than the listing it belongs to is a listing that has stopped
+        # being usable, and a stored width from a maximised window on a second
+        # monitor is exactly how that happens.
+        wanted = max(160, min(int(self._pane.config.get("preview.width")),
+                              total // 2))
+        self._body.setSizes([total - wanted, wanted])
+
+    def _remember_preview_width(self, *_args) -> None:
+        sizes = self._body.sizes()
+        if len(sizes) == 2 and sizes[1] > 0:
+            self._pane.config.set("preview.width", int(sizes[1]))
+
+    def _ask_preview(self) -> None:
+        """Show whatever the cursor is on, if the panel is open.
+
+        The mtime and size come from the row rather than being looked up, which
+        is the trick the icon caches use: the listing already carries them, and
+        looking them up here would be a filesystem call from `app/ui/`.
+        """
+        previews = self._pane.previews
+        if previews is None or not self._preview.isVisible():
+            return
+        row = self.current_row()
+        model = self._pane.current.model
+        if row < 0 or model.is_parent_row(row):
+            self._preview.clear()
+            previews.cancel()
+            return
+        entry = model.entry(row)
+        path = self._pane.row_path(row)
+        if entry is None or not path or entry.is_dir:
+            # A folder is not previewed. Drawing the first four things inside it
+            # would be a listing per cursor move, which is the cost this feature
+            # is bounded against.
+            self._preview.clear("" if entry is None else entry.name)
+            previews.cancel()
+            return
+        self._preview.waiting(path, entry.name)
+        previews.ask(path, box=PREVIEW_BOX, text_bytes=PANE_TEXT_BYTES,
+                     mtime=entry.mtime, size=entry.size)
+
+    def _on_preview(self, path: str, answer: Preview) -> None:
+        if path != self._preview.path:
+            return          # the other pane's file, or one this pane has left
+        self._preview.show_preview(path, _leaf(path), answer)
+
+    def _on_preview_problem(self, path: str, why: str) -> None:
+        if path == self._preview.path:
+            self._preview.problem(path, why)
 
     def set_active(self, active: bool) -> None:
         self.setProperty("active", "true" if active else "false")
         # The selection is painted, not styled, so the delegate has to be told
         # as well -- it draws the live pane's wash stronger than the other's.
         self._rows.set_live(active)
+        self._grid.set_live(active)
         self._view.viewport().update()
         # A property a stylesheet selects on only takes effect on a repolish.
         self.style().unpolish(self)
@@ -433,7 +675,7 @@ class PaneWidget(QFrame):
                                    bool(more))
 
     def focus_listing(self) -> None:
-        self._view.setFocus(Qt.OtherFocusReason)
+        self.listing.setFocus(Qt.OtherFocusReason)
 
     def focus_path(self) -> None:
         """Ctrl+L, and a click on the bar's empty space. Swap in the field."""
@@ -515,11 +757,12 @@ class PaneWidget(QFrame):
         first, the way Explorer does. Anything else means a menu whose title
         says one thing and whose commands act on another.
         """
-        index = self._view.indexAt(point)
+        view = self.listing
+        index = view.indexAt(point)
         on_row = index.isValid() and not self._pane.current.model.is_parent_row(index.row())
         if on_row and index.row() not in self._selected_rows():
-            self._view.setCurrentIndex(index)
-            self._view.selectionModel().clearSelection()
+            view.setCurrentIndex(index)
+            view.selectionModel().clearSelection()
         names = self.selected_names() if on_row else []
 
         menu = QMenu(self)
@@ -541,7 +784,7 @@ class PaneWidget(QFrame):
             # that is sometimes not there when the mouse button comes up.
             self._pane.context_menu(names, extended=self._extended())
 
-        chosen = menu.exec(self._view.viewport().mapToGlobal(point))
+        chosen = menu.exec(self.listing.viewport().mapToGlobal(point))
         command = self._menu_commands.get(chosen)
         self._menu = None
         self._menu_slot = None
@@ -569,6 +812,11 @@ class PaneWidget(QFrame):
             if entry is not None and entry.is_dir:
                 menu.addAction("Open in new tab\tCtrl+Enter",
                                lambda: self._open_row_in_tab(row, background=False))
+            if entry is not None and not entry.is_dir:
+                # Above Open rather than below, because for a drawing or a
+                # photograph this is the entry somebody wants and Open hands the
+                # file to whatever Windows has associated with it.
+                menu.addAction("View\tF3", self.view_current)
             menu.addSeparator()
             menu.addAction("Copy\tCtrl+C",
                            lambda: self.clipboardRequested.emit("copy"))
@@ -680,6 +928,40 @@ class PaneWidget(QFrame):
 
         return bool(QApplication.keyboardModifiers() & Qt.ShiftModifier)
 
+    def view_current(self) -> None:
+        """F3: open the viewer on the file under the cursor.
+
+        The list of files and the position in it are worked out here rather than
+        in the viewer, because both are questions about what this pane is showing
+        -- the sort order the header is in, the filter that is applied -- and the
+        viewer has no business knowing about either.
+
+        A cursor on a folder opens the viewer on the *first* file in the listing
+        rather than doing nothing. Doing nothing is the response that reads as a
+        broken key, and the folder the cursor is on is not a thing that can be
+        viewed however the request is phrased.
+        """
+        model = self._pane.current.model
+        names = self._pane.file_names()
+        if not names:
+            self._sync_status("nothing in this folder can be viewed", "idle")
+            return
+        row = self.current_row()
+        entry = model.entry(row) if row >= 0 and not model.is_parent_row(row) else None
+        at = names.index(entry.name) if (entry is not None
+                                        and entry.name in names) else 0
+        self.viewRequested.emit(self._pane.current.path, names, at)
+
+    def reveal_name(self, name: str) -> None:
+        """Put the cursor on a name. What the viewer's walk reports back.
+
+        The listing follows the viewer rather than the other way round, so
+        closing it leaves the cursor on the file that was last on screen -- which
+        is where the eye already is, and the thing that makes stepping through a
+        folder in the viewer and then acting on one of them work at all.
+        """
+        self._reveal(name)
+
     def _open_current(self) -> None:
         row = self.current_row()
         if row >= 0:
@@ -762,6 +1044,9 @@ class PaneWidget(QFrame):
                 return
 
         shift = bool(event.modifiers() & Qt.ShiftModifier)
+        if key == Qt.Key_F3:
+            self.view_current()
+            return
         if key == Qt.Key_F5:
             self.transferRequested.emit("copy")
             return
@@ -800,8 +1085,10 @@ class PaneWidget(QFrame):
             self._show_crumbs()
         self._clear_hover()
         # A search is about the rows on screen, and these are about to be
-        # different rows.
-        self._clear_search()
+        # different rows -- so the term goes too, not just the narrowing. A
+        # Ctrl+G in a new folder stepping a name typed in the last one would be
+        # the cursor jumping for a reason nothing on screen explains.
+        self._clear_search(forget=True)
         # Navigating clears the model's filter; the box has to agree with it.
         if self._filter.text():
             self._filter.blockSignals(True)
@@ -834,7 +1121,7 @@ class PaneWidget(QFrame):
         if row + 1 < model.rowCount():
             picker.setCurrentIndex(model.index(row + 1, 0),
                                    QItemSelectionModel.NoUpdate)
-            self._view.scrollTo(model.index(row + 1, 0))
+            self.listing.scrollTo(model.index(row + 1, 0))
 
     # ------------------------------------------------------------------- sync
 
@@ -933,6 +1220,11 @@ class PaneWidget(QFrame):
         picker = self._view.selectionModel()
         if picker is not None:
             picker.selectionChanged.connect(self._render_status)
+            # The cursor, not the selection. A preview follows where the
+            # keyboard is, which is `currentChanged` -- `selectionChanged` does
+            # not fire when the cursor moves without marking anything, which is
+            # what the arrow keys do and is exactly the case this is for.
+            picker.currentChanged.connect(self._on_cursor_moved)
 
     def _on_rows_settled(self) -> None:
         """Put the cursor on the first row so the keyboard has somewhere to be.
@@ -950,17 +1242,32 @@ class PaneWidget(QFrame):
         self._render_status()
 
     def _sync_current(self) -> None:
-        self._clear_search()
+        self._clear_search(forget=True)
         model = self._pane.current.model
         self._view.setModel(model)
+        self._grid.setModel(model)
         self._layout_columns()
         self._view.horizontalHeader().setSortIndicator(
             int(model.sort_column), model.sort_order,
         )
         self._watch(model)
+        # Before `_watch_selection`, because sharing is what decides which
+        # selection model the connections below are made on. The other way round
+        # connects to one that is about to be replaced.
+        self._share_selection()
         self._watch_selection()
         self._sync_tabs()
         self._sync_drives()
+        self._ask_preview()
+
+    def _on_cursor_moved(self, *_args) -> None:
+        """The keyboard moved to another row.
+
+        Only the preview cares, and only when it is open -- `_ask_preview`
+        returns immediately otherwise, which is what keeps this connection free
+        for everybody who never opens the panel.
+        """
+        self._ask_preview()
 
     def _reveal(self, name: str) -> None:
         """Put the cursor on a name once its listing has arrived.
@@ -976,7 +1283,7 @@ class PaneWidget(QFrame):
             return
         index = model.index(row, 0)
         picker.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
-        self._view.scrollTo(index)
+        self.listing.scrollTo(index)
 
     def _sync_status(self, text: str, state: str) -> None:
         self._summary = (text, state)
@@ -1186,9 +1493,35 @@ class PaneWidget(QFrame):
         change what the rest of the keyboard does.
         """
         key = event.key()
-        if key == Qt.Key_F3:
-            if not self._search:
+        if key == Qt.Key_G and event.modifiers() & Qt.ControlModifier:
+            # Ctrl+G, not F3. F3 was find-next until 0.16 and is the viewer
+            # now, which is what Double Commander does with it and what these
+            # fingers already expect -- and a viewer is worth a bare function
+            # key in a way that stepping a quick search is not. Ctrl+G is what
+            # every editor uses for the same thing, so the move is to a key that
+            # was already the second guess.
+            #
+            # It steps the *last* term as well as a live one, which the F3 it
+            # replaced did not, and the difference matters more than it sounds.
+            # A quick search stops narrowing after `SEARCH_FORGETS_AFTER` --
+            # that timeout is about not extending a search nobody remembers
+            # typing, and it has nothing to do with finding the next match. So
+            # without this, find-next only worked within a second and a half of
+            # the last keystroke, and pressing it at any other time did nothing
+            # at all. Which is not a key that reads as unavailable; it reads as
+            # a key that is broken.
+            if not self._search and not self._last_search:
                 return False
+            if not self._search:
+                self._revive_search()
+            self._step_search(-1 if event.modifiers() & Qt.ShiftModifier else 1)
+            return True
+        if key in (Qt.Key_Return, Qt.Key_Enter) and self._search \
+                and not event.modifiers() & Qt.ControlModifier:
+            # And Enter while a search is live, which is the key a hand already
+            # on the letters actually reaches for. Only while one is live: with
+            # no search, Enter opens what the cursor is on and must keep doing
+            # so. Ctrl+Enter is excluded because it opens a folder in a new tab.
             self._step_search(-1 if event.modifiers() & Qt.ShiftModifier else 1)
             return True
         if not self._search:
@@ -1197,7 +1530,7 @@ class PaneWidget(QFrame):
             self._set_search(event.text())
             return True
         if key == Qt.Key_Escape:
-            self._clear_search()
+            self._clear_search(forget=True)
             return True
         if key == Qt.Key_Backspace:
             # Shortens the search rather than leaving the folder. Leaving is
@@ -1229,6 +1562,11 @@ class PaneWidget(QFrame):
             self._clear_search()
             return
         self._search = text
+        # Remembered separately, and this is the copy the timeout does not
+        # touch. `_search` is "what is being typed right now" and expires;
+        # `_last_search` is "what was looked for", and it lives until somebody
+        # presses Escape or leaves the folder.
+        self._last_search = text
         self._search_timer.start()
         model = self._pane.current.model
         # From the row the cursor is on, so a second letter narrows the answer
@@ -1250,8 +1588,31 @@ class PaneWidget(QFrame):
             self._go_to(row)
         self._render_status()
 
-    def _clear_search(self) -> None:
+    def _revive_search(self) -> None:
+        """Put the last term back, without moving the cursor.
+
+        Without moving it, which is the whole point: `_set_search` jumps to the
+        first match from where the cursor is, and reviving is always followed by
+        a step -- so going through `_set_search` would make one Ctrl+G move two
+        matches. This only makes the term live again; `_step_search` does the
+        moving, from wherever the cursor actually is now.
+        """
+        self._search = self._last_search
+        self._search_state = "idle"
+        self._search_timer.start()
+
+    def _clear_search(self, *, forget: bool = False) -> None:
+        """Stop narrowing. `forget` also drops the term Ctrl+G would step.
+
+        Two callers and two meanings. The timer means "somebody stopped typing",
+        which ends the accumulation and nothing else -- the term is still what
+        they were looking for. Escape and a change of folder mean "done with
+        this", and those forget it.
+        """
+        if forget:
+            self._last_search = ""
         if not self._search:
+            self._render_status()
             return
         self._search = ""
         self._search_state = "idle"
@@ -1271,7 +1632,7 @@ class PaneWidget(QFrame):
             return
         index = model.index(row, 0)
         picker.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
-        self._view.scrollTo(index)
+        self.listing.scrollTo(index)
 
     # ---------------------------------------------------------- the favorites
 
@@ -1377,7 +1738,19 @@ class PaneWidget(QFrame):
         started on one row and finished on another does nothing -- the same
         rule a browser follows, and for the same reason.
         """
-        if watched is self._view and event.type() == QEvent.KeyPress:
+        # Both views, not just the listing. `self._grid` was added in 0.16 and
+        # this line was left naming one widget, which is the whole of what a
+        # second view costs here: in grid view the keys below reached
+        # `QListView` instead of this filter, so Space marked a cell rather
+        # than counting a folder, the group keys did nothing, and typing a name
+        # went to Qt's own `keyboardSearch` -- which jumps without saying what
+        # it matched or that it matched nothing.
+        #
+        # Everything under `self._view.selectionModel()` further down kept
+        # working in both views because the selection model is shared. That is
+        # exactly why this was invisible: the commands were all fine, and only
+        # the keys that have to be caught *before* a view were not.
+        if watched in (self._view, self._grid) and event.type() == QEvent.KeyPress:
             # Space, before the view: `QAbstractItemView` answers it by
             # toggling the selection, so a key press that never reaches this
             # widget would mark a row instead of counting it.

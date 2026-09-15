@@ -335,6 +335,67 @@ QPushButton[role="railrow"][state="current"] {{
     color: {accent_text};
 }}
 
+/* ---------------------------------------------------------------- previews */
+
+/* The grid is the listing in another shape, so it takes the listing's surface
+   and none of its own chrome. The selection band is painted in `app/ui/grid.py`
+   for the reason the rows' is painted in `app/ui/rows.py`: a rounded shape
+   around a picture and two lines of text is not something `::item` can be asked
+   for. */
+QListView[role="grid"] {{
+    background: {bg_2};
+    color: {txt_0};
+    border: none;
+    outline: none;
+}}
+
+/* The preview panel sits inside a pane, so it takes the chrome grey rather than
+   the pane's raised one -- the same relationship the rail has to the panes, and
+   what makes the panel read as a surface beside the listing rather than as part
+   of it. */
+QFrame[role="previewpanel"] {{
+    background: {bg_1};
+    border: none;
+    border-radius: {radius_sm};
+}}
+QLabel[role="previewname"] {{
+    background: transparent;
+    color: {txt_0};
+    font-weight: 600;
+    padding: 1px 2px;
+}}
+
+/* Text and hex, in both the panel and the viewer. No border and no focus ring:
+   in the panel it cannot be focused at all, and in the viewer the window is
+   already the frame. */
+QPlainTextEdit[role="preview"] {{
+    background: {bg_1};
+    color: {txt_1};
+    border: none;
+    padding: 2px 4px;
+    selection-background-color: {accent_soft};
+    selection-color: {accent_text};
+}}
+
+/* The viewer. `bg_0`, the darkest surface in every set, because the thing in
+   the middle of it is a photograph and everything around one should be quieter
+   than it is. The picture's own backdrop is painted by the widget for the same
+   reason the rows are. */
+QDialog[role="viewer"] {{ background: {bg_0}; }}
+QDialog[role="viewer"] QPlainTextEdit[role="preview"] {{ background: {bg_0}; }}
+QLabel[role="viewername"] {{
+    background: transparent;
+    color: {txt_0};
+    font-weight: 600;
+    padding: 1px 2px;
+}}
+QLabel[role="viewerwhere"] {{
+    background: transparent;
+    color: {txt_2};
+    font-family: {mono};
+    padding: 1px 2px;
+}}
+
 /* ----------------------------------------------------------------- listing */
 
 /* Everything above exists to frame this, so this is where the borders are

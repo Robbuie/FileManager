@@ -30,17 +30,21 @@ import signal
 import time
 from typing import Any
 
-from app.io import elevate, paths
+from app.io import decode, elevate, paths
 from app.io.protocol import (
     BATCH_SIZE,
     ICON_FILE,
     ICON_FOLDER,
+    PREVIEW_TEXT_BYTES,
     Entry,
     Op,
+    Preview,
+    PreviewForm,
     Reply,
     Request,
     Status,
     own_icon_kind,
+    preview_family,
 )
 
 #: The shell, for opening a file the way Explorer does. Optional at import so
@@ -174,6 +178,10 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _icon(request, outbox)
     elif request.op is Op.FILE_ICON:
         _file_icons(request, outbox)
+    elif request.op is Op.PREVIEW:
+        _preview(request, outbox)
+    elif request.op is Op.THUMBNAIL:
+        _thumbnails(request, outbox)
     else:
         outbox.put(Reply(request.id, Status.ERROR, message=f"unknown op {request.op!r}"))
 
@@ -622,6 +630,110 @@ def _path_icon(path: str, size: int, problems: list[str]) -> bytes | None:
             win32gui.DestroyIcon(handle)
         except Exception:  # noqa: BLE001 - already gone is the outcome wanted
             pass
+
+
+def _preview(request: Request, outbox: Any) -> None:
+    """What one file looks like, at the size the caller asked for.
+
+    Thin on purpose. Every decision about what a file is and which decoder gets
+    it lives in `app/io/decode.py`, because the viewer, the preview pane and the
+    grid all have to agree about it and two of them come through
+    `_thumbnails` below. What this function adds is the three things that are
+    about being a worker rather than about decoding:
+
+      * the deadline, turned from a duration into a moment so every rung of the
+        ladder can check the same one;
+      * the size refusal, which is a policy about somebody's bandwidth rather
+        than about decoding -- a 400 MB video is not read to make a picture,
+        and the reply says so in a sentence rather than coming back empty;
+      * the envelope, so a file that cannot be opened is a `Preview` with a
+        note on it and not an exception the caller has to catch.
+
+    The reply status is OK even for a preview that came to nothing, and that is
+    deliberate: "this file has no preview" is an answer, not a failure, and a
+    caller that had to tell the two apart would need the same branch twice.
+    Only a file that could not be reached at all is an error.
+    """
+    box = max(0, int(request.args.get("box") or 0))
+    text_bytes = int(request.args.get("text_bytes", PREVIEW_TEXT_BYTES))
+    allow_shell = bool(request.args.get("shell", True))
+    page = max(0, int(request.args.get("page") or 0))
+    deadline = time.monotonic() + request.timeout
+
+    try:
+        size = os.path.getsize(request.path)
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+        return
+    if size > decode.MAX_DECODE_BYTES:
+        outbox.put(Reply(request.id, Status.OK, payload=Preview(
+            form=PreviewForm.NONE, size=size,
+            note=f"{size / (1024 * 1024):,.0f} MB is too large to read for a "
+                 f"preview")))
+        return
+
+    answer = decode.preview(request.path, box=box, deadline=deadline,
+                            text_bytes=text_bytes, allow_shell=allow_shell,
+                            page=page)
+    outbox.put(Reply(request.id, Status.OK, payload=answer))
+
+
+def _thumbnails(request: Request, outbox: Any) -> None:
+    """Small pictures for a screenful of the grid, in one reply.
+
+    `_file_icons` above with a decoder behind it instead of the shell's icon
+    call, and every bound it has for the same reasons: the kind is checked here
+    as well as in the caller, because a bound only one end enforces is a bound a
+    later caller can lose; anything path-shaped in a name is refused rather than
+    followed; the deadline is checked between files, so a share that goes quiet
+    costs the cells it had not reached and nothing else; and the pictures are
+    keyed on a digest, so a folder holding forty copies of one drawing is one
+    image rather than forty.
+
+    A name that produced nothing is simply absent from `rows`, which the caller
+    reads as "draw the icon for its kind" -- the thing it was drawing before
+    this request existed.
+    """
+    names = [str(name) for name in (request.args.get("names") or [])]
+    size = max(16, int(request.args.get("size") or 128))
+    allow_shell = bool(request.args.get("shell", True))
+    empty = {"size": size, "rows": {}, "images": {}}
+    if not names:
+        outbox.put(Reply(request.id, Status.OK, payload=empty))
+        return
+
+    deadline = time.monotonic() + request.timeout
+    rows: dict[str, str] = {}
+    images: dict[str, bytes] = {}
+
+    for name in names:
+        if time.monotonic() > deadline:
+            outbox.put(Reply(request.id, Status.TIMEOUT,
+                             payload={"size": size, "rows": rows,
+                                      "images": images},
+                             message="the decoder did not reach every file "
+                                     "within the deadline"))
+            return
+        if any(ch in name for ch in _SEPARATORS):
+            continue
+        if preview_family(name) not in ("image", "raw", "shell"):
+            # The caller's bound, restated. Text is not a thumbnail: ninety
+            # cells of grey lines at 128 pixels are ninety identical squares,
+            # and the icon for the kind says more in less space.
+            continue
+        try:
+            picture = decode.thumbnail(paths.join(request.path, name), size,
+                                       deadline=deadline,
+                                       allow_shell=allow_shell)
+        except Exception:  # noqa: BLE001 - one unreadable file is not a failed request
+            continue
+        if not picture:
+            continue
+        key = hashlib.sha1(picture).hexdigest()[:16]
+        rows[name] = key
+        images.setdefault(key, picture)
+    outbox.put(Reply(request.id, Status.OK,
+                     payload={"size": size, "rows": rows, "images": images}))
 
 
 #: `SHGFI_OVERLAYINDEX` and the image list flags that go with it. Not in

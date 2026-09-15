@@ -33,13 +33,18 @@ from app.io.pool import WorkerPool
 from app.io.protocol import (
     MENU_SEPARATOR,
     MENU_SUBMENU,
+    PREVIEW_BOX,
+    PREVIEW_TEXT_BYTES,
     Entry,
     MenuItem,
     Op,
+    Preview,
+    PreviewForm,
     Reply,
     Status,
     icon_key,
     own_icon_kind,
+    preview_family,
 )
 
 _SETTLED = {Status.OK, Status.TIMEOUT, Status.CANCELLED,
@@ -534,6 +539,137 @@ def cmd_fileicons(args: argparse.Namespace) -> int:
         pool.shutdown()
 
 
+def cmd_preview(args: argparse.Namespace) -> int:
+    """Decode one file and say what came out of it, without drawing anything.
+
+    The only way to exercise the decoder against a real file on a real share,
+    and the numbers worth watching are the last three.
+
+    **Which rung answered** (`source`) is the first thing to read: `qt` means
+    Qt's own plugins, `raw` the JPEG inside a camera file, `shell` a thumbnail
+    provider Windows already had, `text` and `hex` the floor. A `.heic` that
+    comes back `hex` is a missing codec pack on this machine rather than a
+    fault here, and this line is how the two are told apart.
+
+    **`decoded` against `natural`** is what the scaling is for. A 6,000 pixel
+    photograph asked for at 400 must report `natural 6000x4000` and `decoded
+    400`, and the bytes must be tens of kilobytes rather than megabytes -- if
+    the two sizes agree on a large picture then `setScaledSize` is not being
+    honoured and every preview is carrying the whole file across the process
+    boundary.
+
+    **`elapsed`** is the one to take to a share. A local JPEG is single-digit
+    milliseconds; the same file over SMB is the read, and that is the cost this
+    whole feature is bounded against.
+
+    `--write` saves what came back, which is the only way to find out whether
+    the picture is actually of the file rather than of something else -- a
+    thumbnail handler that answers with a generic page icon is an answer, and
+    it looks like a working preview from here.
+    """
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.PREVIEW, args.path, timeout=args.timeout,
+                       args={"box": args.box, "text_bytes": args.text_bytes,
+                             "shell": not args.no_shell})
+        _report_outcome(args.path, outcome, rows=False)
+        answer = outcome.payload
+        if not isinstance(answer, Preview):
+            _report("preview", "nothing came back that is a preview")
+            return _exit_code(outcome)
+
+        _report("form", answer.form.value)
+        _report("source", answer.source or "-")
+        _report("file size", f"{answer.size:,} bytes")
+        if answer.form is PreviewForm.IMAGE:
+            _report("natural", f"{answer.width} x {answer.height}")
+            _report("decoded", f"{answer.shown} px on the long edge")
+            _report("png", f"{len(answer.image or b''):,} bytes")
+            if answer.pages:
+                _report("pages", answer.pages)
+        elif answer.form is PreviewForm.TEXT:
+            _report("encoding", answer.encoding)
+            _report("lines", f"{answer.lines:,}"
+                             f"{' (and more)' if answer.truncated else ''}")
+            for line in answer.text.splitlines()[: args.lines]:
+                print(f"  {line[:110]}")
+        elif answer.form is PreviewForm.HEX:
+            data = answer.data or b""
+            _report("bytes", f"{len(data):,} read")
+            for at in range(0, min(len(data), args.lines * 16), 16):
+                chunk = data[at:at + 16]
+                shown = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                print(f"  {at:08x}  {chunk.hex(' '):<47}  {shown}")
+        if answer.note:
+            _report("note", answer.note)
+
+        if args.write and answer.form is PreviewForm.IMAGE and answer.image:
+            with open(args.write, "wb") as handle:
+                handle.write(answer.image)
+            _report("written", args.write)
+        return _exit_code(outcome)
+    finally:
+        pool.shutdown()
+
+
+def cmd_thumbnails(args: argparse.Namespace) -> int:
+    """List a folder and make a thumbnail for every row that could have one.
+
+    The grid's cost, measured. Three numbers, and the first is the bound: how
+    many rows are a kind anything could draw at all. In a folder of text files
+    it is zero and zero is the design working -- nothing is opened and the grid
+    draws icons, exactly as the listing does. In a folder of photographs it is
+    all of them, which is the case worth timing over a share and the reason
+    this command exists.
+
+    The second is distinct pictures against files answered. A folder holding
+    forty copies of one drawing should come back as one image; one image per
+    file means the digest is not doing its job and every cell is carrying its
+    own copy.
+
+    The third is `per file`, which is what decides whether the grid is usable.
+    A screenful is forty to ninety cells, so anything much past twenty
+    milliseconds a file is a grid that fills in visibly rather than appearing.
+    """
+    pool = WorkerPool()
+    try:
+        listing = _run(pool, Op.LIST, args.path, timeout=args.timeout,
+                       keep_names=args.rows)
+        _report_outcome(args.path, listing)
+        names = listing.names[: args.rows]
+        wanted = [name for name in names
+                  if preview_family(name) in ("image", "raw", "shell")]
+        _report("rows read", len(names))
+        _report("thumbnails", f"{len(wanted)} of {len(names)} rows could draw one")
+        if not wanted:
+            return _exit_code(listing)
+
+        thumbs = _run(pool, Op.THUMBNAIL, args.path, timeout=args.thumb_timeout,
+                      args={"names": wanted, "size": args.size,
+                            "shell": not args.no_shell})
+        payload = thumbs.payload if isinstance(thumbs.payload, dict) else {}
+        rows = payload.get("rows") or {}
+        images = payload.get("images") or {}
+        _report("status", thumbs.status.value)
+        if thumbs.message:
+            _report("message", thumbs.message)
+        _report("answered", f"{len(rows)} of {len(wanted)}")
+        _report("images", f"{len(images)} distinct")
+        _report("bytes", f"{sum(len(v) for v in images.values()):,} in total")
+        _report("elapsed", f"{thumbs.elapsed:.3f}s")
+        if wanted:
+            _report("per file", f"{thumbs.elapsed / len(wanted) * 1000:.1f} ms")
+        for name in wanted:
+            key = rows.get(name)
+            if not key:
+                print(f"  {name:<44} -")
+                continue
+            print(f"  {name:<44} {key:<16} {len(images.get(key) or b''):,} bytes")
+        return _exit_code(thumbs)
+    finally:
+        pool.shutdown()
+
+
 def cmd_elevate(args: argparse.Namespace) -> int:
     """Run one operation with administrator rights, prompt and all.
 
@@ -928,6 +1064,32 @@ def build_parser() -> argparse.ArgumentParser:
     own.add_argument("--size", type=int, default=16, choices=[16, 32])
     own.add_argument("--icon-timeout", type=float, default=8.0)
     own.set_defaults(func=cmd_fileicons)
+
+    # A file, not a folder, so the help says path rather than inheriting the
+    # wording every other command uses.
+    seeing = with_path("preview", "decode one file and say what came out",
+                       timeout=10.0)
+    seeing.add_argument("--box", type=int, default=PREVIEW_BOX, metavar="PX",
+                        help="longest edge wanted from a picture")
+    seeing.add_argument("--text-bytes", type=int, default=PREVIEW_TEXT_BYTES,
+                        metavar="N", help="how much of a text file to read")
+    seeing.add_argument("--lines", type=int, default=12, metavar="N",
+                        help="how many lines of text, or rows of hex, to print")
+    seeing.add_argument("--write", default="", metavar="FILE",
+                        help="save the picture that came back, to look at it")
+    seeing.add_argument("--no-shell", action="store_true",
+                        help="skip the Windows thumbnail handler, to see what "
+                             "this application can decode on its own")
+    seeing.set_defaults(func=cmd_preview)
+
+    grid = with_path("thumbnails", "thumbnails for a folder, and what the grid costs")
+    grid.add_argument("--rows", type=int, default=60, metavar="N",
+                      help="how many rows to ask about, as a screenful would")
+    grid.add_argument("--size", type=int, default=128, metavar="PX")
+    grid.add_argument("--thumb-timeout", type=float, default=20.0)
+    grid.add_argument("--no-shell", action="store_true",
+                      help="skip the Windows thumbnail handler")
+    grid.set_defaults(func=cmd_thumbnails)
 
     # Not `with_path`: the action reads better in front of the path, and the
     # order of positionals is the order they are added.

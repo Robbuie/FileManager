@@ -5,6 +5,96 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.16.0]
+
+Seeing what is in a file without leaving the window. Three surfaces and one
+decoder behind them: F3 opens a viewer, Ctrl+P opens a panel beside the
+listing, and Ctrl+Shift+P turns the rows into cells with pictures in them.
+
+They are one feature rather than three because they ask the same question at
+three sizes. A viewer shows a photograph large, a panel shows it small beside
+the folder, and the grid shows ninety of them at 128 pixels -- the decision
+about what a file *is* is made once, in `app/io/decode.py`, and the three
+callers differ only in the box they ask for.
+
+**No dependency was added**, which was not the plan and is worth saying. The
+four format families asked for -- pictures, camera raw, documents and video --
+came out of what is already installed: PySide6 ships Qt's image plugins, and
+the PDF plugin among them registers as an image format, so a page of a drawing
+set costs what a photograph costs. A camera raw file is unwrapped rather than
+demosaiced -- every one of them carries a full JPEG of the shot in its header,
+so pulling it out is a scan for two byte markers. And a frame of a video comes
+from the thumbnail handler Windows already has.
+
+### Added
+- **F3 opens a viewer.** Images with zoom and fit, the arrow keys stepping
+  through the folder; text with the encoding it was actually decoded as; a hex
+  dump for everything else. The three are one window rather than three, because
+  what a person is doing is looking through a folder, and stepping from a JPEG
+  to the readme beside it should not close one window and open another.
+
+  Which shape you get is decided by what came back rather than by the
+  extension, so a photograph somebody saved as `plan.bak` opens as a
+  photograph, and a `.png` that is really a text file opens as text.
+
+  The keys are on the footer of the window, because a viewer opened with a
+  function key is a window somebody arrives in without having read anything.
+  `+` and `-` zoom, `F` fits, `0` is one-to-one, PgUp and PgDn step the pages
+  of a PDF, Esc closes. The listing follows the walk, so closing it leaves the
+  cursor on the file that was last on screen.
+- **A preview pane, on Ctrl+P.** A panel beside the listing showing whatever
+  the cursor is on. It is inside the pane rather than being one panel for the
+  window, because in a dual-pane file manager the question is never only
+  "where" but "which side".
+- **A thumbnail grid, on Ctrl+Shift+P.** The same rows as cells. The same
+  model, not a copy -- so the sort the header set still applies, the filter
+  still applies, and the selection is the same selection, which means switching
+  view mid-task cannot lose what was marked. Four cell sizes under View, and
+  the grid is per pane rather than per window: a grid of photographs on one
+  side and a listing of where they are going on the other is the case that
+  makes a dual-pane file manager worth using.
+- **`harness preview` and `harness thumbnails`,** for measuring the decoder
+  against a real share. `preview` says which rung of the ladder answered, which
+  is the difference between a missing codec pack and a bug; `thumbnails`
+  reports the cost per file, which is what decides whether the grid fills in
+  visibly or appears.
+
+### Changed
+- **F3 is the viewer now; the quick search's find-next moved to Ctrl+G**
+  (Ctrl+Shift+G for the previous match, and Enter also steps while a search is
+  live). F3 was find-next since 0.10. It moved because a viewer is worth a bare
+  function key in a way that stepping a search is not, because it is what
+  Double Commander does with the key, and because Ctrl+G is what every editor
+  uses -- so it was already the second guess.
+
+  **Ctrl+G steps the last name looked for, not only one still being typed.**
+  The quick search stops accumulating 1.5 seconds after the last keystroke,
+  which is about not extending a search nobody remembers making -- it is not a
+  statement that the search is over. F3 read it as one, so find-next only ever
+  worked within a second and a half of typing. Escape forgets the name, and so
+  does leaving the folder.
+
+### Notes on cost, since this is the feature that opens files
+- **The ordinary case costs nothing.** A listing in the normal view never asks
+  for a preview of anything. The panel is closed by default and the grid is a
+  view somebody switches to, so a folder of 50,000 drawings costs exactly what
+  it cost in 0.15 unless a person asks to look inside it.
+- **Pictures are scaled before they cross the process boundary,** not after. A
+  6,000 x 4,000 photograph is forty megabytes of pixels and about ninety
+  kilobytes at the size a pane can show it, and Qt's JPEG reader scales during
+  decompression -- so the large version never exists anywhere.
+- **The preview pane is debounced and one-at-a-time.** A held arrow key crosses
+  thirty rows on the way to row thirty-one and asks about none of them, and an
+  abandoned decode is cancelled *at the worker* rather than merely ignored --
+  it is still a file being read off a volume, and the next row wants that
+  worker.
+- **The grid asks only about cells that could draw one**, a screenful at a
+  time, in one request per folder, with the pictures keyed on a digest so forty
+  copies of one drawing are one image.
+- **Three switches under View**, for the day something misbehaves: pictures in
+  the grid, Windows thumbnail handlers, and the preview pane itself. The middle
+  one turns off the only rung of the decoder that runs somebody else's code.
+
 ## [0.15.0]
 
 Ctrl+C, Ctrl+X and Ctrl+V, talking to Explorer in both directions. Until now

@@ -92,7 +92,8 @@ class Pane(QObject):
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
                  menu=None, sizes=None, siblings=None, parent=None,
-                 file_icons=None, transfers=None, clipboard=None) -> None:
+                 file_icons=None, transfers=None, clipboard=None,
+                 previews=None, thumbnails=None) -> None:
         super().__init__(parent)
         self._bridge = bridge
         self._config = config
@@ -129,6 +130,17 @@ class Pane(QObject):
         # and in every tab showing that folder, because all of them are asking
         # the same object about the same clipboard.
         self.clipboard = clipboard
+        # Shared for the seventh reason, which is the shell menu's and the
+        # siblings' again: one file is being previewed at a time whichever pane
+        # the cursor is in, and an abandoned decode still holds the volume the
+        # next one wants. Sharing it is what makes moving the cursor in the left
+        # pane cancel the right pane's outstanding read rather than queue behind
+        # it.
+        self.previews = previews
+        # Shared for the icons' reason: what a photograph looks like at 128
+        # pixels is the same on both sides of the window, and the cache is what
+        # stops the second pane decoding it again.
+        self.thumbnails = thumbnails
         self.tabs: list[Tab] = self._restore()
         self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
                          len(self.tabs) - 1)
@@ -190,6 +202,41 @@ class Pane(QObject):
     def set_show_unc(self, value: bool) -> None:
         self._config.set(f"{self._side}.show_unc", bool(value))
         self.pathChanged.emit(self.display())
+
+    @property
+    def view_mode(self) -> str:
+        """"list" or "grid", for every tab in this pane.
+
+        Per pane rather than per tab, deliberately: a view that varied by tab
+        would make Ctrl+Tab change the shape of the window, and the tabs in one
+        pane are usually one job being looked at one way. Stored rather than
+        remembered in the widget, because it survives a restart -- somebody who
+        works in the grid should not have to press a key every morning.
+        """
+        return "grid" if self._config.get(f"{self._side}.view") == "grid" else "list"
+
+    def set_view_mode(self, mode: str) -> None:
+        self._config.set(f"{self._side}.view",
+                         "grid" if mode == "grid" else "list")
+
+    def file_names(self) -> list[str]:
+        """The files in this listing, in the order it is sorted in.
+
+        What the viewer walks. Files only -- there is nothing to view in a
+        folder, and stepping through a list that jumped over every folder in it
+        would read as the arrow keys skipping. The order is the model's, which
+        is the order the eye just saw: sorting it here would open a viewer on a
+        folder sorted by date in alphabetical order instead.
+        """
+        model = self.current.model
+        names: list[str] = []
+        for row in range(model.rowCount()):
+            if model.is_parent_row(row):
+                continue
+            entry = model.entry(row)
+            if entry is not None and not entry.is_dir:
+                names.append(entry.name)
+        return names
 
     # ------------------------------------------------------------- navigation
 

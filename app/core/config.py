@@ -125,6 +125,45 @@ DEFAULTS: dict[str, Any] = {
     # operation itself; the wait for the consent prompt is added on top of it
     # in the worker.
     "timeout.elevate": 300.0,
+    # Decoding one file for the viewer or the preview pane. Longer than the
+    # icon deadlines because this one is allowed to be a real read -- a 40 MB
+    # photograph off a share is seconds, and losing it at the eight seconds an
+    # overlay gets would mean the preview pane never works on the volume it is
+    # most wanted on. Still bounded, because nothing is waiting on it.
+    "timeout.preview": 20.0,
+    # A screenful of grid cells in one request. Longer than a preview because
+    # it is up to a hundred and sixty files rather than one, and a timeout
+    # still delivers the cells it reached.
+    "timeout.thumbnail": 30.0,
+
+    # F3 and the preview pane. On: the decoder costs nothing until something
+    # asks it for a file, and what asks is the pane being open or a key being
+    # pressed.
+    "preview.pane": False,
+    # Width of the preview pane, in pixels, as the splitter was left. Per
+    # window rather than per pane: it is the same panel whichever side has the
+    # keyboard, so there is one width to remember.
+    "preview.width": 280,
+    # Pictures in the grid view. Off means the grid draws the icon for each
+    # kind, which is still a grid and still useful for a folder of drawings --
+    # and is the answer when a thumbnail handler misbehaves.
+    "preview.thumbnails": True,
+    # Cell size in the grid, one of `protocol.THUMB_SIZES`. Each step is a
+    # fresh read of every file on screen, which is why it is four steps and not
+    # a slider.
+    "preview.thumb_size": 128,
+    # Whether Windows is asked for a thumbnail of the kinds this application
+    # cannot decode itself -- video frames, Office documents, .heic, .psd.
+    # This is the switch that turns off the one rung of the decoder that runs
+    # somebody else's code, for the reason `icons.overlays` is a switch: a
+    # misbehaving handler should cost the pictures and nothing else.
+    "preview.shell": True,
+    # Which view each pane's tabs are in: "list" or "grid". Per pane rather
+    # than per tab, deliberately. A view mode that varied by tab would mean
+    # Ctrl+Tab changing the shape of the window, and the tabs in one pane are
+    # usually one job being looked at one way.
+    "left.view": "list",
+    "right.view": "list",
 
     # Network paths are polled rather than watched: SMB change notification is
     # not reliable enough to trust a view to. NOT WIRED UP YET, and off until
