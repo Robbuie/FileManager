@@ -297,6 +297,69 @@ def cmd_open(args: argparse.Namespace) -> int:
         pool.shutdown()
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Expand one command from the table and start it, saying what it found.
+
+    The half of this feature that cannot be tested off Windows, in the one form
+    that answers it without a window: `program` says which of the candidates
+    was found and where, which is the only question a compare tool that "does
+    not work" is ever asking. A machine without Beyond Compare answers with the
+    sentence the status line would have shown.
+
+    `--dry-run` stops before anything starts and prints the argument vector.
+    Worth having because the vector is what a mis-quoted template gets wrong,
+    and reading it beside the template is faster than watching a program open
+    the wrong file.
+    """
+    from app.core import commands as table
+
+    known = table.with_defaults(table.DEFAULTS)
+    command = table.find(known, args.command)
+    if command is None:
+        _report("no such command", args.command)
+        _report("known", ", ".join(item.id for item in known))
+        return 2
+
+    context = table.Context(
+        path=args.path,
+        other_path=args.other,
+        name=args.name,
+        names=tuple(args.mark or ()),
+    )
+    why = table.refusal(command, context)
+    if why:
+        _report("refused", why)
+        return 2
+
+    launch = table.expand(command, context)
+    _report("program", launch.program)
+    if launch.alternatives:
+        _report("or", ", ".join(launch.alternatives))
+    _report("arguments", " | ".join(launch.arguments) or "(none)")
+    _report("start in", launch.working or "(the worker's own)")
+    if args.dry_run:
+        return 0
+
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.RUN, args.path or launch.working,
+                       timeout=args.timeout,
+                       args={"program": launch.program,
+                             "alternatives": list(launch.alternatives),
+                             "arguments": list(launch.arguments),
+                             "working": launch.working,
+                             "list": list(launch.list_names)})
+        _report_outcome(args.path, outcome, rows=False)
+        if isinstance(outcome.payload, dict):
+            _report("found", outcome.payload.get("program"))
+            _report("pid", outcome.payload.get("pid"))
+            if outcome.payload.get("list"):
+                _report("list file", outcome.payload["list"])
+        return _exit_code(outcome)
+    finally:
+        pool.shutdown()
+
+
 def cmd_icons(args: argparse.Namespace) -> int:
     """List a folder, work out the kinds in it, and ask the shell for each.
 
@@ -1028,6 +1091,20 @@ def build_parser() -> argparse.ArgumentParser:
                          help="edit, print, properties; empty means the default "
                               "verb, which is not the same as open")
     opening.set_defaults(func=cmd_open)
+
+    running = with_path("run", "expand one external command and start it",
+                        timeout=15.0)
+    running.add_argument("command",
+                         help="the id from the table: terminal, edit, compare")
+    running.add_argument("--other", default="",
+                         help="what %%T means: the other pane's folder")
+    running.add_argument("--name", default="",
+                         help="what %%N and %%F mean: the row under the cursor")
+    running.add_argument("--mark", nargs="*", default=[],
+                         help="what %%S means: the marked names in the folder")
+    running.add_argument("--dry-run", action="store_true",
+                         help="print the argument vector and start nothing")
+    running.set_defaults(func=cmd_run)
 
     with_path("mkdir", "create one folder").set_defaults(func=cmd_mkdir)
 

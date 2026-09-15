@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 
 from app import __version__
+from app.core import commands as core_commands
+from app.core import compare as core_compare
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
 from app.io import elevate
@@ -62,13 +64,33 @@ def _outcome(job) -> str:
     return f"{where}: {summary}" if where else summary
 
 
+def _tool_tip(command) -> str:
+    """What a Tools entry says when the pointer rests on it.
+
+    The program and the template, because that is what somebody is checking
+    when they wonder why a key did nothing -- and it is the fastest route to
+    the editor, which is where they can change it.
+    """
+    line = command.program
+    if command.arguments:
+        line = f"{line} {command.arguments}"
+    if command.working:
+        line = f"{line}    (in {command.working})"
+    return line
+
+
 class MainWindow(QMainWindow):
 
     def __init__(self, config, left, right, volumes, transfers, updates=None,
-                 favorites=None, capacity=None,
+                 favorites=None, capacity=None, commands=None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
+        #: The external command table, or None for a window built without one
+        #: -- a preview render, a test. None means the Tools menu is drawn and
+        #: inert rather than a menu bar that is a different shape from the real
+        #: one, which is the rule the favourites menu already follows.
+        self._commands = commands
         self._updates = updates
         self._favorites = favorites
         self._capacity = capacity
@@ -147,6 +169,13 @@ class MainWindow(QMainWindow):
             widget.addFavoriteRequested.connect(self._add_favorite)
             widget.manageFavoritesRequested.connect(self._manage_favorites)
             widget.viewRequested.connect(self._on_view_requested)
+            widget.commandRequested.connect(self._on_command)
+        if self._commands is not None:
+            self._commands.changed.connect(self._fill_tools)
+            self._commands.changed.connect(self._share_command_keys)
+            self._commands.ran.connect(self._on_command_ran)
+            self._commands.problem.connect(
+                lambda _id, why: self.statusBar().showMessage(why, 8000))
         transfers.conflict.connect(self._on_conflict)
         transfers.finished.connect(self._on_transfer_finished)
         if updates is not None:
@@ -187,6 +216,10 @@ class MainWindow(QMainWindow):
             # the alternative is a diff against a menu.
             self._favorites.changed.connect(self._fill_favorites)
             self._fill_favorites()
+        # Before the first key can be pressed. A pane with no map answers its
+        # own keys and nothing else, which is what a window built without a
+        # table gets and is the right answer for it.
+        self._share_command_keys()
         self._active = 0
         self._set_active(0)
         if self._rail is not None:
@@ -487,6 +520,27 @@ class MainWindow(QMainWindow):
             lambda checked: self._config.set("menu.shell", bool(checked)))
         view.addAction(shell_commands)
 
+        self._tools_menu = self.menuBar().addMenu("&Tools")
+        self._tools_menu.setToolTipsVisible(True)
+        # Made once and put back by `_fill_tools`, for the favourites menu's
+        # reason: an action remade on every rebuild stays alive on the window,
+        # and after two edits Qt would have three actions claiming Ctrl+Shift+F2
+        # and honour none of them.
+        self._compare_action = QAction("Compare the panes", self)
+        self._compare_action.setShortcut(QKeySequence("Ctrl+Shift+F2"))
+        self._compare_action.setShortcutContext(Qt.WindowShortcut)
+        self._compare_action.setToolTip(
+            "Mark what each side has that the other does not: newer, missing, "
+            "or the same age and a different size. Reads no files, so it costs "
+            "nothing on a share.")
+        self._compare_action.triggered.connect(self._compare_panes)
+        self._edit_commands_action = QAction("Commands", self)
+        self._edit_commands_action.setToolTip(
+            "The programs on the Tools menu and the keys that reach them.")
+        self._edit_commands_action.triggered.connect(self._edit_commands)
+        self._edit_commands_action.setEnabled(self._commands is not None)
+        self._fill_tools()
+
         helping = self.menuBar().addMenu("&Help")
         version = QAction(f"Version {__version__}", self)
         version.setEnabled(False)
@@ -615,6 +669,108 @@ class MainWindow(QMainWindow):
             action.triggered.connect(
                 lambda _checked=False, path=entry.path: self._go_to_favorite(path))
             menu.addAction(action)
+
+    # ------------------------------------------------------------------ tools
+
+    def _fill_tools(self) -> None:
+        """The command table as a menu, with the two fixed entries above it.
+
+        The commands carry their keys as *hints*. Every one of them is answered
+        by the pane -- `PaneWidget.keyPressEvent` matches the keystroke against
+        the same table -- because a window shortcut on F4 would take the key
+        from the path bar and the filter box, which is the rule every function
+        key in this application already follows.
+        """
+        menu = self._tools_menu
+        menu.clear()
+        menu.addAction(self._compare_action)
+        menu.addSeparator()
+        if self._commands is None:
+            empty = QAction("No commands", menu)
+            empty.setEnabled(False)
+            menu.addAction(empty)
+        else:
+            shown = self._commands.visible()
+            if not shown:
+                empty = QAction("No commands", menu)
+                empty.setEnabled(False)
+                menu.addAction(empty)
+            for command in shown:
+                label = (f"{command.name}\t{command.shortcut}"
+                         if command.shortcut else command.name)
+                action = QAction(label, menu)
+                action.setToolTip(_tool_tip(command))
+                action.triggered.connect(
+                    lambda _checked=False, i=command.id: self._on_command(i))
+                menu.addAction(action)
+        menu.addSeparator()
+        menu.addAction(self._edit_commands_action)
+
+    def _share_command_keys(self) -> None:
+        """Hand both panes the key map, so a keystroke finds its command.
+
+        Both, not the active one: a key pressed in either pane means the same
+        thing, and it is the pane it was pressed in that decides what `%P` is.
+        """
+        keys = self._commands.keys() if self._commands is not None else {}
+        for widget in self._widgets:
+            widget.set_command_keys(keys)
+
+    def _command_context(self):
+        """What the panes hold, as the command table's `Context`.
+
+        Read at the moment the command is asked for rather than kept up to
+        date, because there is nothing to keep it up to date for: it is used
+        once and thrown away, and anything cached here would be a second
+        answer to "which pane is active" that agrees most of the time.
+        """
+        pane = self._current_pane()
+        widget = self._current_widget()
+        other = self._panes[1 - self._active]
+        entry = pane.current.model.entry(widget.current_row())
+        return core_commands.Context(
+            path=pane.current.path,
+            other_path=other.current.path,
+            name=entry.name if entry is not None else "",
+            names=tuple(widget.selected_names()),
+        )
+
+    def _on_command(self, identity: str) -> None:
+        if self._commands is None:
+            return
+        self._commands.run(identity, self._command_context())
+
+    def _on_command_ran(self, identity: str, program: str) -> None:
+        command = core_commands.find(self._commands.commands, identity)
+        name = command.name if command is not None else identity
+        self.statusBar().showMessage(f"started {name}", 4000)
+
+    def _edit_commands(self) -> None:
+        if self._commands is None:
+            return
+        answer = dialogs.edit_commands(self, self._commands.commands)
+        if answer is not None:
+            self._commands.replace(answer)
+
+    def _compare_panes(self) -> None:
+        """Mark, in each pane, what that side has and the other does not.
+
+        Left against right rather than active against inactive: both sides are
+        marked, so which one has the keyboard changes nothing about the answer.
+
+        Nothing is read. The rows are already in memory with their sizes and
+        times, which is what makes this a keystroke rather than a job -- see
+        `core/compare.py`.
+        """
+        models = [pane.current.model for pane in self._panes]
+        result = core_compare.compare(
+            models[0].entries(), models[1].entries(),
+            tolerance=float(self._config.get("compare.tolerance")))
+        for widget, verdicts in zip(self._widgets,
+                                    (result.left, result.right)):
+            widget.select_all(on=False)
+            widget.select_names(core_compare.marks(verdicts))
+        self.statusBar().showMessage(core_compare.summary(result), 12000)
 
     def _go_to_favorite(self, path: str) -> None:
         """Into the pane that has focus, and into a new tab if it is locked --

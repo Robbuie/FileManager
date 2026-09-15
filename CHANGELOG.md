@@ -5,6 +5,70 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.17.0]
+
+The programs this application does not contain, and the keys that reach them.
+
+A file manager is where somebody's hands already are when they want a terminal
+in this folder, an editor on this file, or a diff of these two folders. None of
+those is written here. What is written here is the one mechanism that reaches
+all of them -- a table of `name / program / arguments / shortcut` with
+substitution for the things only a file manager knows -- and everything else is
+a row in it.
+
+Which is what makes the compare tool **optional by construction** rather than
+by a flag. The application does not know what Beyond Compare is; it knows that
+a row names it, and that a row whose program is not on this machine is a row
+that says so. Replace the program with something else, or with a compare tool
+of your own, and nothing else changes.
+
+Alongside it, the compare that needs no tool at all: `Ctrl+Shift+F2` marks, in
+each pane, what that side has and the other does not. It reads nothing -- both
+listings are already in memory with their sizes and times -- so it costs
+nothing on a share, and what it leaves behind is a selection that F5 copies.
+
+### Added
+- **A Tools menu, and a table behind it.** Ships with seven commands:
+  PowerShell here on **F9**, Command prompt here on **Shift+F9**, Windows
+  Terminal here on **Ctrl+F9**, Edit on **F4**, Compare the two panes on
+  **Ctrl+F2**, Compare the marked files on **Alt+F2**, and Explorer here.
+  Every one of them is a row that can be renamed, re-keyed, pointed at a
+  different program, hidden from the menu or deleted.
+- **Tools > Commands** to edit that table. Five fields and a list. A shortcut
+  is refused while it is being typed if it is already the pane's own -- F5
+  copies and there is no arrangement of this table that can stop it -- or if
+  another row already has it.
+- **The substitutions.** `%P` this pane's folder, `%T` the other pane's,
+  `%N` the name under the cursor, `%F` its full path, `%S` the marked files as
+  full paths, `%s` as bare names, `%L` a file listing them for a selection too
+  long for a command line, `%%` a literal per cent. An argument template is
+  **split into tokens before anything is substituted**, so a folder with a
+  space in it lands in one argument and nothing in the table needs quoting.
+- **Compare the panes, on Ctrl+Shift+F2.** Marks what is newer here, what is
+  only here, and what is the same age and a different size, on both sides at
+  once. Names fold to one case because Windows does, and timestamps two seconds
+  apart count as the same moment because FAT and SMB round them -- an exact
+  comparison calls half the files on a USB stick newer, every time.
+- **`harness run`,** which expands one command and starts it, saying which
+  candidate it found and where. `--dry-run` prints the argument vector and
+  starts nothing. This is the half of the feature that a machine has to answer,
+  and it answers it without a window.
+
+### Changed
+- `Op.RUN` in the worker. Starting a program is a filesystem call: finding the
+  executable is a read, and the folder it starts in is opened. It is also the
+  reason it cannot be three lines in a slot -- a child inherits its parent's
+  working directory, so a terminal started by the window process would hold
+  that folder open for as long as somebody left the terminal running.
+- Two settings: `commands` (the table) and `compare.tolerance` (the two
+  seconds). Both editable in the settings file for anybody who wants to.
+
+### Fixed
+- The test suite could segfault inside `QApplication.processEvents()` when the
+  garbage collector happened to destroy a Qt object with a running timer at the
+  wrong moment. Collected between tests instead. Nothing in the application
+  does this -- the objects concerned live as long as the window.
+
 ## [0.16.0]
 
 Seeing what is in a file without leaving the window. Three surfaces and one

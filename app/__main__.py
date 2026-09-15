@@ -50,6 +50,7 @@ def main() -> int:
     from app.core.sizes import FolderSizes
     from app.core.thumbnails import Thumbnails
     from app.core.clipboard import Clipboard
+    from app.core.commands import Commands
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
     from app.core.volumes import Volumes
@@ -120,9 +121,13 @@ def main() -> int:
     # One list for the window, not one per pane: a favourite is a place rather
     # than a side of the window.
     favorites = Favorites(config)
+    # One table for the window: a command is a program and a key, not a
+    # property of a side. Which pane `%P` means is decided when the key is
+    # pressed, by the pane that answered it.
+    commands = Commands(bridge, config)
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
-                        favorites, capacity)
+                        favorites, capacity, commands)
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

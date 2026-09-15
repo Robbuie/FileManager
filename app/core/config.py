@@ -79,6 +79,13 @@ DEFAULTS: dict[str, Any] = {
     "timeout.stat": 10.0,
     "timeout.dir_size": 120.0,
     "timeout.open": 30.0,
+    # Starting a program, not waiting for it. What this deadline covers is
+    # finding the executable and opening the folder it starts in -- both of
+    # which are reads, and one of them can be against a share that has stopped
+    # answering. It is short because nothing about a launch is slow when the
+    # machine is well: a command that has not started in fifteen seconds is not
+    # going to.
+    "timeout.run": 15.0,
     "timeout.mkdir": 20.0,
     "timeout.rename": 20.0,
     # The ceiling on a delete run through a *worker* -- which since 0.14 is
@@ -200,6 +207,28 @@ DEFAULTS: dict[str, Any] = {
     # nothing else, which is the answer when a shell extension misbehaves --
     # and the reason it is a setting rather than a rebuild.
     "menu.shell": True,
+
+    # The external command table: a list of the dicts `commands.Command`
+    # writes. Empty means the shipped defaults, which is not the same as "no
+    # commands" -- a user who wants none of them hides or deletes the rows, and
+    # that table is then saved and is no longer empty.
+    #
+    # It is one key rather than a key per command on purpose. The rows are
+    # ordered, the order is what the Tools menu shows, and a flat store with a
+    # key per row would have to invent one.
+    "commands": [],
+
+    # The ids of built-in commands this user has deleted. Kept apart from the
+    # table above because the table cannot express an absence: a row that is
+    # not there is indistinguishable from a row a newer version has just added,
+    # and one of those has to come back while the other must not.
+    "commands.removed": [],
+
+    # Seconds two timestamps may differ by and still count as the same moment
+    # when the panes are compared. Two, because FAT keeps mtime to two seconds
+    # and a copy to a stick or a share lands on either side of the rounding;
+    # an exact comparison calls half of those files newer every time.
+    "compare.tolerance": 2.0,
 
     "window.width": 1280,
     "window.height": 760,

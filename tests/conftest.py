@@ -34,3 +34,35 @@ def qt_app():
     except Exception:  # noqa: BLE001 - the Qt tests skip themselves anyway
         return None
     return QApplication.instance() or QApplication([])
+
+
+@pytest.fixture(autouse=True)
+def collected():
+    """Collect garbage after every test, because Qt will not survive it later.
+
+    Found on 15 September while adding the 0.17 tests, and the way it was found
+    is the reason this is here rather than in a note. Two new test files of
+    pure Python -- no Qt in either of them -- made an unrelated test in
+    `test_previews.py` segfault inside `QApplication.processEvents()`. The
+    crash was in `QTimerInfoList::activateTimers` delivering to an object
+    whose C++ half had gone.
+
+    What is actually happening: a test builds Qt objects, some of them with
+    debounce timers running, and drops them when it ends. Python collects those
+    at whatever moment the generational collector next runs, which can be in
+    the middle of *another* test's event loop -- and a timer being activated
+    while its owner is being destroyed is a crash rather than a missed
+    callback. Nothing was wrong with either new file; they moved the
+    collector's schedule by a few allocations and it landed inside a
+    `processEvents`.
+
+    So the collection is made to happen at a moment when no event loop is
+    running. It is a fixture rather than a fix in `app/` on purpose: nothing in
+    the application drops a `Previews` or an `Icons` while it is running -- they
+    live as long as the window -- so there is nothing there to repair. This is
+    the test harness declining to be the only thing that does it.
+    """
+    yield
+    import gc
+
+    gc.collect()

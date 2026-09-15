@@ -210,6 +210,40 @@ class Op(str, Enum):
     #: its kind, which is what the listing was drawing anyway.
     THUMBNAIL = "thumbnail"
 
+    #: Start a program that is not this one. `args["program"]` is what to run,
+    #: `args["arguments"]` is the vector to hand it, `args["alternatives"]` are
+    #: the programs to try when the first is not installed, and
+    #: `args["working"]` is the folder it starts in -- empty meaning the
+    #: worker's own, which is the install folder and is always local.
+    #:
+    #: `path` is the folder this launch belongs to and is what picks the
+    #: worker, exactly as it does for every other op. It is deliberately not
+    #: the working directory: a command with no working directory of its own
+    #: still concerns the folder it was invoked from, and a launch that touches
+    #: a wedged share should queue behind that share's own work rather than
+    #: behind the local disk's.
+    #:
+    #: A worker op for the reason OPEN is one, with a second reason on top.
+    #: Finding the program is a filesystem read -- `PATH`, then the places
+    #: Windows installs things -- and starting it in a folder means that folder
+    #: is opened, so a launch into a share that has stopped answering blocks
+    #: exactly as a listing does. The second reason is the working directory: a
+    #: process inherits it from its parent, and a terminal started by the window
+    #: process would hold the window's own folder open for as long as somebody
+    #: left the terminal running, which is how an application ends up unable to
+    #: eject a drive it is not using.
+    #:
+    #: `args["list"]` is a list of paths to write to a file, for a selection too
+    #: long for a command line; wherever `LIST_FILE` appears in the vector it is
+    #: replaced with that file's path. The write happens here because it is a
+    #: write, and nothing in `ui` or `core` makes one.
+    #:
+    #: The reply is `{"program": <what was found>, "arguments": [...],
+    #: "pid": n, "list": <the file written, or "">}`. It says the program was
+    #: started and nothing about what it did afterwards: this call returns when
+    #: the process exists, not when somebody closes it.
+    RUN = "run"
+
     #: Fault injection, and the harness is the only thing allowed to send it.
     #: It exists because the failure this application is built around -- a call
     #: that has not returned and never will -- cannot otherwise be produced on
@@ -271,6 +305,24 @@ class Reply:
 #: Rows per streamed batch. Large enough that the queue is not the bottleneck,
 #: small enough that the first rows paint while the rest are still arriving.
 BATCH_SIZE = 1000
+
+#: Stands in a RUN argument vector where the user's template said `%L`, and is
+#: replaced by the worker with the path of the file it wrote the selection to.
+#:
+#: It lives here rather than beside the rest of the command table because both
+#: sides of the process boundary need to agree on it, and the table imports Qt.
+#: A worker that imported the table would carry PySide6 into every volume's
+#: process -- fifty megabytes and a fifth of a second each -- which is the same
+#: trap `decode.py` avoids by importing Qt inside its functions.
+#:
+#: The NUL bytes are not decoration: a real argument cannot contain one, so
+#: this cannot collide with something a user typed.
+LIST_FILE = "\x00list-file\x00"
+
+#: How many paths `%L` will write before the worker refuses. A selection this
+#: long is a mistake rather than an intention, and a file of it handed to a
+#: program that reads it all into memory is a hang somebody else has to explain.
+MAX_LIST_PATHS = 100_000
 
 #: The two icon kinds that are not an extension. A folder is not a file with no
 #: extension, and Windows does not think it is one either.

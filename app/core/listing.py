@@ -444,6 +444,27 @@ class ListingModel(QAbstractTableModel):
         """Every row a selection may hold, the parent row excluded."""
         return [index + self._offset for index in range(len(self._rows))]
 
+    def entries(self) -> list:
+        """What the filter lets through, as the rows themselves.
+
+        Handed out rather than copied per row because the one caller that
+        wants them -- comparing the two panes -- wants every row at once and
+        reads nothing but the fields `os.scandir` already delivered. A list
+        rather than the internal one, so nobody sorts it in place.
+        """
+        return list(self._rows)
+
+    def rows_named(self, names) -> list[int]:
+        """The rows for a set of names, in the order the listing holds them.
+
+        Case-insensitive for `row_of`'s reason: Windows is, and a name that
+        came back from a comparison may be spelled the way the *other* pane
+        spells it.
+        """
+        wanted = {str(name).lower() for name in names}
+        return [index + self._offset for index, entry in enumerate(self._rows)
+                if entry.name.lower() in wanted]
+
     def folder_names(self) -> list[str]:
         """Every folder on screen. What the filter lets through, not what
         arrived -- a command aimed at the listing acts on the listing."""

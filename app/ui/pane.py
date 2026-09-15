@@ -21,8 +21,9 @@ from PySide6.QtCore import (
     Signal,
 )
 from PySide6.QtCore import QEvent, QTimer
-from PySide6.QtGui import QAction, QIcon, QImage, QPixmap
+from PySide6.QtGui import QAction, QIcon, QImage, QKeySequence, QPixmap
 
+from app.core.commands import normalise_shortcut
 from app.core.icons import ROW_ICON
 from app.core.listing import Column, count_of, format_size, split_name
 from app.io.protocol import (
@@ -105,6 +106,30 @@ def _leaf(path: str) -> str:
     return path
 
 
+def shortcut_text(event) -> str:
+    """What key was pressed, spelled the way the command table spells it.
+
+    Qt's own `toString` does the work and `normalise_shortcut` settles the
+    spelling, so there is one definition of what `Ctrl+F2` is rather than two
+    that agree most of the time.
+
+    A bare printable character answers "" deliberately. Typing a letter into
+    the listing is the quick search, which is caught in the event filter before
+    this is ever reached -- so a command bound to a bare letter would be a key
+    that never fires, and returning it here would be this widget claiming a
+    keystroke it does not get. `commands.shortcut_refusal` says the same thing
+    in the editor, where somebody can still change it.
+    """
+    modifiers = event.modifiers()
+    plain = not (modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))
+    if plain and event.text().isprintable() and event.text().strip():
+        return ""
+    try:
+        return normalise_shortcut(QKeySequence(event.keyCombination()).toString())
+    except (TypeError, ValueError):  # a key Qt has no sequence for
+        return ""
+
+
 class PaneWidget(QFrame):
 
     activated = Signal(object)          # this widget, when it takes focus
@@ -120,6 +145,10 @@ class PaneWidget(QFrame):
     #: window. What the pane provides is the folder, the files in the order it
     #: has them, and which one the cursor is on.
     viewRequested = Signal(str, list, int)
+    #: An external command, by its id in the table. The pane matches the
+    #: keystroke because the pane is where a key is safe to act on; what to do
+    #: with the id is the window's business.
+    commandRequested = Signal(str)
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
                  favorites=None, parent: QWidget | None = None):
@@ -392,6 +421,11 @@ class PaneWidget(QFrame):
         self._menu_slot: QAction | None = None
         self._menu_commands: dict = {}
 
+        #: Key -> external command id, handed down by the window. Empty until
+        #: it is, so a pane built without a table -- a preview render, a test --
+        #: answers its own keys and nothing else.
+        self._command_keys: dict[str, str] = {}
+
         #: What has been typed into the listing so far, and the timer that
         #: forgets it. A quick search that never expires means the letters
         #: typed a minute ago are still narrowing the next one.
@@ -425,6 +459,15 @@ class PaneWidget(QFrame):
         self._restore_preview_width()
 
     # ------------------------------------------------------------------ chrome
+
+    def set_command_keys(self, keys: dict[str, str]) -> None:
+        """The key -> command id map to match an unclaimed keystroke against.
+
+        Handed down rather than read, so the pane needs to know nothing about
+        the table, the settings or what a command is -- and so the window can
+        hand both panes the same map the moment the editor changes it.
+        """
+        self._command_keys = dict(keys)
 
     def apply_metrics(self, metrics: dict[str, int]) -> None:
         """Take the numbers a stylesheet cannot set.
@@ -1043,6 +1086,17 @@ class PaneWidget(QFrame):
                 self.clipboardRequested.emit("paste")
                 return
 
+        # The external commands, before the built-in function keys and after
+        # the path bar and the filter box have had their say. Before, because a
+        # table that could only take keys nothing else wanted would not be able
+        # to put a compare tool on Ctrl+F2 while F2 stays rename -- and after
+        # the guard, because a command key typed into the path bar is a
+        # character like any other.
+        identity = self._command_keys.get(shortcut_text(event))
+        if identity:
+            self.commandRequested.emit(identity)
+            return
+
         shift = bool(event.modifiers() & Qt.ShiftModifier)
         if key == Qt.Key_F3:
             self.view_current()
@@ -1424,6 +1478,17 @@ class PaneWidget(QFrame):
         if not suffix:
             return
         self._apply_selection(model.rows_with_extension(suffix), on=on)
+
+    def select_names(self, names, *, on: bool = True) -> None:
+        """Mark, or unmark, a set of rows by name.
+
+        What a comparison of the two panes leaves behind. By name rather than
+        by row because the answer was worked out against the *other* listing,
+        which has its own row numbers and its own sort.
+        """
+        rows = self._pane.current.model.rows_named(names)
+        if rows:
+            self._apply_selection(rows, on=on)
 
     def select_all(self, *, on: bool = True) -> None:
         self._apply_selection(self._pane.current.model.all_rows(), on=on)

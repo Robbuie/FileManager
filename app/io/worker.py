@@ -27,6 +27,7 @@ import os
 import queue
 import shutil
 import signal
+import subprocess
 import time
 from typing import Any
 
@@ -35,6 +36,8 @@ from app.io.protocol import (
     BATCH_SIZE,
     ICON_FILE,
     ICON_FOLDER,
+    LIST_FILE,
+    MAX_LIST_PATHS,
     PREVIEW_TEXT_BYTES,
     Entry,
     Op,
@@ -147,6 +150,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _resolve(request, outbox)
     elif request.op is Op.OPEN:
         _open(request, outbox)
+    elif request.op is Op.RUN:
+        _run(request, outbox)
     elif request.op is Op.ELEVATE:
         _elevate(request, outbox)
     elif request.op is Op.OVERLAY:
@@ -460,6 +465,176 @@ def _open(request: Request, outbox: Any) -> None:
         outbox.put(_failure(request, exc))
         return
     outbox.put(Reply(request.id, Status.OK, payload=answer))
+
+
+#: Where a program that is not on `PATH` is looked for, by the bare name the
+#: table holds. Two entries rather than a search: walking Program Files for
+#: something called `BCompare.exe` is thousands of reads for a menu entry, and
+#: an installer that put it somewhere else is a case for typing the full path
+#: into the table, which the table already allows.
+#:
+#: The versioned folders are listed oldest last so a machine with two installs
+#: gets the newer one. Adding a tool here is a convenience, never a dependency:
+#: nothing in this application stops working when none of these exist.
+KNOWN_PROGRAMS: dict[str, tuple[str, ...]] = {
+    "bcompare.exe": (
+        r"Beyond Compare 5\BCompare.exe",
+        r"Beyond Compare 4\BCompare.exe",
+        r"Beyond Compare 3\BCompare.exe",
+    ),
+    "winmergeu.exe": (r"WinMerge\WinMergeU.exe",),
+    "code.exe": (r"Microsoft VS Code\Code.exe",),
+    "notepad++.exe": (r"Notepad++\notepad++.exe",),
+    "wt.exe": (r"WindowsApps\wt.exe",),
+}
+
+
+def _program_roots() -> list[str]:
+    """The folders `KNOWN_PROGRAMS` is relative to, most likely first.
+
+    Read from the environment rather than hardcoded: `ProgramFiles` is where
+    Windows says it is, which on a 32-bit process is not the same folder as on
+    a 64-bit one, and a machine can have it somewhere else entirely.
+    """
+    names = ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA")
+    roots: list[str] = []
+    for name in names:
+        value = os.environ.get(name)
+        if not value:
+            continue
+        roots.append(value)
+        if name == "LOCALAPPDATA":
+            roots.append(os.path.join(value, "Programs"))
+    return roots
+
+
+def locate(program: str) -> str:
+    """Where a program is on this machine, or "" if it is not here.
+
+    Three places in order, and the order is the answer to "which one did the
+    user mean": a path they typed, then `PATH`, then the handful of install
+    folders `KNOWN_PROGRAMS` knows about. A bare name that `PATH` answers is
+    always the one Windows itself would start.
+
+    A filesystem call, which is why it is here and not in the table.
+    """
+    if not program:
+        return ""
+    if os.path.isabs(program) or os.sep in program or "/" in program:
+        expanded = os.path.expandvars(program)
+        return expanded if os.path.exists(expanded) else ""
+    found = shutil.which(program)
+    if found:
+        return found
+    for relative in KNOWN_PROGRAMS.get(program.lower(), ()):
+        for root in _program_roots():
+            candidate = os.path.join(root, relative)
+            if os.path.exists(candidate):
+                return candidate
+    return ""
+
+
+def _write_list(paths_to_write: list[str]) -> str:
+    """Write the selection to a file and return its path, for `%L`.
+
+    UTF-8 with a BOM, and the BOM is not optional: a list of file names is
+    exactly the content that carries accented characters, and the Windows
+    programs most likely to be handed one read a file with no BOM as the system
+    code page. The file is left in `%TEMP%` rather than deleted, because the
+    program that was started is still reading it and nothing here knows when it
+    has finished -- `%TEMP%` is the place whose contents are somebody else's
+    problem, which is the whole reason it exists.
+    """
+    import tempfile
+
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8-sig", suffix=".txt",
+        prefix="filemanager-", delete=False, newline="\r\n")
+    with handle:
+        for line in paths_to_write:
+            handle.write(line + "\n")
+    return handle.name
+
+
+def _run(request: Request, outbox: Any) -> None:
+    """Start a program, in a folder, and say that it started.
+
+    Detached on purpose, and in two senses. The process is started with
+    `DETACHED_PROCESS` and a new process group so closing this application does
+    not close a terminal somebody is still typing in, and so a Ctrl+C in a
+    console this was started from does not travel to it. And the reply comes
+    back as soon as the process exists: waiting for it would hold this worker
+    -- and therefore every listing on this volume -- for as long as somebody
+    left an editor open.
+
+    The working directory is the reason this is worth a worker rather than
+    three lines in a slot. A child inherits it, and a handle to a folder keeps
+    that folder open: a terminal started by the window process would pin the
+    window's own folder for the life of the terminal, which is how an
+    application ends up unable to eject a drive it is not using.
+    """
+    program = str(request.args.get("program", "") or "")
+    alternatives = [str(item) for item in (request.args.get("alternatives") or ())]
+    arguments = [str(item) for item in (request.args.get("arguments") or ())]
+    wanted = [str(item) for item in (request.args.get("list") or ())]
+
+    found = ""
+    tried: list[str] = []
+    for candidate in [program, *alternatives]:
+        if not candidate:
+            continue
+        tried.append(candidate)
+        found = locate(candidate)
+        if found:
+            break
+    if not found:
+        names = " or ".join(tried) or "nothing"
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message=f"{names} is not installed on this machine"))
+        return
+
+    written = ""
+    if any(item == LIST_FILE for item in arguments):
+        if len(wanted) > MAX_LIST_PATHS:
+            outbox.put(Reply(request.id, Status.ERROR,
+                             message=f"{len(wanted)} files is too many to list"))
+            return
+        try:
+            written = _write_list(wanted)
+        except OSError as exc:
+            outbox.put(_failure(request, exc))
+            return
+        arguments = [written if item == LIST_FILE else item for item in arguments]
+
+    working = str(request.args.get("working", "") or "") or None
+    if working and not os.path.isdir(working):
+        # Refused rather than started in whatever the parent's folder is. A
+        # terminal that opens somewhere other than where it was asked for is
+        # worse than one that does not open: the next command runs in the wrong
+        # place and nothing says so.
+        outbox.put(Reply(request.id, Status.GONE,
+                         message="that folder is not there any more"))
+        return
+
+    options: dict[str, Any] = {"cwd": working, "close_fds": True}
+    flags = 0
+    for name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
+        flags |= getattr(subprocess, name, 0)
+    if flags:
+        options["creationflags"] = flags
+
+    try:
+        started = subprocess.Popen([found, *arguments], **options)  # noqa: S603
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+        return
+
+    outbox.put(Reply(request.id, Status.OK, payload={
+        "program": found,
+        "arguments": arguments,
+        "pid": started.pid,
+        "list": written,
+    }))
 
 
 def _drives(request: Request, outbox: Any) -> None:

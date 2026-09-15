@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -25,6 +27,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from app.core import commands as core_commands
 
 #: How many names a confirmation lists before it summarises the rest. Enough to
 #: recognise a selection, few enough that the dialog stays a dialog.
@@ -454,6 +458,225 @@ class FavoritesEditor(QDialog):
             self._reload(row)
 
 
+class CommandsEditor(QDialog):
+    """The table of external programs: what runs, with what, and on what key.
+
+    Unlike `FavoritesEditor` this one collects its changes and hands them back
+    on OK, because the two lists are not the same kind of thing. A favourite is
+    one line and removing it loses nothing; a command is four fields somebody
+    has just worked out, and a half-typed row applied as it was typed would put
+    a broken command on a key and save it.
+
+    The one thing it does eagerly is refuse a shortcut, and it refuses while it
+    is being typed rather than on OK. A key that is already the pane's, or
+    already another row's, is a key that would make something else stop working
+    -- and the moment to say so is while the person can still see what they
+    pressed.
+    """
+
+    #: Two lines on purpose rather than one that wraps wherever the width
+    #: happens to run out: the tokens are a list and a list that breaks in a
+    #: different place at every size is one nobody scans.
+    HELP = ("%P  this folder      %T  the other pane      "
+            "%N  the name under the cursor      %F  its full path\n"
+            "%S  the marked files      %s  their names      "
+            "%L  a file listing them")
+
+    def __init__(self, parent: QWidget | None, commands) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Commands")
+        self.setModal(True)
+        self.setMinimumWidth(640)
+        self._commands = [core_commands.renamed(command) for command in commands]
+        self._row = -1
+
+        self._list = QListWidget()
+        self._list.setUniformItemSizes(True)
+        # Enough for the shipped table without scrolling. The form below it is
+        # five fields and a row of buttons, so left to the layout the list ends
+        # up the smallest thing in the dialog -- which is the wrong way round
+        # for the part somebody is choosing from.
+        self._list.setMinimumHeight(180)
+        self._list.currentRowChanged.connect(self._on_row_changed)
+
+        self._name = QLineEdit()
+        self._program = QLineEdit()
+        self._program.setPlaceholderText("powershell.exe, or a full path")
+        self._arguments = QLineEdit()
+        self._working = QLineEdit()
+        self._working.setPlaceholderText("%P to start in this folder")
+        self._shortcut = QLineEdit()
+        self._shortcut.setPlaceholderText("F9, Ctrl+F2, Shift+F9")
+        self._shown = QCheckBox("Show it on the Tools menu")
+        for field in (self._name, self._program, self._arguments,
+                      self._working, self._shortcut):
+            field.textEdited.connect(self._collect)
+        self._shown.toggled.connect(self._collect)
+
+        self._why = QLabel("")
+        self._why.setWordWrap(True)
+
+        self._add = QPushButton("Add")
+        self._remove = QPushButton("Remove")
+        self._up = QPushButton("Move up")
+        self._down = QPushButton("Move down")
+        self._reset = QPushButton("Reset all")
+        self._add.clicked.connect(self._on_add)
+        self._remove.clicked.connect(self._on_remove)
+        self._up.clicked.connect(lambda: self._move(-1))
+        self._down.clicked.connect(lambda: self._move(1))
+        self._reset.clicked.connect(self._on_reset)
+        for button in (self._add, self._remove, self._up, self._down,
+                       self._reset):
+            button.setAutoDefault(False)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        form = QFormLayout()
+        form.setSpacing(6)
+        form.addRow("Name", self._name)
+        form.addRow("Program", self._program)
+        form.addRow("Arguments", self._arguments)
+        form.addRow("Start in", self._working)
+        form.addRow("Shortcut", self._shortcut)
+        form.addRow("", self._shown)
+
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(self._add)
+        row.addWidget(self._remove)
+        row.addWidget(self._up)
+        row.addWidget(self._down)
+        row.addStretch(1)
+        row.addWidget(self._reset)
+
+        help_text = QLabel(self.HELP)
+        help_text.setWordWrap(True)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        caption = QLabel(
+            "Programs this application does not contain. A key here is "
+            "answered by whichever pane has the keyboard, so %P is that "
+            "pane's folder.")
+        caption.setWordWrap(True)
+        layout.addWidget(caption)
+        layout.addWidget(self._list, 1)
+        layout.addLayout(row)
+        layout.addLayout(form)
+        layout.addWidget(help_text)
+        layout.addWidget(self._why)
+        layout.addWidget(buttons)
+
+        self._reload(0)
+
+    @property
+    def commands(self) -> list:
+        return list(self._commands)
+
+    def _reload(self, row: int) -> None:
+        self._list.blockSignals(True)
+        self._list.clear()
+        for command in self._commands:
+            label = command.name
+            if command.shortcut:
+                label = f"{label}      {command.shortcut}"
+            item = QListWidgetItem(label)
+            item.setToolTip(f"{command.program} {command.arguments}".strip())
+            self._list.addItem(item)
+        self._list.blockSignals(False)
+        count = self._list.count()
+        self._list.setCurrentRow(min(max(0, row), count - 1) if count else -1)
+        self._on_row_changed(self._list.currentRow())
+
+    def _on_row_changed(self, row: int) -> None:
+        self._row = row
+        live = 0 <= row < len(self._commands)
+        command = self._commands[row] if live else None
+        for field, value in (
+            (self._name, command.name if live else ""),
+            (self._program, command.program if live else ""),
+            (self._arguments, command.arguments if live else ""),
+            (self._working, command.working if live else ""),
+            (self._shortcut, command.shortcut if live else ""),
+        ):
+            field.blockSignals(True)
+            field.setText(value)
+            field.setEnabled(live)
+            field.blockSignals(False)
+        self._shown.blockSignals(True)
+        self._shown.setChecked(bool(command.shown) if live else False)
+        self._shown.setEnabled(live)
+        self._shown.blockSignals(False)
+        self._remove.setEnabled(live)
+        self._up.setEnabled(live and row > 0)
+        self._down.setEnabled(live and row < len(self._commands) - 1)
+        self._why.setText("")
+
+    def _collect(self) -> None:
+        """Write the fields back into the row, refusing a shortcut that clashes.
+
+        The shortcut is the only field that can be wrong on its own, so it is
+        the only one checked here. A refused key leaves the row's own key
+        alone rather than clearing it: somebody halfway through typing
+        `Ctrl+F` has not asked for their existing key to be thrown away.
+        """
+        row = self._row
+        if not 0 <= row < len(self._commands):
+            return
+        typed = self._shortcut.text()
+        why = core_commands.shortcut_refusal(
+            typed, self._commands, this_one=self._commands[row].id)
+        self._why.setText(why)
+        shortcut = (self._commands[row].shortcut if why
+                    else core_commands.normalise_shortcut(typed))
+        self._commands[row] = core_commands.renamed(
+            self._commands[row],
+            name=self._name.text().strip() or self._commands[row].name,
+            program=self._program.text().strip(),
+            arguments=self._arguments.text(),
+            working=self._working.text().strip(),
+            shortcut=shortcut,
+            shown=self._shown.isChecked(),
+        )
+        item = self._list.item(row)
+        if item is not None:
+            label = self._commands[row].name
+            if shortcut:
+                label = f"{label}      {shortcut}"
+            item.setText(label)
+
+    def _on_add(self) -> None:
+        identity = f"custom-{len(self._commands) + 1}"
+        while any(command.id == identity for command in self._commands):
+            identity += "x"
+        self._commands.append(core_commands.Command(
+            id=identity, name="New command", program=""))
+        self._reload(len(self._commands) - 1)
+        self._name.setFocus()
+        self._name.selectAll()
+
+    def _on_remove(self) -> None:
+        row = self._list.currentRow()
+        if 0 <= row < len(self._commands):
+            self._commands.pop(row)
+            self._reload(row)
+
+    def _move(self, step: int) -> None:
+        row = self._list.currentRow()
+        landed = row + step
+        if 0 <= row < len(self._commands) and 0 <= landed < len(self._commands):
+            self._commands[row], self._commands[landed] = (
+                self._commands[landed], self._commands[row])
+            self._reload(landed)
+
+    def _on_reset(self) -> None:
+        self._commands = list(core_commands.DEFAULTS)
+        self._reload(0)
+
+
 def _count(value: int) -> str:
     return "1 item" if value == 1 else f"{value:,} items"
 
@@ -519,3 +742,15 @@ def confirm_install(parent: QWidget, *, version: str, transfers: bool) -> bool:
     """True to quit and install now; False to leave it staged for the next quit."""
     return UpdateReady(parent, version=version,
                        transfers=transfers).exec() == QDialog.Accepted
+
+
+def edit_commands(parent: QWidget, commands):
+    """The command table, or None when the dialog was cancelled.
+
+    None rather than the unchanged list, so the caller can tell "no change" from
+    "changed back to what it was" and save nothing in the first case.
+    """
+    dialog = CommandsEditor(parent, commands)
+    if dialog.exec() != QDialog.Accepted:
+        return None
+    return dialog.commands

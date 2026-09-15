@@ -29,7 +29,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            width: int, height: int, settle_ms: int, tabs: int = 1,
            menu: bool = False, queue: bool = False, cut: bool = False,
            pane_preview: bool = False, grid: bool = False,
-           viewer: str = "", cell: int = 128) -> str:
+           viewer: str = "", cell: int = 128, commands: bool = False) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -136,6 +136,15 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     if viewer:
         panel = _show_viewer(window, viewer)
         QTimer.singleShot(600, app.quit)
+        app.exec()
+        image = panel.grab()
+        image.save(out)
+        pool.shutdown()
+        return out
+
+    if commands:
+        panel = _show_commands(window)
+        QTimer.singleShot(400, app.quit)
         app.exec()
         image = panel.grab()
         image.save(out)
@@ -412,6 +421,24 @@ def _show_queue(window):
     return panel
 
 
+def _show_commands(window):
+    """The commands editor, on the shipped table.
+
+    Shown rather than executed: `exec` would block until somebody closed a
+    dialog nobody can see, so it is shown and grabbed the way the queue panel
+    is. What this is for is the form -- five fields, a list and two rows of
+    buttons is the densest thing in this application, and a label that wraps
+    badly or a field that does not line up is only visible in a picture.
+    """
+    from app.core import commands as table
+    from app.ui.dialogs import CommandsEditor
+
+    dialog = CommandsEditor(window, table.DEFAULTS)
+    dialog.resize(680, 560)
+    dialog.show()
+    return dialog
+
+
 def _show_menu(window) -> None:
     """Open a context menu on the left pane, with invented shell entries.
 
@@ -479,6 +506,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--settle-ms", type=int, default=1500)
     parser.add_argument("--tabs", type=int, default=1,
                         help="open this many tabs per pane, to see the strip")
+    parser.add_argument("--commands", action="store_true",
+                        help="the commands editor rather than the window")
     parser.add_argument("--queue", action="store_true",
                         help="render the queue panel instead of the window, "
                              "with invented jobs in every state")
@@ -508,6 +537,7 @@ def main(argv: list[str] | None = None) -> int:
                      density=args.density, width=args.width, height=args.height,
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
                      queue=args.queue, cut=args.cut, grid=args.grid,
+                     commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer,
                      cell=args.cell))
         return 0
@@ -520,6 +550,7 @@ def main(argv: list[str] | None = None) -> int:
                      density=args.density, width=args.width, height=args.height,
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
                      queue=args.queue, cut=args.cut, grid=args.grid,
+                     commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer,
                      cell=args.cell))
     return 0

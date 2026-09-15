@@ -62,6 +62,7 @@ python tools/preview.py --queue --out queue.png       # the queue panel alone
 python tools/preview.py --preview-pane --out pane.png # the preview panel, both shapes
 python tools/preview.py --grid --cell 128 --out grid.png
 python tools/preview.py --viewer image --out viewer.png   # also text, hex
+python tools/preview.py --commands --out commands.png    # the commands editor
 
 python packaging/build.py               # dist/: the folder, the setup exe, latest.json
 python packaging/build.py --skip-installer   # freeze only, no Inno Setup
@@ -84,6 +85,8 @@ python -m app.io.harness copy S:\Jobs\big D:\scratch --conflict rename
 python -m app.io.harness move S:\Jobs\big D:\scratch --cancel-after 50000000
 python -m app.io.harness erase S:\Jobs\scratch --cancel-after 200
 python -m app.io.harness recycle S:\Jobs\scratch\one.txt
+python -m app.io.harness run S:\Jobs compare --other D:\Archive --dry-run
+python -m app.io.harness run S:\Jobs terminal            # which program, and where
 ```
 
 The transfer commands run the real engine: the queue, the scan, the conflict
@@ -312,6 +315,15 @@ Ctrl+B  the navigation rail
 F3   view the file under the cursor
 Ctrl+P  the preview pane      Ctrl+Shift+P  the thumbnail grid
 
+External commands, which are a table rather than code (0.17)
+F9   PowerShell here       Shift+F9  Command prompt here
+Ctrl+F9  Windows Terminal  F4        Edit
+Ctrl+F2  compare the two panes with the tool  Alt+F2  compare the marked files
+Ctrl+Shift+F2  compare the panes here, marking what differs
+Every one of those is a row in `commands` and can be re-keyed or removed. The
+keys are the pane's, matched against the table before the built-in function
+keys -- which is what lets Ctrl+F2 be a command while F2 stays rename.
+
 The rail and the path bar
 click a place, a drive, a saved folder  the pane that has the keyboard goes
 middle click  the same, in a tab behind
@@ -518,6 +530,20 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
     would buy isolation from a hang and cost a wedged file on one share taking
     thumbnails down for every volume, which for a grid of a hundred cells is
     the worse trade.
+- **A command that starts a program is a worker op, and the working directory
+  is why.** `Op.RUN` looks like something the window could do with three lines
+  of `subprocess` -- and a child process inherits its parent's working
+  directory, so a terminal opened in a folder on a share would hold that folder
+  open for as long as somebody left the terminal running. Finding the
+  executable is a read as well. Both belong in the volume's worker, and the
+  reply says the process exists rather than waiting for it to finish: waiting
+  would hold every listing on that volume for the life of an editor.
+- **The command table is not allowed to take a key the pane already answers.**
+  `commands.RESERVED` is that list and `shortcut_refusal` is where it is
+  enforced, in the editor, while somebody can still see what they pressed. A
+  row that took F5 would be a copy key that silently stopped copying, and
+  nothing about pressing it once would say why. Adding a key to this
+  application from now on means adding it to that set in the same commit.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
 - **A drive letter can be present and dead at the same time.** Presence in
@@ -540,7 +566,8 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    rather than in the association database -- programs, shortcuts, .ico files
    (0.13), the job queue with deletes in it (0.14), Windows clipboard interop
    (0.15), and the previewer -- one decoder behind an F3 viewer, a preview pane
-   and a thumbnail grid (0.16). What is left before this replaces Double
+   and a thumbnail grid (0.16), and the external commands with the pane
+   compare beside them (0.17). What is left before this replaces Double
    Commander day to day: a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
