@@ -643,3 +643,160 @@ def _later() -> float:
     import time
 
     return time.monotonic() + 60.0
+
+
+# ------------------------------------------------- where a grown menu belongs
+#
+# Reported from the window on 15 September: the menu opens with this
+# application's own verbs, Explorer's arrive a moment later, and near the
+# bottom of a screen the grown menu ran off the edge with the new entries
+# unreachable. Qt places a popup once, at `popup` time, from the entries it has
+# then -- and grows a visible one downwards from where it already is without
+# looking at the screen again. This application is the one that changes a menu
+# after showing it, so this application is the one that has to place it again.
+#
+# The placement is a pure function for exactly this reason: showing a real
+# popup needs a screen, a mouse grab and a window manager, while deciding where
+# it goes is four comparisons -- and the four comparisons are where the bug was.
+
+def test_a_menu_that_fits_is_left_where_it_was_asked_for() -> None:
+    from PySide6.QtCore import QPoint, QRect, QSize
+    from app.ui.pane import fit_popup
+
+    area = QRect(0, 0, 1920, 1040)
+    assert fit_popup(QPoint(100, 100), QSize(200, 300), area) == QPoint(100, 100)
+
+
+def test_a_menu_too_tall_flips_above_the_pointer() -> None:
+    """Rather than sliding up. A menu that slides has its first entry
+    somewhere new every time, and the first entry is the one being aimed at.
+    """
+    from PySide6.QtCore import QPoint, QRect, QSize
+    from app.ui.pane import fit_popup
+
+    area = QRect(0, 0, 1920, 1040)
+    where = fit_popup(QPoint(100, 900), QSize(200, 300), area)
+    assert where == QPoint(100, 600)
+
+
+def test_a_menu_too_tall_to_flip_sits_as_low_as_it_fits() -> None:
+    from PySide6.QtCore import QPoint, QRect, QSize
+    from app.ui.pane import fit_popup
+
+    area = QRect(0, 0, 1920, 1040)
+    where = fit_popup(QPoint(100, 200), QSize(200, 1000), area)
+    assert where.y() + 1000 <= area.bottom() + 1
+    assert where.y() >= area.top()
+
+
+def test_a_menu_taller_than_the_screen_starts_at_the_top() -> None:
+    """Which is as much as placement can do; the rest is Qt's own scrolling."""
+    from PySide6.QtCore import QPoint, QRect, QSize
+    from app.ui.pane import fit_popup
+
+    area = QRect(0, 0, 1920, 1040)
+    assert fit_popup(QPoint(100, 500), QSize(200, 2000), area).y() == area.top()
+
+
+def test_a_menu_too_wide_opens_to_the_left_of_the_pointer() -> None:
+    from PySide6.QtCore import QPoint, QRect, QSize
+    from app.ui.pane import fit_popup
+
+    area = QRect(0, 0, 1920, 1040)
+    assert fit_popup(QPoint(1900, 100), QSize(200, 300), area) == QPoint(1700, 100)
+
+
+def test_placement_respects_a_screen_that_does_not_start_at_zero() -> None:
+    """A second monitor to the left of the first has negative coordinates, and
+    clamping to zero would throw every menu onto the wrong screen.
+    """
+    from PySide6.QtCore import QPoint, QRect, QSize
+    from app.ui.pane import fit_popup
+
+    area = QRect(-1920, 0, 1920, 1040)
+    where = fit_popup(QPoint(-1000, 1000), QSize(200, 300), area)
+    assert where.x() >= area.left()
+    assert where == QPoint(-1000, 700)
+    # And a menu at that screen's right-hand edge still opens leftwards rather
+    # than spilling onto the monitor next door.
+    assert fit_popup(QPoint(-100, 100), QSize(200, 300), area).x() == -300
+
+
+def test_the_menu_is_placed_again_when_the_shell_entries_land() -> None:
+    """The wiring, which the pure function above says nothing about.
+
+    Asserted by watching for the call rather than by measuring a real popup.
+    An offscreen popup is not reliably visible and the screen it reports is
+    whatever the platform plugin invented, so a test that measured one would be
+    checking Qt's mood -- it passed alone and failed in a full run, which is
+    the worst kind of test to leave behind. Where the menu goes is
+    `fit_popup`'s job and is checked exhaustively above; that it is asked at
+    all is this.
+    """
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from app.io.protocol import MenuItem
+    from app.ui.pane import PaneWidget
+
+    if QApplication.instance() is None:
+        pytest.skip("no Qt application")
+
+    widget = PaneWidget.__new__(PaneWidget)      # no window, no io, no pane
+    menu = QMenu()
+    widget._menu = menu
+    widget._menu_slot = menu.addAction("Explorer commands")
+    widget._menu_commands = {}
+    asked = []
+    widget._place_menu = lambda: asked.append(True)
+
+    widget._on_shell_items(7, [MenuItem(id=1, text="7-Zip"),
+                               MenuItem(id=2, text="Scan")])
+    assert asked == [True]
+    assert len(menu.actions()) >= 2
+
+    menu.deleteLater()
+
+
+def test_the_menu_is_placed_again_even_when_the_shell_had_nothing() -> None:
+    """The other branch adds an entry too -- "No Explorer commands here" -- so
+    it grows by a row and needs the same second look.
+    """
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from app.ui.pane import PaneWidget
+
+    if QApplication.instance() is None:
+        pytest.skip("no Qt application")
+
+    widget = PaneWidget.__new__(PaneWidget)
+    menu = QMenu()
+    widget._menu = menu
+    widget._menu_slot = menu.addAction("Explorer commands")
+    widget._menu_commands = {}
+    asked = []
+    widget._place_menu = lambda: asked.append(True)
+
+    widget._on_shell_items(7, [])
+    assert asked == [True]
+
+    menu.deleteLater()
+
+
+def test_placing_a_menu_nobody_opened_does_nothing() -> None:
+    """Both panes are connected to the one shell menu, so this fires on the
+    pane that did not ask as well -- and that pane has no menu and no anchor.
+    """
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from app.ui.pane import PaneWidget
+
+    if QApplication.instance() is None:
+        pytest.skip("no Qt application")
+
+    widget = PaneWidget.__new__(PaneWidget)
+    widget._menu = None
+    widget._menu_anchor = None
+    widget._place_menu()            # must not raise

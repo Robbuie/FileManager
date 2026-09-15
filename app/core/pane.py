@@ -204,6 +204,30 @@ class Pane(QObject):
         self.pathChanged.emit(self.display())
 
     @property
+    def columns(self) -> list[int]:
+        """The listing's column widths as this pane was left, or [].
+
+        View state rather than model state, and it lives here for the reason
+        `show_unc` does: the widget is rebuilt on a theme change and the tabs
+        come and go, while this has to outlast both and be written to the
+        settings file by the same path as everything else.
+        """
+        stored = self._config.get(f"{self._side}.columns")
+        return [int(width) for width in stored] if isinstance(stored, list) else []
+
+    def set_columns(self, widths) -> None:
+        self._config.set(f"{self._side}.columns", [int(width) for width in widths])
+
+    @property
+    def hidden_columns(self) -> list[int]:
+        stored = self._config.get(f"{self._side}.columns_hidden")
+        return [int(column) for column in stored] if isinstance(stored, list) else []
+
+    def set_hidden_columns(self, columns) -> None:
+        self._config.set(f"{self._side}.columns_hidden",
+                         sorted({int(column) for column in columns}))
+
+    @property
     def view_mode(self) -> str:
         """"list" or "grid", for every tab in this pane.
 

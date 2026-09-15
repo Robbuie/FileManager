@@ -5,6 +5,60 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.18.0]
+
+The columns, which turn out to have been two separate faults wearing one
+complaint. Reported from the window as "there is no good way to change the
+column sizes on the fly", and both halves of that are true for different
+reasons.
+
+The name column was a `Stretch` section. Qt gives a stretched section no
+usable drag handle and recomputes it on every resize, so the one column
+anybody actually wants wider was the one column that could not be touched at
+all. And the other four could be dragged -- and were thrown away on the next
+tab switch, because the widths were laid out again from hardcoded numbers
+every time a tab changed. Between them the answer to "can I change the column
+widths" was no, twice.
+
+### Added
+- **Every column can be dragged, including the name**, and what it is dragged
+  to is remembered -- per pane, because the two sides of a window are rarely
+  the same width and rarely want the same columns.
+- **Double click a divider to fit that column to what is on screen**, or use
+  the header menu to fit them all. Deliberately *not* Qt's own
+  `ResizeToContents`, which measures every row in the model: on a folder of
+  50,000 files that is 50,000 string measurements for a double click, and the
+  rows somebody is looking at are the ones they mean. Scroll to longer names
+  and ask again and it widens again, which is the honest consequence and is
+  why the menu entry says "on screen".
+- **A header menu**: fit, reset to the shipped widths, and a checkbox per
+  column to hide Ext, Size, Age or Modified. A hidden column gives its room to
+  the name rather than leaving a gap where it was. The name cannot be hidden.
+
+### Fixed
+- **A narrow pane no longer collapses the name column.** This one predates the
+  release: the other four columns are 328 pixels of fixed width, so below about
+  380 of viewport there was nothing left for the name -- it shrank to a column
+  of first letters and the listing grew a horizontal scrollbar. Now the others
+  give way instead, least useful first: Age, which duplicates Modified; Ext,
+  which repeats the end of the name; then Modified, which degrades gracefully;
+  and Size last, because a size column too narrow for "1.2 M" is not a narrow
+  size column but a missing one. A pane whose widths somebody has set is left
+  alone.
+- Column widths survive switching tabs, which is where most of the "it does not
+  stay" came from.
+- **The context menu no longer runs off the bottom of the screen when
+  Explorer's entries arrive.** The menu opens with this application's own verbs
+  and the shell's land in it a moment later, which is deliberate -- a menu that
+  waits for a shell extension to load is a menu that is sometimes not there
+  when the mouse button comes up. What was missing is the second half: Qt
+  places a popup once, from the entries it has at that instant, and grows a
+  visible one downwards from where it already is without looking at the screen
+  again. Opened near the bottom of a screen, the new entries were simply
+  unreachable. The menu is now placed again against the point it was opened at:
+  it flips above the pointer rather than sliding, because a menu that slides
+  has its first entry somewhere new every time.
+
 ## [0.17.0]
 
 The programs this application does not contain, and the keys that reach them.

@@ -172,6 +172,24 @@ DEFAULTS: dict[str, Any] = {
     "left.view": "list",
     "right.view": "list",
 
+    # What the listing's columns have been dragged to, per pane, as a list of
+    # five widths in the order `listing.Column` declares them. Per pane rather
+    # than per window because the two are rarely the same width -- a pane
+    # squeezed narrow to make room for the other one wants a different set of
+    # columns from the one that got the room.
+    #
+    # An empty list means nothing has been dragged and the pane works the
+    # widths out for itself; a zero in any position means the same for that one
+    # column, which is what makes adding a column later cost no migration.
+    "left.columns": [],
+    "right.columns": [],
+
+    # Which columns are hidden, by their index in the same enum. The name
+    # cannot be hidden and is refused rather than guarded against, because a
+    # listing with no names is not a listing.
+    "left.columns_hidden": [],
+    "right.columns_hidden": [],
+
     # Network paths are polled rather than watched: SMB change notification is
     # not reliable enough to trust a view to. NOT WIRED UP YET, and off until
     # it is -- a poll today would re-list the folder, which resets the model

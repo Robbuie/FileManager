@@ -326,6 +326,12 @@ Every one of those is a row in `commands` and can be re-keyed or removed. The
 keys are the pane's, matched against the table before the built-in function
 keys -- which is what lets Ctrl+F2 be a command while F2 stays rename.
 
+The listing's header (0.18)
+drag any divider  including the name's, and it is remembered per pane
+double click a divider  fit that column to the rows on screen, not to all of
+them -- `ResizeToContents` measures every row and this application does not
+right click the header  fit them all, reset the widths, hide a column
+
 The rail and the path bar
 click a place, a drive, a saved folder  the pane that has the keyboard goes
 middle click  the same, in a tab behind
@@ -455,6 +461,26 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   because a side button does not move the focus the way a click on a row does,
   so without it a thumb press over the inactive pane would walk that pane while
   every keystroke still went to the other one.
+- **Qt places a popup once, and this application changes menus after showing
+  them.** The context menu opens with the app's own verbs and the shell's
+  arrive a moment later -- and a visible `QMenu` grows downwards from where it
+  already is, with no second look at the screen, so one opened near the bottom
+  had its new entries off the edge and unreachable. Anything here that adds to
+  a menu, a tooltip or a popup *after* it is on screen has to place it again:
+  `fit_popup` is the rule and `_place_menu` is the caller. The rule itself is a
+  pure function on purpose -- showing a real popup needs a screen, a grab and a
+  window manager, while deciding where it goes is four comparisons, and the
+  four comparisons are where the bug was.
+- **`Stretch` is not a column somebody can drag, and `ResizeToContents` is not
+  a measurement this application can afford.** Both were in the listing's
+  header until 0.18 and between them they made the columns unchangeable: the
+  name had no handle, and the fallback everybody reaches for instead would
+  measure all 50,000 rows for one double click. Every section is `Interactive`
+  now, the name is given the slack only while nothing has been dragged, and
+  fitting measures the rows on screen. **A width is view state, not model
+  state** -- laying the columns out again on every `setModel` is what used to
+  throw away every drag on a tab switch, and `_sync_current` now reapplies only
+  which columns are hidden, because that part `setModel` really does reset.
 - **A control that takes no focus is invisible to the active-pane rule.**
   Every borderless control in a pane is `NoFocus` so the listing keeps the
   keyboard, and the window works out the active pane from
@@ -578,8 +604,9 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    (0.13), the job queue with deletes in it (0.14), Windows clipboard interop
    (0.15), and the previewer -- one decoder behind an F3 viewer, a preview pane
    and a thumbnail grid (0.16), and the external commands with the pane
-   compare beside them (0.17). What is left before this replaces Double
-   Commander day to day: a transfer that outlives the window.
+   compare beside them (0.17), and the listing's columns -- draggable,
+   remembered, fitted to what is on screen (0.18). What is left before this
+   replaces Double Commander day to day: a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

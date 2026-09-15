@@ -20,12 +20,26 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtCore import QEvent, QTimer
-from PySide6.QtGui import QAction, QIcon, QImage, QKeySequence, QPixmap
+from PySide6.QtCore import QEvent, QRect, QSize, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QGuiApplication,
+    QFontMetrics,
+    QIcon,
+    QImage,
+    QKeySequence,
+    QPixmap,
+)
 
 from app.core.commands import normalise_shortcut
 from app.core.icons import ROW_ICON
-from app.core.listing import Column, count_of, format_size, split_name
+from app.core.listing import (
+    HEADERS,
+    Column,
+    count_of,
+    format_size,
+    split_name,
+)
 from app.io.protocol import (
     MENU_COMMAND,
     MENU_SEPARATOR,
@@ -106,6 +120,56 @@ def _leaf(path: str) -> str:
     return path
 
 
+#: What each column starts at before anybody drags one, in pixels. The name is
+#: the exception: it is given whatever is left over, which is what a file
+#: manager is for, and this number is only its floor while the pane has no
+#: width yet.
+#:
+#: Modified is the one that cannot be trimmed -- it holds a fixed sixteen
+#: characters, and a date cut off at the hour is worse than no date -- so the
+#: other three give way to it.
+DEFAULT_WIDTHS = {
+    Column.NAME: 320,
+    Column.EXT: 52,
+    Column.SIZE: 92,
+    Column.AGE: 46,
+    Column.MODIFIED: 138,
+}
+
+#: The narrowest the name column is allowed to get itself down to while it is
+#: working out its own width. A name at `MIN_COLUMN` is a column of first
+#: letters, which is what a pane dragged narrow used to produce -- the other
+#: four add up to 328 pixels of fixed width, so below about 380 of viewport
+#: there was nothing left for the name and the table grew a horizontal
+#: scrollbar instead. Below this the other columns give way; see `_widen_name`.
+NAME_FLOOR = 150
+
+#: The order the other columns give way in when there is not room for them all,
+#: least useful first. Age duplicates what Modified says and goes first; Ext
+#: repeats the end of the name; Modified is wide and degrades gracefully,
+#: losing the time before the date. Size is last because a size column too
+#: narrow for "1.2 M" is not a narrow size column, it is a missing one -- and
+#: because deciding what to copy is what these columns are read for.
+#:
+#: A name cut to three letters is worse than any of them, which is why this
+#: exists at all. Hiding a column outright is on the header's own menu and is
+#: the better answer for somebody who works at that width.
+GIVE_WAY = (Column.AGE, Column.EXT, Column.MODIFIED, Column.SIZE)
+
+#: The narrowest a column may be dragged or fitted to. Not zero: a column
+#: dragged to nothing is indistinguishable from one that is hidden, and the
+#: header menu is where hiding belongs.
+MIN_COLUMN = 28
+
+#: Slack added when fitting a column to its contents: the cell's own padding
+#: either side, and the room a sort indicator takes in the header.
+CELL_PADDING = 12
+HEADER_PADDING = 22
+
+#: The gap between a row's icon and its text, which a text measurement knows
+#: nothing about.
+ICON_GAP = 8
+
 #: The two buttons on the side of a mouse, and what they mean here. Every
 #: browser and Explorer itself answer them with back and forward, so a file
 #: manager that ignores them is one where the thumb does nothing -- which reads
@@ -115,6 +179,38 @@ def _leaf(path: str) -> str:
 #: and XBUTTON2. They arrive as ordinary mouse events and no widget in Qt does
 #: anything with them by default.
 HISTORY_BUTTONS = {Qt.BackButton: -1, Qt.ForwardButton: 1}
+
+
+def fit_popup(anchor: QPoint, size: QSize, area: QRect) -> QPoint:
+    """Where a popup of this size should sit so it stays on the screen.
+
+    Pure, and separate from the menu for one reason: it is the part that can be
+    checked. Placing a real popup needs a screen, a mouse grab and a window
+    manager; deciding *where* is four comparisons, and those are where the bug
+    was.
+
+    The rules, in the order Explorer's own menus follow them:
+
+      * below and to the right of the pointer, which is where a menu belongs;
+      * too wide, and it goes to the left of the pointer instead;
+      * too tall, and it **flips above** the pointer rather than sliding up --
+        a menu that slides has its first entry somewhere new every time, and
+        the first entry is the one being aimed at;
+      * too tall to flip, and it sits as low as it can while still fitting,
+        which for a menu taller than the screen means the top of the screen and
+        Qt's own scrolling.
+    """
+    x = anchor.x()
+    if x + size.width() > area.right():
+        x = anchor.x() - size.width()
+    x = max(area.left(), min(x, area.right() - size.width()))
+
+    y = anchor.y()
+    if y + size.height() > area.bottom():
+        above = anchor.y() - size.height()
+        y = above if above >= area.top() else area.bottom() - size.height()
+    y = max(area.top(), y)
+    return QPoint(x, y)
 
 
 def shortcut_text(event) -> str:
@@ -288,7 +384,18 @@ class PaneWidget(QFrame):
         # nothing. Intercepting before the view is the only place the search
         # can be this application's.
         self._view.installEventFilter(self)
-        self._layout_columns()
+        header = self._view.horizontalHeader()
+        header.setSectionsMovable(False)
+        header.setMinimumSectionSize(MIN_COLUMN)
+        header.setContextMenuPolicy(Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._on_header_menu)
+        # Qt's own double click on a divider is `ResizeToContents`, which
+        # measures every row. Taken over rather than left alone: on a folder of
+        # 50,000 files the stock gesture is the exact cost this application is
+        # built to avoid, and it is the gesture people already know.
+        header.sectionHandleDoubleClicked.connect(self._fit_column)
+        header.sectionResized.connect(self._on_section_resized)
+        self._apply_columns()
         # A header defaults its indicator to *descending*, and enabling sorting
         # applies it, so a model that sorted itself ascending gets flipped the
         # moment it is shown. Said once, out loud, rather than left to a reader
@@ -431,6 +538,14 @@ class PaneWidget(QFrame):
         self._menu: QMenu | None = None
         self._menu_slot: QAction | None = None
         self._menu_commands: dict = {}
+        #: Where the open menu was asked for, in screen coordinates. Kept
+        #: because the menu grows after it is shown and the anchor is the only
+        #: thing that can say where the grown one belongs.
+        self._menu_anchor: QPoint | None = None
+
+        #: True while the columns are being set from stored widths, so the
+        #: `sectionResized` those calls emit does not store them straight back.
+        self._laying_out = False
 
         #: Key -> external command id, handed down by the window. Empty until
         #: it is, so a pane built without a table -- a preview render, a test --
@@ -608,6 +723,13 @@ class PaneWidget(QFrame):
         if not self._restored:
             self._restored = True
             self._restore_preview_width()
+            # The name column for the splitter's reason: a width shared out in
+            # `__init__` is dividing up a viewport Qt has only guessed at, so
+            # the name would take its floor rather than the room it is meant
+            # to have. Only when nothing has been dragged -- a stored width is
+            # an answer and is not overruled by a resize.
+            if not self._pane.columns:
+                self._apply_columns()
 
     def _restore_preview_width(self) -> None:
         if not self._preview.isVisible():
@@ -883,10 +1005,16 @@ class PaneWidget(QFrame):
             # that is sometimes not there when the mouse button comes up.
             self._pane.context_menu(names, extended=self._extended())
 
-        chosen = menu.exec(self.listing.viewport().mapToGlobal(point))
+        # Kept because the menu is about to grow. `exec` places it once, from
+        # the entries it has at that instant, and the shell's arrive a moment
+        # later -- so the point it was opened at is the only thing that can say
+        # where the grown menu belongs. See `_place_menu`.
+        self._menu_anchor = self.listing.viewport().mapToGlobal(point)
+        chosen = menu.exec(self._menu_anchor)
         command = self._menu_commands.get(chosen)
         self._menu = None
         self._menu_slot = None
+        self._menu_anchor = None
         self._menu_commands = {}
         if self._pane.menu is None:
             return
@@ -964,8 +1092,39 @@ class PaneWidget(QFrame):
         if not items:
             disabled = self._menu.addAction("No Explorer commands here")
             disabled.setEnabled(False)
+            self._place_menu()
             return
         self._fill(self._menu, items, token, top=True)
+        self._place_menu()
+
+    def _place_menu(self) -> None:
+        """Put the menu back on the screen after it has grown.
+
+        A menu opened near the bottom of the screen is placed for the four or
+        five entries it has when it opens, and then a dozen of Explorer's land
+        in it -- and Qt grows a visible popup downwards from where it already
+        is without looking at the screen again. Past the bottom edge the extra
+        entries are simply not reachable, which is worse than them being slow
+        to arrive, because nothing says they are there.
+
+        So the placement is redone against the point the menu was opened at.
+        Qt does this itself at `popup` time and has no reason to do it again;
+        this application is the one that changes a menu after showing it.
+        """
+        menu = self._menu
+        if menu is None or self._menu_anchor is None or not menu.isVisible():
+            return
+        # The size the menu *will* be. Its widget geometry has not caught up
+        # with the actions just added to it, and placing against the old one
+        # would move it to where the problem was.
+        menu.adjustSize()
+        screen = QGuiApplication.screenAt(self._menu_anchor) or menu.screen()
+        if screen is None:
+            return
+        where = fit_popup(self._menu_anchor, menu.sizeHint(),
+                          screen.availableGeometry())
+        if where != menu.pos():
+            menu.move(where)
 
     def _on_shell_unavailable(self, message: str) -> None:
         """Say why there are none, in the menu, without taking it over."""
@@ -1305,20 +1464,216 @@ class PaneWidget(QFrame):
             self._drives.blockSignals(blocked)
 
     def _layout_columns(self) -> None:
-        """Name takes the slack; the rest are fixed.
+        """Set the columns to what this pane was left at, or to the defaults.
 
-        Deliberately not `ResizeToContents`: it measures every row, which at
+        Every section is `Interactive`, including the name, and that is the
+        whole of what changed in 0.18. It used to be `Stretch`, which is not a
+        column somebody can drag -- Qt gives a stretched section no usable
+        handle and recomputes it on every resize -- so the one column people
+        actually want wider was the one column that could not be touched. The
+        other four could be dragged and were reset on the next tab switch,
+        because this was called again from `_sync_current`. Between the two,
+        the answer to "can I change the column widths" was no.
+
+        Nothing here is `ResizeToContents`: it measures every row, which at
         50,000 rows is the one thing this application is built to avoid.
+        `_fit_column` is the bounded version and is what the double click and
+        the header menu use.
         """
         header = self._view.horizontalHeader()
-        header.setSectionResizeMode(int(Column.NAME), QHeaderView.Stretch)
-        # Modified is the one that cannot be trimmed: it holds a fixed sixteen
-        # characters, and a date cut off at the hour is worse than no date.
-        # The other three give way to it, and to the name.
-        for column, width in ((Column.EXT, 52), (Column.SIZE, 92),
-                              (Column.AGE, 46), (Column.MODIFIED, 138)):
+        stored = self._pane.columns
+        for column, fallback in DEFAULT_WIDTHS.items():
             header.setSectionResizeMode(int(column), QHeaderView.Interactive)
-            header.resizeSection(int(column), width)
+            width = 0
+            if len(stored) > int(column):
+                width = int(stored[int(column)])
+            header.resizeSection(int(column), width or fallback)
+        for column in range(len(HEADERS)):
+            self._view.setColumnHidden(
+                column, column in self._pane.hidden_columns
+                and column != int(Column.NAME))
+        if not stored:
+            # Nothing has been dragged yet, so the name gets whatever is left.
+            # Only now: once there are stored widths they are the answer, and
+            # a name that re-widened itself on every resize would be a column
+            # that will not stay where it is put.
+            self._widen_name()
+
+    def _widen_name(self) -> None:
+        """Give the name column the slack, and make room for it if there is none.
+
+        Two jobs, and the second one is a fault that predates this release. The
+        other four columns are fixed and add up to 328 pixels, so a pane dragged
+        below about 380 of viewport had nothing left for the name: it collapsed
+        to a column of first letters and the table grew a horizontal scrollbar,
+        which is the one place a file listing should never need one. Squeezing
+        the *name* is exactly backwards -- it is the column being read.
+
+        So below `NAME_FLOOR` the others give way, in `GIVE_WAY` order, each
+        down to `MIN_COLUMN`. This runs only while nothing has been dragged; a
+        pane whose widths are somebody's own decision is left alone, scrollbar
+        or not, because the alternative is undoing what they set every time the
+        window changes size.
+        """
+        header = self._view.horizontalHeader()
+        room = self._view.viewport().width()
+        if room <= 0:
+            return              # not laid out yet; `showEvent` comes back to it
+
+        visible = [column for column in GIVE_WAY
+                   if not self._view.isColumnHidden(int(column))]
+        for column in visible:
+            header.resizeSection(int(column), DEFAULT_WIDTHS[column])
+
+        def others() -> int:
+            return sum(header.sectionSize(int(column)) for column in visible)
+
+        short = NAME_FLOOR - (room - others())
+        for column in visible:
+            if short <= 0:
+                break
+            give = min(short, header.sectionSize(int(column)) - MIN_COLUMN)
+            if give > 0:
+                header.resizeSection(int(column),
+                                     header.sectionSize(int(column)) - give)
+                short -= give
+        header.resizeSection(int(Column.NAME), max(MIN_COLUMN, room - others()))
+
+    def _on_section_resized(self, *_args) -> None:
+        """Remember the drag. Written to the settings in memory, not to disk.
+
+        `Config.save` happens when the window closes, which is the same deal
+        every other pane setting gets -- and the alternative, a file write per
+        pixel of a drag, is not one.
+        """
+        if self._laying_out:
+            return
+        header = self._view.horizontalHeader()
+        self._pane.set_columns([header.sectionSize(column)
+                                for column in range(len(HEADERS))])
+
+    def _fit_column(self, column: int) -> None:
+        """Widen one column to fit the rows **on screen**, and no others.
+
+        The bounded answer to `ResizeToContents`, which measures every row in
+        the model: on a folder of 50,000 files that is 50,000 string
+        measurements for a double click, and this application does not do that
+        anywhere else either. A screenful is what somebody is looking at when
+        they ask, and it is a few dozen measurements.
+
+        The honest consequence, which is why the menu entry says "on screen":
+        scroll down to longer names and ask again, and it gets wider again.
+        That is better than the alternative on a big folder, and it is
+        predictable once it has been seen once.
+        """
+        model = self._view.model()
+        if model is None or self._view.isColumnHidden(column):
+            return
+        metrics = QFontMetrics(self._view.font())
+        header = self._view.horizontalHeader()
+        widest = metrics.horizontalAdvance(HEADERS[column]) + HEADER_PADDING
+        first = max(0, self._view.rowAt(0))
+        last = self._view.rowAt(self._view.viewport().height() - 1)
+        if last < 0:
+            last = model.rowCount() - 1
+        for row in range(first, min(last + 1, model.rowCount())):
+            text = model.data(model.index(row, column), Qt.DisplayRole)
+            if text:
+                widest = max(widest, metrics.horizontalAdvance(str(text)))
+        # The name column carries an icon and the gap beside it, which the
+        # text measurement knows nothing about.
+        if column == int(Column.NAME):
+            widest += ROW_ICON + ICON_GAP
+        header.resizeSection(column, max(MIN_COLUMN, widest + CELL_PADDING))
+
+    def fit_columns(self) -> None:
+        """Every visible column, to what is on screen."""
+        for column in range(len(HEADERS)):
+            self._fit_column(column)
+
+    def reset_columns(self) -> None:
+        """Back to the shipped widths, and the name takes the slack again."""
+        self._pane.set_columns([])
+        self._apply_columns()
+
+    def _apply_columns(self) -> None:
+        """`_layout_columns` with the saving suppressed while it runs.
+
+        Qt emits `sectionResized` for every section this touches, and without
+        the guard applying the stored widths would immediately store them
+        again -- harmless, until the pane is not laid out yet and what gets
+        stored is Qt's initial guess at the width of a widget with no size.
+        """
+        self._laying_out = True
+        try:
+            self._layout_columns()
+        finally:
+            self._laying_out = False
+
+    def _apply_hidden(self) -> None:
+        hidden = self._pane.hidden_columns
+        for column in range(len(HEADERS)):
+            self._view.setColumnHidden(
+                column, column in hidden and column != int(Column.NAME))
+
+    def _set_column_shown(self, column: int, shown: bool) -> None:
+        """Hide or show one column, and give its room to the name.
+
+        The room matters. Every section is `Interactive` and the last one does
+        not stretch, so hiding a column without moving its width somewhere
+        leaves a gap exactly where it was -- which reads as the column still
+        being there and empty rather than gone. The name is where the room
+        goes, for the same reason the name gets the slack in the first place.
+
+        Only when there are stored widths. Without them `_widen_name` is about
+        to work the name out from scratch and would undo this.
+        """
+        if column == int(Column.NAME) and not shown:
+            return              # a listing with no names is not a listing
+        header = self._view.horizontalHeader()
+        # Measured while the column is *visible*, whichever direction this is
+        # going. A hidden section answers zero for its size, so asking before
+        # showing one -- or after hiding one -- gives nothing to move.
+        room = 0 if shown else header.sectionSize(column)
+        hidden = set(self._pane.hidden_columns)
+        if shown:
+            hidden.discard(column)
+        else:
+            hidden.add(column)
+        self._pane.set_hidden_columns(hidden)
+        self._apply_columns()
+        if shown:
+            room = -header.sectionSize(column)
+        if self._pane.columns:
+            header.resizeSection(
+                int(Column.NAME),
+                max(MIN_COLUMN, header.sectionSize(int(Column.NAME)) + room))
+
+    def _on_header_menu(self, point: QPoint) -> None:
+        """Right-click on the header: the sizes, and which columns are drawn.
+
+        The two belong together because they are the same question asked twice
+        -- a column somebody keeps dragging to nothing is a column they want
+        gone -- and because the header is where a hand already is.
+        """
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        fit = menu.addAction("Size columns to what is on screen",
+                             self.fit_columns)
+        fit.setToolTip("Measures the rows you can see rather than all of them. "
+                       "On a folder of 50,000 files, measuring every row is the "
+                       "cost this application exists to avoid.")
+        menu.addAction("Reset column widths", self.reset_columns)
+        menu.addSeparator()
+        for column in range(len(HEADERS)):
+            if column == int(Column.NAME):
+                continue        # a listing with no names is not a listing
+            action = menu.addAction(HEADERS[column])
+            action.setCheckable(True)
+            action.setChecked(not self._view.isColumnHidden(column))
+            action.toggled.connect(
+                lambda shown, c=column: self._set_column_shown(c, shown))
+        menu.exec(self._view.horizontalHeader().mapToGlobal(point))
 
     def _watch(self, model) -> None:
         if model not in self._watched:
@@ -1356,7 +1711,12 @@ class PaneWidget(QFrame):
         model = self._pane.current.model
         self._view.setModel(model)
         self._grid.setModel(model)
-        self._layout_columns()
+        # Deliberately *not* laying the columns out again. Widths belong to the
+        # view rather than to the model, and calling this here is what used to
+        # throw away every drag on the next tab switch -- half of the reason
+        # the columns felt unchangeable. What does have to be reapplied is
+        # which of them are hidden, because `setModel` brings them all back.
+        self._apply_hidden()
         self._view.horizontalHeader().setSortIndicator(
             int(model.sort_column), model.sort_order,
         )
@@ -1871,6 +2231,15 @@ class PaneWidget(QFrame):
         # working in both views because the selection model is shared. That is
         # exactly why this was invisible: the commands were all fine, and only
         # the keys that have to be caught *before* a view were not.
+        # The name column follows the pane's width -- but only while nobody
+        # has dragged anything. Once there are stored widths they are the
+        # answer, and a column that re-widened itself on every resize would be
+        # one that will not stay where it is put. This is what keeps a pane
+        # nobody has touched looking exactly as it did before 0.18.
+        if watched is self._view.viewport() and event.type() == QEvent.Resize \
+                and not self._pane.columns:
+            self._apply_columns()
+
         # The side buttons, first and for every widget this filter watches.
         # First because the two views answer a mouse button before this widget
         # ever sees it -- the same rule the keys below sit under -- and for
