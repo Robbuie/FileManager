@@ -82,7 +82,7 @@ def _tool_tip(command) -> str:
 class MainWindow(QMainWindow):
 
     def __init__(self, config, left, right, volumes, transfers, updates=None,
-                 favorites=None, capacity=None, commands=None,
+                 favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = config
@@ -91,6 +91,8 @@ class MainWindow(QMainWindow):
         #: inert rather than a menu bar that is a different shape from the real
         #: one, which is the rule the favourites menu already follows.
         self._commands = commands
+        #: The network locations, or None for a window built without them.
+        self._network = network
         self._updates = updates
         self._favorites = favorites
         self._capacity = capacity
@@ -130,16 +132,24 @@ class MainWindow(QMainWindow):
         # rail that is a different shape from the real one.
         self._rail = None
         if favorites is not None and capacity is not None:
-            self._rail = NavigationRail(favorites, volumes, capacity, config)
+            self._rail = NavigationRail(favorites, volumes, capacity, config,
+                                        network)
             self._rail.set_places(core_places.places())
             self._rail.apply_tokens(tokens)
             self._rail.chosen.connect(self._on_rail_chosen)
             self._rail.measureRequested.connect(capacity.measure)
+            self._rail.reconnectRequested.connect(self._reconnect)
             self._rail.rescanRequested.connect(
                 lambda: self._volumes.refresh(rescan=True))
             self._rail.addFavoriteRequested.connect(self._add_favorite)
             self._rail.manageFavoritesRequested.connect(self._manage_favorites)
             self._rail.groupRequested.connect(self._set_favorite_group)
+            self._rail.addLocationRequested.connect(self._add_location)
+            self._rail.forgetLocationRequested.connect(self._forget_location)
+            if network is not None:
+                self._rail.refreshNetworkRequested.connect(network.refresh)
+                network.changed.connect(self._rebuild_rail)
+                network.reconnected.connect(self._on_reconnected)
             self._rail.setVisible(bool(config.get("rail.shown")))
             # Measured once the letters are known, and only the local fixed
             # ones -- see `core/capacity.py`. Nothing here touches a server.
@@ -593,6 +603,63 @@ class MainWindow(QMainWindow):
             if not group:
                 return
         self._favorites.set_group(index, group)
+
+    # ---------------------------------------------------------------- network
+
+    def _rebuild_rail(self) -> None:
+        if self._rail is not None:
+            self._rail.rebuild()
+
+    def _add_location(self) -> None:
+        """Type a UNC path and keep it in the rail.
+
+        The one way in for a location Windows will not enumerate: a share
+        nobody has connected to yet is in no table, so it has to be named once.
+        Nothing here checks whether it exists -- that check is a blocking call
+        in a dialog, and the answer arrives on its own the moment somebody
+        clicks the row.
+        """
+        if self._network is None:
+            return
+        typed = dialogs.ask_name(
+            self, title="Add a network location",
+            label="The path, as \\\\server\\share",
+            initial="\\\\", ok_text="Add")
+        if not typed:
+            return
+        added = self._network.add(typed)
+        if not added:
+            self.statusBar().showMessage(
+                "A network location is a path like \\\\server\\share", 8000)
+            return
+        self.statusBar().showMessage(f"added {added}", 4000)
+
+    def _forget_location(self, path: str) -> None:
+        if self._network is not None:
+            self._network.remove(path)
+
+    def _reconnect(self, path: str) -> None:
+        if self._network is None:
+            return
+        self.statusBar().showMessage(f"reconnecting to {path}", 0)
+        self._network.reconnect(path)
+
+    def _on_reconnected(self, path: str, why: str) -> None:
+        """What a reconnect came back with.
+
+        A failure says why rather than only that it failed: "the network name
+        cannot be found" and "access is denied" are different problems with
+        different answers, and the second one is the only case where this
+        application genuinely cannot help.
+        """
+        if why:
+            self.statusBar().showMessage(f"{path}: {why}", 10000)
+            return
+        self.statusBar().showMessage(f"{path} is connected", 6000)
+        # The pane on it, if there is one, can stop saying it is not there.
+        for pane in self._panes:
+            if pane.current.path.lower().startswith(path.lower()):
+                pane.retry()
 
     def _sync_rail_mark(self, *_ignored) -> None:
         """Put the rail's mark on the folder the active pane is showing."""

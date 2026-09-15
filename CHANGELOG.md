@@ -5,6 +5,70 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.19.0]
+
+Network locations that have no drive letter -- which, it turns out, is most of
+what a virtual machine can reach.
+
+Reported from inside a Hyper-V VM: the host's C: drive is shared into the
+guest, Double Commander lists it, and this application had nowhere to put it.
+The cause was narrow and complete. The rail's drive list comes from
+`GetLogicalDrives`, which reports **letters** -- and a Hyper-V or Remote Desktop
+redirected share has none. It is `\\tsclient\C` and nothing else, so no amount
+of drive enumeration would ever have found it.
+
+The path layer was never the problem, which is worth saying because it is what
+a reasonable person suspects first: `\\tsclient\C` is an ordinary UNC path
+here, keyed on `\\tsclient` like any other server, so it gets its own worker
+and a host connection that dies cannot take the rest of the window down. Typing
+it into the path bar has always worked. There was simply nowhere for it to
+*appear*.
+
+### Added
+- **A Network section in the rail**, listing what this session is attached to
+  that Drives cannot show. Read from the redirector's own table of current
+  connections -- the same table `WNetGetConnection` answers from, which is
+  local, so it contacts no server and cannot block on one that has gone.
+
+  It deliberately does **not** enumerate the network. Asking what exists out
+  there is a real round trip through the browser service and is how a file
+  manager comes to hang while drawing its sidebar. What is out there is not
+  this application's question; what this session already holds is.
+- **Add a network location by hand**, for the shares Windows will not
+  enumerate: one nobody has connected to yet is in no table, so it is typed
+  once and then remembered. Saved locations are listed whether or not they are
+  reachable, which is the point -- one that vanishes the moment a server
+  reboots is one you cannot click to get it back.
+- **Reconnect**, on a network location and on any mapped drive. A letter can be
+  present and dead at the same time, so it is offered on every remote drive
+  rather than only on one that has already failed. No credentials cross:
+  Windows uses the session's own, which is the case that matters -- a share
+  that dropped when a server restarted comes back with nobody being asked
+  anything, and one that needs a different account fails with the reason said
+  out loud. A pane sitting on that share re-lists itself when it works.
+- **`harness network` and `harness connect`.** The first is worth running
+  beside `harness drives`: between them they say which kind of thing a share
+  is, which is the whole distinction this release turns on.
+
+- **`tools/diagnose_network.py`**, because the first run of this release on the
+  machine it was written for came back empty. It asks every enumeration scope
+  separately, prints each `NETRESOURCE` field as it arrives -- `lpProvider`
+  above all, which names which piece of Windows is holding a connection --
+  tries `\\tsclient` by hand, and says which calls failed and why. One run
+  settles where the share actually lives.
+
+### Changed
+- **An empty list and a failed call no longer look the same.**
+  `paths.connections()` swallowed every failure into an empty list, so a
+  machine with nothing mapped and a call that could not open were
+  indistinguishable -- and that is exactly the position the first run left us
+  in. It now reports why it is short, `harness network` prints it, and the rail
+  shows it in place of "nothing here".
+- `Op.NETWORK` and `Op.CONNECT` in the worker. The first reads a local table
+  and probes nothing; the second is the one call in this application that is a
+  network call by nature, so it carries a deadline of its own
+  (`timeout.connect`, 45 seconds) and is only ever sent because somebody asked.
+
 ## [0.18.0]
 
 The columns, which turn out to have been two separate faults wearing one

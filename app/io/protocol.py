@@ -210,6 +210,33 @@ class Op(str, Enum):
     #: its kind, which is what the listing was drawing anyway.
     THUMBNAIL = "thumbnail"
 
+    #: Every network location this session is attached to, letters or not.
+    #:
+    #: DRIVES answers from `GetLogicalDrives`, which reports **letters** -- so
+    #: a connection without one is invisible to it, and a Hyper-V or Remote
+    #: Desktop redirected drive is exactly that: `\\tsclient\C` and no letter
+    #: anywhere. This reads the redirector's own table of current connections,
+    #: which is the table `WNetGetConnection` answers from and is local, so it
+    #: contacts no server and cannot block on one that has gone.
+    #:
+    #: Deliberately *not* an enumeration of the network. `RESOURCE_GLOBALNET`
+    #: asks what exists out there, which is a real round trip and is how a file
+    #: manager comes to hang while drawing its sidebar. What is out there is
+    #: not this application's question; what this session already holds is.
+    #:
+    #: The reply is a list of `{"remote", "local", "provider", "label"}`.
+    NETWORK = "network"
+
+    #: Re-establish a connection to `path`, a UNC share.
+    #:
+    #: The one op here that is a *network* call by nature rather than by
+    #: accident, so it carries its own deadline and is only ever sent because
+    #: somebody asked. No credentials cross: Windows uses the session's own,
+    #: which is the case that matters -- a share that dropped when a server
+    #: restarted comes back with nobody being asked anything, and one that
+    #: needs a different account fails with the reason.
+    CONNECT = "connect"
+
     #: Start a program that is not this one. `args["program"]` is what to run,
     #: `args["arguments"]` is the vector to hand it, `args["alternatives"]` are
     #: the programs to try when the first is not installed, and

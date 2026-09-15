@@ -51,6 +51,7 @@ def main() -> int:
     from app.core.thumbnails import Thumbnails
     from app.core.clipboard import Clipboard
     from app.core.commands import Commands
+    from app.core.network import Network
     from app.core.transfers import TransferQueue
     from app.core.updates import Updates
     from app.core.volumes import Volumes
@@ -125,9 +126,13 @@ def main() -> int:
     # property of a side. Which pane `%P` means is decided when the key is
     # pressed, by the pane that answered it.
     commands = Commands(bridge, config)
+    # What this session can reach that has no drive letter. One for the window
+    # like the drive list, and asked for the same way: the table it reads is
+    # local, so this costs nothing and touches no server.
+    network = Network(bridge, config)
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
-                        favorites, capacity, commands)
+                        favorites, capacity, commands, network)
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has
@@ -135,6 +140,7 @@ def main() -> int:
     left.refresh()
     right.refresh()
     volumes.refresh()
+    network.refresh()
     # The screen is only knowable once there is one. A scaled display gets the
     # 32-pixel icons, which draw at the same size in the row and are the
     # difference between a crisp listing and a soft one.

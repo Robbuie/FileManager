@@ -63,6 +63,7 @@ python tools/preview.py --preview-pane --out pane.png # the preview panel, both 
 python tools/preview.py --grid --cell 128 --out grid.png
 python tools/preview.py --viewer image --out viewer.png   # also text, hex
 python tools/preview.py --commands --out commands.png    # the commands editor
+python tools/diagnose_network.py        # where Windows keeps a network location
 
 python packaging/build.py               # dist/: the folder, the setup exe, latest.json
 python packaging/build.py --skip-installer   # freeze only, no Inno Setup
@@ -87,6 +88,8 @@ python -m app.io.harness erase S:\Jobs\scratch --cancel-after 200
 python -m app.io.harness recycle S:\Jobs\scratch\one.txt
 python -m app.io.harness run S:\Jobs compare --other D:\Archive --dry-run
 python -m app.io.harness run S:\Jobs terminal            # which program, and where
+python -m app.io.harness network                         # connections, letters or not
+python -m app.io.harness connect \\tsclient\C            # attach to a share again
 ```
 
 The transfer commands run the real engine: the queue, the scan, the conflict
@@ -333,9 +336,13 @@ them -- `ResizeToContents` measures every row and this application does not
 right click the header  fit them all, reset the widths, hide a column
 
 The rail and the path bar
-click a place, a drive, a saved folder  the pane that has the keyboard goes
+click a place, a drive, a network location, a saved folder  the pane that has
+the keyboard goes
 middle click  the same, in a tab behind
-click a heading  fold that section     right click a drive  measure it
+click a heading  fold that section     right click a drive  measure it,
+reconnect it
+right click the Network heading  add a location, refresh the list
+right click a network location  reconnect it, or remove a saved one
 click a chevron in the path bar  the folders inside the crumb on its left
 
 Tabs
@@ -583,6 +590,24 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   application from now on means adding it to that set in the same commit.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
+- **`GetLogicalDrives` reports letters, and not everything reachable has one.**
+  A Hyper-V or Remote Desktop redirected share is `\\tsclient\C` with no
+  letter anywhere, so a sidebar built from the drive bitmask cannot show it --
+  which is exactly what was reported from a VM in 0.19, and the path layer was
+  innocent the whole time. `Op.NETWORK` reads the redirector's table of
+  *current connections* instead, which is local and probes nothing.
+  **`RESOURCE_GLOBALNET` is the call to keep out of this application**: asking
+  what exists on the network is a real round trip through the browser service,
+  and it is how a file manager comes to hang while drawing its sidebar.
+  `tools/diagnose_network.py` is allowed to make it, because a diagnostic
+  somebody runs on purpose may wait where a sidebar may not.
+- **An empty answer and a failed call are not the same answer.**
+  `paths.connections()` originally swallowed every failure into an empty list,
+  and the first run of 0.19 on the machine it was written for reported no
+  connections -- with no way to tell whether the enumeration had even worked.
+  Anything here that returns "nothing" from a call that can fail says *why* it
+  is empty, and the surface that draws it shows the reason instead of the
+  reassuring blank.
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.
@@ -605,8 +630,9 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
    (0.15), and the previewer -- one decoder behind an F3 viewer, a preview pane
    and a thumbnail grid (0.16), and the external commands with the pane
    compare beside them (0.17), and the listing's columns -- draggable,
-   remembered, fitted to what is on screen (0.18). What is left before this
-   replaces Double Commander day to day: a transfer that outlives the window.
+   remembered, fitted to what is on screen (0.18), and the network locations
+   that have no drive letter (0.19). What is left before this replaces Double
+   Commander day to day: a transfer that outlives the window.
 
 1. **`app/io/` first, headless, with a CLI harness. No UI at all.** Verified
    against real shares: a 50k listing over SMB, a connection yanked mid-listing,

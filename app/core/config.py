@@ -181,6 +181,23 @@ DEFAULTS: dict[str, Any] = {
     # An empty list means nothing has been dragged and the pane works the
     # widths out for itself; a zero in any position means the same for that one
     # column, which is what makes adding a column later cost no migration.
+    # Network locations the user has added by hand, as UNC paths. Kept apart
+    # from the favourites because they are a different kind of thing: a
+    # favourite is a folder somebody goes to often, and one of these is a
+    # *place that exists* -- it is listed whether or not it is reachable, and
+    # it carries a reconnect.
+    #
+    # It exists because not everything can be enumerated. `Op.NETWORK` finds
+    # what this session is already attached to; a share nobody has connected to
+    # yet is not in that table and has to be typed once.
+    "network.saved": [],
+
+    # Seconds to wait for a share to answer while reconnecting to it. Long,
+    # and deliberately: this is the one call in the application that is
+    # *expected* to sit there, because what it is waiting for is a server
+    # deciding whether it is awake. Nothing is blocked behind it.
+    "timeout.connect": 45.0,
+
     "left.columns": [],
     "right.columns": [],
 

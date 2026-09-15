@@ -150,6 +150,10 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _resolve(request, outbox)
     elif request.op is Op.OPEN:
         _open(request, outbox)
+    elif request.op is Op.NETWORK:
+        _network(request, outbox)
+    elif request.op is Op.CONNECT:
+        _connect(request, outbox)
     elif request.op is Op.RUN:
         _run(request, outbox)
     elif request.op is Op.ELEVATE:
@@ -635,6 +639,42 @@ def _run(request: Request, outbox: Any) -> None:
         "pid": started.pid,
         "list": written,
     }))
+
+
+def _network(request: Request, outbox: Any) -> None:
+    """The network locations this session holds, as plain dicts.
+
+    `_drives`' sibling and its complement. That one reads a bitmask of letters;
+    this one reads the redirector's table of connections, which is where a
+    share with no letter lives -- and a share with no letter is the whole
+    reason this op exists. Neither touches a server.
+    """
+    found, problem = paths.connections()
+    outbox.put(Reply(request.id, Status.OK, payload={
+        "connections": [
+            {"remote": item.remote, "local": item.local,
+             "provider": item.provider, "label": item.label}
+            for item in found
+        ],
+        # Carried rather than folded into the status, because a machine with
+        # nothing mapped is a success and so is a machine with four shares.
+        # What this distinguishes is those two from "the call failed", which
+        # looked exactly like the first one until it was asked to say so.
+        "problem": problem,
+    }))
+
+
+def _connect(request: Request, outbox: Any) -> None:
+    """Attach to a share again. The one op here that is a network call by
+    nature, which is why it has a deadline of its own and why nothing sends it
+    without being asked.
+    """
+    why = paths.connect(request.path,
+                        remember=bool(request.args.get("remember")))
+    if why:
+        outbox.put(Reply(request.id, Status.ERROR, message=why))
+        return
+    outbox.put(Reply(request.id, Status.OK, payload={"path": request.path}))
 
 
 def _drives(request: Request, outbox: Any) -> None:

@@ -25,6 +25,8 @@ written.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 pytest.importorskip("PySide6")
@@ -91,12 +93,12 @@ def config(tmp_path):
     return Config({}, str(tmp_path / "config.json"))
 
 
-def build(config, favorites=(), drives=None):
+def build(config, favorites=(), drives=None, network=None):
     config.set("favorites", list(favorites))
     bridge = FakeBridge()
     capacity = Capacity(bridge, config)
     rail = NavigationRail(Favorites(config), FakeVolumes(drives), capacity,
-                          config)
+                          config, network)
     rail.apply_tokens(sheet.tokens())
     rail.set_places(places())
     # A host, because a widget with no parent is never given a width and the
@@ -344,3 +346,241 @@ def test_the_profile_is_the_first_place():
     assert found
     for place in found[1:]:
         assert place.path.rstrip("\\").endswith(place.label)
+
+
+# ------------------------------------------------------- network locations
+#
+# Reported from the window on 15 September, from inside a Hyper-V VM: the
+# host's C: drive is shared into the guest and Double Commander lists it, while
+# this application had nowhere to put it. The cause was narrow and complete --
+# the rail's drive list comes from `GetLogicalDrives`, which reports *letters*,
+# and a Hyper-V or Remote Desktop redirected share has none. It is
+# `\\tsclient\C` and nothing else, so no amount of drive enumeration would ever
+# have found it.
+#
+# The path layer was never the problem and there is a test below that says so,
+# because it is the thing a reasonable person would suspect first.
+
+def test_a_redirected_share_is_a_perfectly_ordinary_unc_path() -> None:
+    """Which is why the fix is discovery rather than path handling. `tsclient`
+    is a pseudo-server and is keyed like any other, so it gets its own worker
+    and a host connection that dies cannot take the rest of the window down.
+    """
+    from app.io import paths
+
+    target = r"\\tsclient\C"
+    assert paths.is_unc(target)
+    assert paths.split_unc(target) == ("tsclient", "C", "")
+    assert paths.volume_key(target) == r"\\tsclient"
+    assert paths.parent(target) is None            # the share root is the top
+
+
+def test_a_connection_with_no_letter_is_labelled_by_its_share() -> None:
+    from app.core.network import Location
+
+    assert Location(r"\\tsclient\C").label == "C on tsclient"
+
+
+def test_a_connection_with_a_letter_is_labelled_by_it() -> None:
+    """Because that is what the user types, and what they are looking for."""
+    from app.core.network import Location
+
+    assert Location(r"\\server\jobs", local="S:").label == "S:"
+
+
+def test_a_location_always_opens_the_unc_even_when_it_has_a_letter() -> None:
+    """The letter is a name this session happens to have; the UNC is what the
+    thing is, and it is what survives the letter's session dying.
+    """
+    from app.core.network import Location
+
+    assert Location(r"\\server\jobs", local="S:").path == r"\\server\jobs"
+
+
+@pytest.mark.parametrize("typed, expected", [
+    (r"\\tsclient\C", r"\\tsclient\C"),
+    ("  \\\\tsclient\\C\\  ", r"\\tsclient\C"),
+    (r"//tsclient/C", r"\\tsclient\C"),
+    ("C:\\Jobs", ""),
+    ("not a path", ""),
+    ("", ""),
+])
+def test_what_counts_as_a_network_location(typed: str, expected: str) -> None:
+    """A string test and nothing more. Whether the share exists is a question
+    for the worker that lists it; asking here would be a blocking call in a
+    dialog, which is the failure this application is built around.
+    """
+    from app.core.network import clean
+
+    assert clean(typed) == expected
+
+
+def test_saved_locations_survive_and_do_not_duplicate() -> None:
+    from app.core.config import Config
+    from app.core.network import Network
+
+    class Bridge:
+        def submit(self, *args, **kwargs):
+            return 1
+
+        def forget(self, request_id):
+            pass
+
+    config = Config({}, path=os.devnull)
+    network = Network(Bridge(), config)
+    assert network.add(r"\\tsclient\C") == r"\\tsclient\C"
+    assert network.add(r"\\TSCLIENT\c") == r"\\TSCLIENT\c"
+    assert [item.remote for item in network.saved] == [r"\\tsclient\C"]
+    network.remove(r"\\tsclient\C")
+    assert network.saved == []
+
+
+def test_a_saved_location_that_is_also_connected_is_one_row() -> None:
+    """And it is the connected one, because that is the row carrying the
+    letter and the live state.
+    """
+    from app.core.config import Config
+    from app.core.network import Location, Network
+
+    class Bridge:
+        def submit(self, *args, **kwargs):
+            return 1
+
+        def forget(self, request_id):
+            pass
+
+    config = Config({}, path=os.devnull)
+    network = Network(Bridge(), config)
+    network.add(r"\\server\jobs")
+    network._connections = [Location(r"\\SERVER\JOBS", local="S:")]
+    rows = network.locations
+    assert len(rows) == 1
+    assert rows[0].local == "S:"
+
+
+def test_a_location_that_is_not_a_unc_path_is_refused_rather_than_saved() -> None:
+    from app.core.config import Config
+    from app.core.network import Network
+
+    class Bridge:
+        def submit(self, *args, **kwargs):
+            return 1
+
+        def forget(self, request_id):
+            pass
+
+    network = Network(Bridge(), Config({}, path=os.devnull))
+    assert network.add("C:\\Jobs") == ""
+    assert network.saved == []
+
+
+def _has_heading(labels, title: str) -> bool:
+    """A heading is drawn with a fold chevron and in capitals, so it is looked
+    for rather than compared."""
+    return any(title.upper() in label.upper() for label in labels)
+
+
+def _labels(rail) -> list[str]:
+    """Every row's text, headings included -- **before** it is cut to fit.
+
+    `rail._elidable` holds each row beside its full text, and the full text is
+    what to assert against: the drawn text has been through `elidedText` with
+    `ElideMiddle`, so on a narrower rail, a different font or a scaled display
+    "Archive on fileserver" is "Archive on f...server" and an exact comparison
+    fails for a reason that has nothing to do with the feature.
+
+    Found by the failure: this passed in the container at 240 px and failed on
+    the user's machine on the first run of 0.19.
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    full = {id(button): text for button, text in rail._elidable}
+    return [full.get(id(child), child.text())
+            for child in rail.findChildren(QPushButton)]
+
+
+def test_the_network_section_lists_only_what_drives_cannot_show(config) -> None:
+    """A connection with a letter is already a row under Drives with its own
+    meter and its own reconnect. Listing it twice invites somebody to wonder
+    which is the real one -- and the row this section exists for is the one
+    with no letter, which Drives can never show.
+    """
+    from app.core.network import Location, Network
+    from app.ui.rail import NETWORK
+
+    network = Network(FakeBridge(), config)
+    network._connections = [
+        Location(r"\\tsclient\C"),
+        Location(r"\\server\jobs", local="S:"),
+    ]
+    rail, host, _bridge, _capacity = build(config, network=network)
+    labels = _labels(rail)
+    assert _has_heading(labels, NETWORK)
+    assert "C on tsclient" in labels
+    assert "S:" not in labels
+    host.hide()
+
+
+def test_a_saved_location_is_listed_even_though_nothing_is_connected(config) -> None:
+    """The reason saved locations exist at all: a share nobody is attached to
+    is in no table, and one that vanishes from the sidebar the moment a server
+    reboots is one you cannot click to get it back.
+    """
+    from app.core.network import Network
+
+    network = Network(FakeBridge(), config)
+    network.add(r"\\fileserver\Archive")
+    rail, host, _bridge, _capacity = build(config, network=network)
+    labels = _labels(rail)
+    assert "Archive on fileserver" in labels
+    host.hide()
+
+
+def test_a_rail_built_without_a_network_draws_no_network_section(config) -> None:
+    """What a preview render and a test get -- the shape of the real thing
+    rather than an empty heading that is a different shape from it.
+    """
+    from app.ui.rail import NETWORK
+
+    rail, host, _bridge, _capacity = build(config)
+    labels = _labels(rail)
+    assert not _has_heading(labels, NETWORK)
+    host.hide()
+
+
+def test_an_empty_network_list_says_why_when_there_is_a_why(config) -> None:
+    """"Nothing here" and "the question could not be asked" look identical and
+    are not the same thing. The first run of 0.19 on the user's machine came
+    back with no connections and no way to tell which it was, which is the
+    reason `connections()` reports a reason at all.
+    """
+    from app.core.network import Network
+
+    network = Network(FakeBridge(), config)
+    network.problem = "the connection list would not open: Access denied (5)"
+    rail, host, _bridge, _capacity = build(config, network=network)
+    assert any("Access denied" in label for label in _labels(rail))
+    host.hide()
+
+
+def test_an_empty_network_list_with_no_problem_says_so_plainly(config) -> None:
+    from app.core.network import Network
+
+    rail, host, _bridge, _capacity = build(
+        config, network=Network(FakeBridge(), config))
+    assert any("Nothing without a drive letter" in label
+               for label in _labels(rail))
+    host.hide()
+
+
+def test_a_failed_enumeration_is_not_reported_as_an_empty_machine() -> None:
+    """The same distinction one layer down, where it starts."""
+    from app.core.config import Config
+    from app.core.network import Network
+    from app.io.protocol import Reply, Status
+
+    network = Network(FakeBridge(), Config({}, path=os.devnull))
+    network._on_reply(Reply(1, Status.OK, payload={
+        "connections": [], "problem": "the connection list would not open"}))
+    assert network.problem == "the connection list would not open"
+    assert network.locations == []

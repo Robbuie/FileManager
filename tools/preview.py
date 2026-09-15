@@ -46,6 +46,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     from app.core.sizes import FolderSizes
     from app.core.thumbnails import Thumbnails
     from app.core.transfers import TransferQueue
+    from app.core.network import Location, Network
     from app.core.volumes import Volumes
     from app.io.pool import WorkerPool
     from app.theme import sheet
@@ -100,7 +101,8 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
              clipboard=clipboard, previews=previews, thumbnails=thumbnails),
         Pane(bridge, config, "right", icons, overlays, None, sizes, siblings,
              clipboard=clipboard, previews=previews, thumbnails=thumbnails),
-        volumes, TransferQueue(), None, Favorites(config), capacity)
+        volumes, TransferQueue(), None, Favorites(config), capacity,
+        None, _invented_network(bridge, config))
     volumes.refresh()
     icons.start()
     overlays.start()
@@ -180,6 +182,29 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     image.save(out)
     pool.shutdown()
     return out
+
+
+def _invented_network(bridge, config):
+    """A network section with contents, for the render only.
+
+    Invented for `--queue`'s reason and one of its own. The real list comes
+    from the redirector's table of current connections, and this machine has
+    none -- so a render of the real thing would be a picture of an empty
+    heading, which says nothing about the one case the section exists for.
+
+    The rows are the two shapes that matter: a redirected drive with **no
+    letter**, which is what a Hyper-V or Remote Desktop host share looks like
+    and is the reason any of this was written, and an ordinary mapped share
+    that does have one.
+    """
+    from app.core.network import Location, Network
+
+    network = Network(bridge, config)
+    network._connections = [          # noqa: SLF001 - a development tool
+        Location(r"\\tsclient\C", label="C on tsclient"),
+        Location(r"\\fileserver\Jobs", local="S:"),
+    ]
+    return network
 
 
 def _cut_some_rows(window, clipboard) -> None:

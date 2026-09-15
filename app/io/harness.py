@@ -297,6 +297,59 @@ def cmd_open(args: argparse.Namespace) -> int:
         pool.shutdown()
 
 
+def cmd_network(args: argparse.Namespace) -> int:
+    r"""What this session is attached to, letters or not.
+
+    `drives` reports letters, and this reports connections -- which is the
+    whole point: on a machine where the host drive arrives as `\\tsclient\C`
+    with no letter at all, `drives` cannot see it and this can. Running the two
+    side by side is the fastest way to see which kind of thing a share is.
+    """
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.NETWORK, "", timeout=args.timeout)
+        _report_outcome("", outcome, rows=False)
+        payload = outcome.payload if isinstance(outcome.payload, dict) else {}
+        entries = payload.get("connections", [])
+        _report("connections", len(entries))
+        for item in entries:
+            letter = item.get("local") or "(no letter)"
+            print(f"  {letter:<12} {item.get('remote', '')}"
+                  f"    [{item.get('provider', '') or 'no provider named'}]")
+        # An empty list and a failed call look identical from the outside and
+        # mean entirely different things. On 15 September this said nothing
+        # and a Hyper-V guest reported no connections; whether the call had
+        # even worked was unanswerable. It answers now.
+        problem = payload.get("problem", "")
+        if problem:
+            _report("problem", problem)
+        elif not entries:
+            _report("note", "the enumeration worked and this session holds "
+                            "no network connections")
+            _report("next", "tools\\diagnose_network.py asks every other "
+                            "place Windows could be keeping one")
+        return _exit_code(outcome)
+    finally:
+        pool.shutdown()
+
+
+def cmd_connect(args: argparse.Namespace) -> int:
+    """Attach to a share again, from the same code path the rail's Reconnect
+    uses. The one command here that is a network call by nature, so it is the
+    one worth pointing at a server that has just come back.
+    """
+    pool = WorkerPool()
+    try:
+        outcome = _run(pool, Op.CONNECT, args.path, timeout=args.timeout,
+                       args={"remember": args.remember})
+        _report_outcome(args.path, outcome, rows=False)
+        if outcome.status is Status.OK:
+            _report("connected", args.path)
+        return _exit_code(outcome)
+    finally:
+        pool.shutdown()
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Expand one command from the table and start it, saying what it found.
 
@@ -1091,6 +1144,16 @@ def build_parser() -> argparse.ArgumentParser:
                          help="edit, print, properties; empty means the default "
                               "verb, which is not the same as open")
     opening.set_defaults(func=cmd_open)
+
+    network = sub.add_parser(
+        "network", help="what this session is attached to, letters or not")
+    network.add_argument("--timeout", type=float, default=10.0)
+    network.set_defaults(func=cmd_network)
+
+    connecting = with_path("connect", "attach to a share again", timeout=45.0)
+    connecting.add_argument("--remember", action="store_true",
+                            help="keep the connection across logons")
+    connecting.set_defaults(func=cmd_connect)
 
     running = with_path("run", "expand one external command and start it",
                         timeout=15.0)

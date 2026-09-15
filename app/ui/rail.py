@@ -65,6 +65,12 @@ FOLDED_MARK = "›"   # and to the right, the same one the crumb bar uses
 #: ways in two places is a section that will not stay folded.
 PLACES = "Places"
 DRIVES = "Drives"
+#: The heading the network locations sit under. Its own section rather than
+#: more rows under Drives, because the two answer different questions: Drives
+#: is what has a letter, and this is what this session can reach -- which is
+#: where a Hyper-V or Remote Desktop redirected share lives, having no letter
+#: anywhere for Drives to have found it by.
+NETWORK = "Network"
 
 #: A drive at or past this share of its capacity draws its meter in the warn
 #: colour. A fixed number rather than the accent, for the reason the design
@@ -98,14 +104,25 @@ class NavigationRail(QFrame):
     manageFavoritesRequested = Signal()
     #: A favourite was moved under a heading: its index, and the new group.
     groupRequested = Signal(int, str)
+    #: The network section. Separate signals rather than one with a verb,
+    #: because the window does four different things with them and a string
+    #: to switch on is a place for a typo to live.
+    addLocationRequested = Signal()
+    refreshNetworkRequested = Signal()
+    reconnectRequested = Signal(str)
+    forgetLocationRequested = Signal(str)
 
-    def __init__(self, favorites, volumes, capacity, config,
+    def __init__(self, favorites, volumes, capacity, config, network=None,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._favorites = favorites
         self._volumes = volumes
         self._capacity = capacity
         self._config = config
+        #: None for a rail built without one -- a preview render, a test --
+        #: which draws no network section at all rather than an empty one that
+        #: is a different shape from the real thing.
+        self._network = network
         self._places: list[tuple[str, str]] = []
         self._tokens: dict[str, str] = {}
         self._current = ""
@@ -215,6 +232,30 @@ class NavigationRail(QFrame):
             for drive in drives:
                 self._drive_row(drive)
 
+        # Only the ones Drives cannot show. A connection that *has* a letter
+        # is already a row up there with its own meter and its own reconnect,
+        # and listing it twice invites somebody to wonder which is the real
+        # one. What is left is exactly the gap this section exists for: the
+        # connections with no letter at all, and the locations somebody typed.
+        locations = [item for item in getattr(self._network, "locations", [])
+                     if not item.local] if self._network is not None else []
+        if locations or self._network is not None:
+            self._section(NETWORK, menu=self._network_menu)
+            for location in locations:
+                self._network_row(location)
+            if not locations and NETWORK not in self._collapsed:
+                # A heading with nothing under it, on purpose. The section is
+                # where "add a network location" lives, and a section that
+                # appears only once there is something in it is one nobody can
+                # find the first time.
+                #
+                # And it says *why* it is empty when there is a why. "Nothing
+                # here" and "the question could not be asked" look identical
+                # and are not the same, which is the distinction this whole
+                # section learned the hard way.
+                trouble = getattr(self._network, "problem", "")
+                self._empty_row(trouble or "Nothing without a drive letter")
+
         entries = list(self._favorites.entries) if self._favorites else []
         # Groups first, in the order the list mentions them, then whatever is
         # under no heading. Ungrouped last because a list nobody has grouped
@@ -299,7 +340,53 @@ class NavigationRail(QFrame):
                         "current" if letter.lower() == self._current[:2] else "")
         row.chosen.connect(self.chosen)
         row.measureRequested.connect(self.measureRequested)
+        row.reconnectRequested.connect(self.reconnectRequested)
         self._column.insertWidget(self._column.count() - 1, row)
+
+    def _network_row(self, location) -> None:
+        if NETWORK in self._collapsed:
+            return
+        tip = location.remote if not location.local else \
+            f"{location.remote}\n{location.local}"
+        button = self._row(location.label, location.path, tip=tip)
+        button.setProperty(
+            "state",
+            "current" if location.path.lower() == self._current.lower()[:len(location.path)]
+            else "")
+        button.setContextMenuPolicy(Qt.CustomContextMenu)
+        button.customContextMenuRequested.connect(
+            lambda point, owner=button, where=location:
+            self._location_menu(owner, point, where))
+
+    def _empty_row(self, text: str) -> None:
+        """A greyed line under a heading that has nothing in it."""
+        button = self._row(text, "", tip="")
+        button.setEnabled(False)
+
+    def _network_menu(self, button, point) -> None:
+        menu = QMenu(self)
+        menu.addAction("Add a network location", self.addLocationRequested.emit)
+        menu.addAction("Refresh", self.refreshNetworkRequested.emit)
+        menu.exec(button.mapToGlobal(point))
+
+    def _location_menu(self, button, point, location) -> None:
+        menu = QMenu(self)
+        menu.setToolTipsVisible(True)
+        again = menu.addAction(
+            "Reconnect",
+            lambda: self.reconnectRequested.emit(location.path))
+        again.setToolTip("Attach to this share again, for one that has stopped "
+                         "answering. Windows uses this session's own account.")
+        menu.addSeparator()
+        menu.addAction("Add a network location", self.addLocationRequested.emit)
+        forget = menu.addAction(
+            "Remove from this list",
+            lambda: self.forgetLocationRequested.emit(location.path))
+        # Only the saved ones can be removed. A connection is there because
+        # Windows says it is, and a menu entry that appears to remove it would
+        # be one that does nothing the next time the list is read.
+        forget.setEnabled(bool(getattr(location, "saved", False)))
+        menu.exec(button.mapToGlobal(point))
 
     # ------------------------------------------------------------- folding
 
@@ -438,6 +525,9 @@ class DriveRow(QWidget):
 
     chosen = Signal(str, bool)
     measureRequested = Signal(str)
+    #: The UNC behind a mapped drive, for re-attaching to it. Only a remote
+    #: drive has one, which is why the entry is only offered for those.
+    reconnectRequested = Signal(str)
 
     def __init__(self, letter: str, unc: str, kind: str, *, usage=None,
                  tokens=None, parent: QWidget | None = None) -> None:
@@ -580,4 +670,13 @@ class DriveRow(QWidget):
         label = ("Measure again" if self._usage is not None
                  else "Measure how full it is")
         menu.addAction(label, lambda: self.measureRequested.emit(self._letter))
+        if self._kind == "remote" and self._unc:
+            # A letter can be present and dead at the same time -- the session
+            # table still lists it while the server behind it has gone -- so
+            # this is offered on every mapped drive rather than only on one
+            # that has already failed. It attaches to the *UNC*, which is the
+            # thing that still exists when the letter's session has died.
+            menu.addSeparator()
+            menu.addAction("Reconnect",
+                           lambda: self.reconnectRequested.emit(self._unc))
         menu.exec(self.mapToGlobal(point))

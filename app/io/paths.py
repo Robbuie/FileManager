@@ -231,6 +231,155 @@ def drives(*, refresh: bool = False) -> list[Drive]:
     return result
 
 
+#: The scope and shape of a connection enumeration. `RESOURCE_CONNECTED` is the
+#: redirector's own table of what this session is attached to *right now* --
+#: the same table `WNetGetConnection` reads, so it costs nothing and touches no
+#: server. Spelled out rather than imported from `win32netcon` because these
+#: four numbers are stable and the import is one more thing to be missing.
+_RESOURCE_CONNECTED = 1
+_RESOURCETYPE_DISK = 1
+_RESOURCEUSAGE_CONNECTABLE = 1
+_CONNECT_UPDATE_PROFILE = 1
+
+#: How many entries to ask for per call. A session has a handful, not
+#: thousands; this is one round trip for the usual case and a loop for the rest.
+_ENUM_BATCH = 32
+
+
+@dataclass(frozen=True, slots=True)
+class Connection:
+    r"""A network location this session is attached to.
+
+    `local` is the drive letter it was mapped to, **or empty** -- and the empty
+    case is the entire reason this exists. A Hyper-V or Remote Desktop
+    redirected drive is a real connection with no letter at all: it is
+    `\\tsclient\C` and nothing else, so `GetLogicalDrives` never mentions it
+    and a drive list built from letters cannot show it.
+    """
+
+    remote: str
+    local: str = ""
+    provider: str = ""
+
+    @property
+    def label(self) -> str:
+        """What to call it in a list. The letter when it has one, because that
+        is what the user types; otherwise the share's own name."""
+        if self.local:
+            return self.local.rstrip("\\")
+        pieces = split_unc(self.remote)
+        return pieces[1] if pieces else self.remote
+
+
+def connections() -> tuple[list[Connection], str]:
+    """Every network location this session is attached to, letters or not.
+
+    Reads the redirector's table of current connections. That table is local --
+    it is what `WNetGetConnection` answers from, and what Explorer's "Network
+    locations" is drawn from -- so this does not contact a server and cannot
+    block on one that has gone. **Enumerating the network itself is a different
+    call and is deliberately not made here**: `RESOURCE_GLOBALNET` asks the
+    browser service what exists out there, which is a real network round trip
+    and is how a file manager ends up hanging on startup.
+
+    Returns the list **and why it is short**, which is not decoration. "No
+    connections" and "the enumeration would not open" look identical from the
+    outside and mean entirely different things -- the first is a machine with
+    nothing mapped, the second is this call being wrong about how Windows
+    holds something. On 15 September the first run of `harness network` on a
+    Hyper-V guest reported nothing, and with the failure swallowed there was
+    no way to tell which of the two it was. Now it says.
+    """
+    if win32wnet is None:
+        return [], "not running on Windows"
+    try:
+        handle = win32wnet.WNetOpenEnum(
+            _RESOURCE_CONNECTED, _RESOURCETYPE_DISK,
+            _RESOURCEUSAGE_CONNECTABLE, None)
+    except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+        return [], f"the connection list would not open: {_why(exc)}"
+
+    found: list[Connection] = []
+    problem = ""
+    try:
+        while True:
+            try:
+                batch = win32wnet.WNetEnumResource(handle, _ENUM_BATCH)
+            except Exception as exc:  # noqa: BLE001 - the end of the list raises
+                # `ERROR_NO_MORE_ITEMS` is how the list ends and is not a
+                # fault; anything else is, and is worth saying rather than
+                # reading as an empty machine.
+                if getattr(exc, "winerror", None) not in (259, None):
+                    problem = f"the connection list stopped: {_why(exc)}"
+                break
+            if not batch:
+                break
+            for item in batch:
+                remote = normalize(str(getattr(item, "lpRemoteName", "") or ""))
+                if not remote or not is_unc(remote):
+                    continue
+                found.append(Connection(
+                    remote=remote,
+                    local=str(getattr(item, "lpLocalName", "") or ""),
+                    provider=str(getattr(item, "lpProvider", "") or ""),
+                ))
+    finally:
+        try:
+            win32wnet.WNetCloseEnum(handle)
+        except Exception:  # noqa: BLE001 - nothing useful to do about it
+            pass
+    return _without_duplicates(found), problem
+
+
+def _why(exc: BaseException) -> str:
+    """A Windows error in the words it came with, and its number."""
+    detail = str(getattr(exc, "strerror", None) or exc).strip()
+    number = getattr(exc, "winerror", None)
+    return f"{detail} ({number})" if number is not None else detail
+
+
+def _without_duplicates(found: list[Connection]) -> list[Connection]:
+    """One row per remote path, preferring the one that has a letter.
+
+    A drive mapped to a share this session also holds without a letter is one
+    place, and listing it twice invites somebody to wonder which is the real
+    one.
+    """
+    best: dict[str, Connection] = {}
+    for item in found:
+        key = item.remote.lower()
+        if key not in best or (item.local and not best[key].local):
+            best[key] = item
+    return sorted(best.values(), key=lambda c: (not c.local, c.label.lower()))
+
+
+def connect(remote: str, *, remember: bool = False) -> str:
+    """Re-establish a connection to a share. Returns "" or why it failed.
+
+    This *is* a network call and belongs nowhere near the UI thread. It is the
+    one operation here that can sit for the full SMB timeout, which is why the
+    op that carries it has its own deadline.
+
+    No credentials are passed. Windows uses the session's own, which is the
+    case that matters -- a share that dropped because the server restarted
+    comes back without anybody being asked anything. A share that genuinely
+    needs a different account fails here with the reason, and that is a better
+    outcome than a prompt this application would have to own.
+    """
+    if win32wnet is None:
+        return "not running on Windows"
+    resource = win32wnet.NETRESOURCE()
+    resource.dwType = _RESOURCETYPE_DISK
+    resource.lpRemoteName = normalize(remote)
+    resource.lpLocalName = None
+    try:
+        win32wnet.WNetAddConnection2(
+            resource, None, None, _CONNECT_UPDATE_PROFILE if remember else 0)
+    except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+        return str(getattr(exc, "strerror", None) or exc)
+    return ""
+
+
 def mapped_drives(*, refresh: bool = False) -> dict[str, str]:
     return {d.letter: d.unc for d in drives(refresh=refresh) if d.unc}
 
