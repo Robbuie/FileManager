@@ -36,11 +36,15 @@ the model's own `size_scale`, computed once per change and cached there.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt
+from PySide6.QtCore import QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from app.core.listing import Column, ListingModel
+from app.io import paths
+
+#: The heading drawn above the first row of each folder in grouped flat view.
+GROUP_HEAD = 26
 
 #: Height of the size bar, and how far its baseline sits off the bottom of the
 #: row. Small numbers, but they are the difference between a bar that reads as
@@ -189,6 +193,19 @@ class RowDelegate(QStyledItemDelegate):
     # ------------------------------------------------------------- painting
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        model = index.model()
+        heading = (model.group_heading(index.row())
+                   if hasattr(model, "group_heading") else None)
+        if heading is not None:
+            # Grouped flat view: this row was made taller, and the top of it is
+            # the folder's heading. Everything below paints into what is left,
+            # so the band, the hover and the text sit where a row always does.
+            option = QStyleOptionViewItem(option)
+            full = QRect(option.rect)
+            self._heading(painter, QRect(full.left(), full.top(), full.width(),
+                                         GROUP_HEAD), index, heading)
+            full.setTop(full.top() + GROUP_HEAD)
+            option.rect = full
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
 
@@ -238,6 +255,38 @@ class RowDelegate(QStyledItemDelegate):
             super().paint(painter, opt, index)
             if index.column() == Column.SIZE:
                 self._bar(painter, option, index)
+        painter.restore()
+
+    def _heading(self, painter: QPainter, rect: QRect, index, heading) -> None:
+        """A folder's heading across the top of the row that starts it: its
+        path under the flattened folder and how many files are in it, in the
+        name column, and a rule under it across every column."""
+        where, count = heading
+        painter.save()
+        line = parse_colour(self._t.get("line_soft"))
+        if line.isValid():
+            painter.fillRect(QRect(rect.left(), rect.bottom() - 1, rect.width(), 1), line)
+        if index.column() == int(Column.NAME):
+            model = index.model()
+            label = where or (paths.leaf(model.folder) if model.folder else "")
+            font = QFont(painter.font())
+            font.setBold(True)
+            painter.setFont(font)
+            metrics = QFontMetrics(font)
+            ink = parse_colour(self._t.get("txt_1"))
+            painter.setPen(ink if ink.isValid() else QColor(Qt.gray))
+            text_rect = rect.adjusted(8, 4, -4, -2)
+            tail = f"   {count:,} file{'s' if count != 1 else ''}"
+            tail_w = QFontMetrics(painter.font()).horizontalAdvance(tail)
+            shown = metrics.elidedText(label, Qt.ElideMiddle,
+                                       max(0, text_rect.width() - tail_w))
+            painter.drawText(text_rect, int(Qt.AlignLeft | Qt.AlignVCenter), shown)
+            font.setBold(False)
+            painter.setFont(font)
+            muted = parse_colour(self._t.get("txt_2"))
+            painter.setPen(muted if muted.isValid() else QColor(Qt.gray))
+            painter.drawText(text_rect.adjusted(metrics.horizontalAdvance(shown), 0, 0, 0),
+                             int(Qt.AlignLeft | Qt.AlignVCenter), tail)
         painter.restore()
 
     @staticmethod

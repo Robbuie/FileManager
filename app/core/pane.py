@@ -96,6 +96,9 @@ class Tab:
         #: When this tab is next due a live check, on `time.monotonic`.
         self.check_after = 0.0
         self.check_failures = 0
+        #: Flat view (0.25): this tab lists every file under `path` rather
+        #: than what is in it. Ends when the tab goes to another folder.
+        self.flat = False
 
     @property
     def label(self) -> str:
@@ -124,6 +127,8 @@ class Pane(QObject):
     #: administrator rights, and the sentence describing it. Nothing happens
     #: unless somebody answers the dialog this puts on screen.
     elevationOffered = Signal(object, str)
+    #: A tab went into or out of flat view, or the flat layout changed.
+    flatChanged = Signal()
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
                  menu=None, sizes=None, siblings=None, parent=None,
@@ -323,6 +328,13 @@ class Pane(QObject):
             return
 
         same_folder = tab.listed and target == tab.path
+        if tab.flat and target != tab.path:
+            # Flat view belongs to the folder it was asked for. Going somewhere
+            # else -- a location clicked, Backspace, a favourite -- is a normal
+            # listing of that place.
+            tab.flat = False
+            tab.model.set_flat(False)
+            self.flatChanged.emit()
         tab.path = target
         tab.model.set_folder(target)
         if self.overlays is not None:
@@ -359,12 +371,18 @@ class Pane(QObject):
         """
         if not quiet:
             self._abandon(tab)
+        if tab.flat:
+            # Never reconciled: a refresh of a flat view walks again from the
+            # top, streaming, and the grouped layout's headings are laid out
+            # from a model that was reset.
+            keep = False
         if keep:
             tab.buffer = []
         else:
             tab.buffer = None
             tab.listed = False
-            tab.model.begin(has_parent=paths.parent(tab.path) is not None)
+            tab.model.begin(has_parent=not tab.flat
+                            and paths.parent(tab.path) is not None)
         tab.quiet = quiet
         if not quiet:
             self._set_status(tab, "refreshing" if keep else "listing", BUSY)
@@ -373,11 +391,77 @@ class Pane(QObject):
             self.tabsChanged.emit()
 
         tab.started = time.monotonic()
+        if tab.flat:
+            tab.request_id = self._bridge.submit(
+                Op.WALK, tab.path,
+                timeout=float(self._config.get("timeout.listing")),
+                on_reply=self._replier(tab),
+                args={"limit": int(self._config.get("flat.limit"))},
+            )
+            return
         tab.request_id = self._bridge.submit(
             Op.LIST, tab.path,
             timeout=float(self._config.get("timeout.listing")),
             on_reply=self._replier(tab),
         )
+
+    # --------------------------------------------------------------- flat view
+
+    @property
+    def flat_layout(self) -> str:
+        """"column" for a Location column, "groups" for a heading per folder."""
+        value = str(self._config.get("flat.layout"))
+        return value if value in ("column", "groups") else "column"
+
+    def set_flat_layout(self, layout: str) -> None:
+        if layout not in ("column", "groups"):
+            return
+        self._config.set("flat.layout", layout)
+        for tab in self.tabs:
+            if tab.flat:
+                tab.model.set_flat(True, grouped=layout == "groups")
+        self.flatChanged.emit()
+
+    def set_flat(self, on: bool) -> None:
+        """Flat view on or off for the tab in front, then list it again."""
+        tab = self.current
+        on = bool(on)
+        if on == tab.flat:
+            return
+        tab.flat = on
+        tab.model.set_flat(on, grouped=self.flat_layout == "groups")
+        self.flatChanged.emit()
+        self.tabsChanged.emit()
+        self._list(tab, announce=False)
+
+    def go_to_location(self, row: int) -> None:
+        """Leave flat view for the folder a row is in, cursor on the file."""
+        tab = self.current
+        entry = tab.model.entry(row)
+        if not tab.flat or entry is None:
+            return
+        where, _, name = entry.name.rpartition("\\")
+        target = paths.join(tab.path, where) if where else tab.path
+        tab.reveal_name = name
+        if target == tab.path:
+            self.set_flat(False)
+        else:
+            self.navigate(target)
+
+    def toggle_flat(self) -> None:
+        self.set_flat(not self.current.flat)
+
+    def stop_walk(self) -> bool:
+        """Stop a flat view that is still walking, keeping what it found.
+        Returns whether there was one to stop."""
+        tab = self.current
+        if not tab.flat or tab.request_id is None:
+            return False
+        self._abandon(tab)
+        tab.model.finish()
+        tab.listed = True
+        self._set_status(tab, f"{tab.model.summary()}  ·  stopped", IDLE)
+        return True
 
     def refresh(self) -> None:
         self.navigate(self.current.path, record=False)
@@ -434,6 +518,8 @@ class Pane(QObject):
         tab = self.current
         if not self._live or not tab.listed or tab.request_id is not None:
             return False
+        if tab.flat:
+            return False        # a walk of a whole tree is not a live check
         if (now if now is not None else time.monotonic()) < tab.check_after:
             return False
         if self._check_interval(tab) <= 0:
@@ -995,6 +1081,11 @@ class Pane(QObject):
                     self._set_status(tab, f"refreshing, {len(tab.buffer):,} rows", BUSY)
                 return
             tab.model.add(reply.payload or [])
+            if tab.flat:
+                self._set_status(
+                    tab, f"walking, {tab.model.rowCount():,} files so far  ·  Esc stops",
+                    BUSY)
+                return
             self._set_status(tab, f"listing, {tab.model.rowCount():,} rows", BUSY)
             return
 
@@ -1012,7 +1103,8 @@ class Pane(QObject):
             tab.listed = True
             self._schedule(tab, elapsed, ok=True)
             if not quiet or changed or tab.status_state == BAD:
-                self._set_status(tab, tab.model.summary(), IDLE)
+                self._set_status(tab, tab.model.summary() + _walk_note(tab, reply),
+                                 IDLE)
             if not quiet:
                 self._request_space(tab)
             if tab.reveal_name and tab is self.current:
@@ -1076,6 +1168,10 @@ class Pane(QObject):
             self._bridge.forget(tab.space_id)
             tab.space_id = None
 
+    def say(self, text: str, state: str = IDLE) -> None:
+        """Put a sentence on the status line of the tab in front."""
+        self._set_status(self.current, text, state)
+
     def _set_status(self, tab: Tab, text: str, state: str) -> None:
         tab.status_text, tab.status_state = text, state
         if tab is self.current:
@@ -1085,6 +1181,23 @@ class Pane(QObject):
         self.statusChanged.emit(tab.status_text, tab.status_state)
         self.pathChanged.emit(self.display(tab.path))
         self.spaceChanged.emit(tab.space_text)
+
+
+def _walk_note(tab: "Tab", reply: Reply) -> str:
+    """What a flat view's final reply adds to the summary: that it stopped at
+    the limit, and how many folders it could not read."""
+    if not tab.flat:
+        return ""
+    words = (reply.message or "").split()
+    notes = []
+    if "limit" in words:
+        notes.append("stopped at the flat view limit")
+    for word in words:
+        if word.startswith("skipped="):
+            count = int(word.partition("=")[2] or 0)
+            if count:
+                notes.append(f"{count:,} folder{'s' if count != 1 else ''} could not be read")
+    return "".join(f"  ·  {note}" for note in notes)
 
 
 def _explain(reply: Reply) -> str:

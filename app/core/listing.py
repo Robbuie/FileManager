@@ -42,9 +42,14 @@ class Column(IntEnum):
     SIZE = 2
     AGE = 3
     MODIFIED = 4
+    #: Flat view only (0.25): the subfolder a row is in, relative to the
+    #: folder that was flattened. Last in the model so every stored width and
+    #: hidden-column list from before it still means what it meant; the pane
+    #: moves it beside the name on screen.
+    LOCATION = 5
 
 
-HEADERS = ("Name", "Ext", "Size", "Age", "Modified")
+HEADERS = ("Name", "Ext", "Size", "Age", "Modified", "Location")
 
 
 def format_size(size: int) -> str:
@@ -234,6 +239,72 @@ class ListingModel(QAbstractTableModel):
         #: already in memory is cheap, and doing it per batch during a
         #: streaming listing would not be.
         self._scale: int | None = None
+        #: Flat view: rows are files from a whole tree, each named by its path
+        #: relative to `_folder`. `_grouped` sorts them by that location first
+        #: and lets the delegate draw a heading where each location starts.
+        self._flat = False
+        self._grouped = False
+        self._group_sizes: dict[str, int] = {}
+
+    # ------------------------------------------------------------ flat view
+
+    def set_flat(self, flat: bool, *, grouped: bool = False) -> None:
+        """Whether these rows are a flattened tree, and how it is laid out.
+
+        Changing only the layout re-sorts what is already here; turning flat
+        view on or off is followed by a new listing, so it just records it.
+        """
+        flat, grouped = bool(flat), bool(flat and grouped)
+        if (flat, grouped) == (self._flat, self._grouped):
+            return
+        relayout = flat == self._flat
+        self._flat, self._grouped = flat, grouped
+        if relayout:
+            self.finish()
+
+    @property
+    def flat(self) -> bool:
+        return self._flat
+
+    @property
+    def grouped(self) -> bool:
+        return self._grouped
+
+    def _leaf(self, entry: Entry) -> str:
+        return entry.name.rpartition("\\")[2] if self._flat else entry.name
+
+    def location(self, entry: Entry) -> str:
+        """The subfolder a flat row is in, relative to the flattened folder.
+        "" for a file at the top, and for every row outside flat view."""
+        return entry.name.rpartition("\\")[0] if self._flat else ""
+
+    def split(self, entry: Entry) -> tuple[str, str]:
+        """`split_name` on the file's own name, never on the folders above it
+        -- `2026.09\\notes` has no extension, and `a.b\\c.txt` has `txt`."""
+        if not self._flat:
+            return split_name(entry)
+        leaf = self._leaf(entry)
+        stem, dot, suffix = leaf.rpartition(".")
+        if not dot or not stem:
+            return leaf, ""
+        return stem, suffix
+
+    def group_heading(self, row: int) -> tuple[str, int] | None:
+        """`(location, files in it)` when this row starts a group, else None.
+
+        Only in grouped flat view. Asked during a paint, so it compares with
+        the row above rather than keeping a table of where groups start.
+        """
+        if not self._grouped:
+            return None
+        entry = self.entry(row)
+        if entry is None:
+            return None
+        here = self.location(entry)
+        above = self.entry(row - 1) if row - 1 >= self._offset else None
+        if above is not None and self.location(above) == here:
+            return None
+        return here, self._group_sizes.get(here, 0)
 
     def set_icons(self, provider) -> None:
         """Where the decoration comes from, or None for a model without one.
@@ -487,7 +558,7 @@ class ListingModel(QAbstractTableModel):
         """
         wanted = (suffix or "").lower()
         return [index + self._offset for index, entry in enumerate(self._rows)
-                if not entry.is_dir and split_name(entry)[1].lower() == wanted]
+                if not entry.is_dir and self.split(entry)[1].lower() == wanted]
 
     def all_rows(self) -> list[int]:
         """Every row a selection may hold, the parent row excluded."""
@@ -554,11 +625,20 @@ class ListingModel(QAbstractTableModel):
         order = [(first + step * n) % count for n in range(count)]
         for match in (str.startswith, str.__contains__):
             for index in order:
-                if match(self._rows[index].name.lower(), wanted):
+                if match(self._leaf(self._rows[index]).lower(), wanted):
                     return index + self._offset
         return -1
 
     def summary(self) -> str:
+        if self._flat:
+            total = sum(e.size for e in self._all)
+            places = len({self.location(e).lower() for e in self._all})
+            text = (f"{count_of(len(self._all), 'file') or 'no files'} in "
+                    f"{count_of(places, 'folder') or 'no folders'}, "
+                    f"{format_size(total)}")
+            if self._filter:
+                text += f"  ·  {len(self._rows):,} shown"
+            return text
         folders = sum(1 for e in self._all if e.is_dir)
         files = len(self._all) - folders
         total = sum(e.size for e in self._all if not e.is_dir)
@@ -725,9 +805,11 @@ class ListingModel(QAbstractTableModel):
             return None
 
         if column == Column.NAME:
-            return split_name(entry)[0]
+            return self.split(entry)[0]
         if column == Column.EXT:
-            return split_name(entry)[1]
+            return self.split(entry)[1]
+        if column == Column.LOCATION:
+            return self.location(entry)
         if column == Column.SIZE:
             # A folder's size is a separate, lazy request. Blank until it is
             # asked for: 0.24 dropped `<DIR>`, which was Double Commander's
@@ -777,11 +859,22 @@ class ListingModel(QAbstractTableModel):
                 # labelled "how long ago", which is backwards.
                 return -entry.mtime
             if column == Column.EXT:
-                return split_name(entry)[1].lower()
-            return entry.name.lower()
+                return self.split(entry)[1].lower()
+            if column == Column.LOCATION:
+                return (self.location(entry).lower(), self._leaf(entry).lower())
+            return self._leaf(entry).lower()
 
         self._all.sort(key=key, reverse=reverse)
         self._all.sort(key=lambda e: not e.is_dir)
+        if self._grouped:
+            # Stable, so each group keeps the column's order inside it. The
+            # groups follow the sort's direction, so newest first by Modified
+            # puts the newest dated folder at the top as well.
+            # A subfolder's group stays under its parent's either way: ordered
+            # by path segments first, then the top-level folders turned round.
+            self._all.sort(key=lambda e: tuple(self.location(e).lower().split("\\")))
+            self._all.sort(key=lambda e: self.location(e).lower().split("\\")[0],
+                           reverse=reverse)
         self._apply_filter()
 
     def _counted(self, name: str) -> int:
@@ -798,7 +891,7 @@ class ListingModel(QAbstractTableModel):
     # ---------------------------------------------------------------- filter
 
     def _passes(self, entry: Entry) -> bool:
-        return matches(entry.name, self._filter)
+        return matches(self._leaf(entry), self._filter)
 
     def _apply_filter(self) -> None:
         """Recompute the visible list. Callers own the reset around it."""
@@ -808,6 +901,11 @@ class ListingModel(QAbstractTableModel):
             e for e in self._all if self._passes(e)
         ]
         self._scale = None
+        self._group_sizes = {}
+        if self._grouped:
+            for entry in self._rows:
+                where = self.location(entry)
+                self._group_sizes[where] = self._group_sizes.get(where, 0) + 1
 
 
 def _same_listing(old: Sequence[Entry], new: Sequence[Entry]) -> bool:

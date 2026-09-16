@@ -29,11 +29,13 @@ import shutil
 import signal
 import subprocess
 import time
+from dataclasses import replace
 from typing import Any
 
 from app.io import decode, elevate, paths
 from app.io.protocol import (
     BATCH_SIZE,
+    WALK_HEARTBEAT,
     ICON_FILE,
     ICON_FOLDER,
     LIST_FILE,
@@ -162,6 +164,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _overlays(request, outbox)
     elif request.op is Op.FOLDERS:
         _folders(request, outbox, control, cancelled)
+    elif request.op is Op.WALK:
+        _walk(request, outbox, control, cancelled)
     elif request.op is Op.DRIVES:
         _drives(request, outbox)
     elif request.op is Op.FREE_SPACE:
@@ -249,6 +253,89 @@ def _list(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                 deadline = time.monotonic() + request.timeout
 
     outbox.put(Reply(request.id, Status.OK, payload=batch, seq=seq))
+
+
+def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:
+    """Every file under a folder, streamed, with names relative to it.
+
+    Depth first with an explicit stack rather than `os.walk`: `os.walk` builds
+    each folder's whole list before yielding it, and it cannot be stopped in
+    the middle of a 50,000-file folder. This is `_list`'s loop, run once per
+    folder. See `Op.WALK` for the contract.
+    """
+    limit = max(1, int(request.args.get("limit", 50_000)))
+    batch: list[Entry] = []
+    seq = 0
+    seen = 0
+    files = 0
+    skipped = 0
+    last_sent = time.monotonic()
+    stack: list[tuple[str, str]] = [(request.path, "")]
+    first = True
+
+    def send(status: Status, message: str = "") -> None:
+        nonlocal seq, batch, last_sent
+        outbox.put(Reply(request.id, status, payload=batch, seq=seq, message=message))
+        seq += 1
+        batch = []
+        last_sent = time.monotonic()
+
+    while stack:
+        folder, relative = stack.pop()
+        try:
+            scanner = os.scandir(paths.api(folder))
+        except OSError as exc:
+            if first:
+                # The folder asked about is not a subfolder that could not be
+                # read; it is the walk failing, and says so like a listing.
+                outbox.put(_failure(request, exc))
+                return
+            skipped += 1
+            continue
+        first = False
+        subfolders: list[tuple[str, str]] = []
+        with scanner:
+            while True:
+                if seen % CHECK_INTERVAL == 0:
+                    _drain_control(control, cancelled)
+                    if request.id in cancelled:
+                        cancelled.discard(request.id)
+                        outbox.put(Reply(request.id, Status.CANCELLED, seq=seq))
+                        return
+                try:
+                    entry = next(scanner)
+                except StopIteration:
+                    break
+                except OSError:
+                    skipped += 1
+                    break
+                seen += 1
+                row = _row(entry)
+                if row is None:
+                    continue
+                name = entry.name if not relative else relative + "\\" + entry.name
+                if row.is_dir:
+                    if not row.is_link:
+                        # The real path for the next scandir; `name` is the one the
+                        # UI sees. `entry.path` is already joined by the OS.
+                        subfolders.append((entry.path, name))
+                    continue
+                batch.append(replace(row, name=name))
+                files += 1
+                if files >= limit:
+                    note = f"limit skipped={skipped}"
+                    send(Status.OK, note)
+                    return
+                if len(batch) >= BATCH_SIZE:
+                    send(Status.PARTIAL)
+                if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+                    send(Status.PARTIAL)
+        # Reversed so the stack hands them back in the order they were read.
+        stack.extend(reversed(subfolders))
+        if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+            send(Status.PARTIAL)
+
+    send(Status.OK, f"skipped={skipped}")
 
 
 def _folders(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:

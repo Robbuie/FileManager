@@ -5,6 +5,25 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.25.0]
+
+### Added
+- **Flat view (Ctrl+B).** Every file under the folder in one list, in the tab
+  in front. Mark, copy, move, delete, preview and F3 work on the rows as usual.
+  The filter matches file names across the whole tree. Files arrive as the
+  walk goes; Esc stops it and keeps what it found. It stops at 50,000 files
+  (`flat.limit`) and says so, and says how many folders could not be read.
+  Going to another folder, or Ctrl+B again, ends it. Rename and Duplicate are
+  refused while it is on.
+- **Two layouts, chosen under View > Flat view layout:** a Location column
+  beside the name (double click a location to go to that folder, cursor on
+  the file), or a heading for each folder with its files under it. Groups
+  follow the sort's direction, so newest first puts the newest dated folder
+  at the top.
+
+### Changed
+- **The navigation rail is Ctrl+Shift+B**, since Ctrl+B is flat view.
+
 ## [0.24.0]
 
 ### Changed

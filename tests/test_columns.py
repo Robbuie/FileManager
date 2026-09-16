@@ -197,6 +197,8 @@ def test_fitting_an_empty_folder_does_not_collapse_the_column(pane) -> None:
     """
     pane.fit_columns()
     for column in range(len(HEADERS)):
+        if pane._view.isColumnHidden(column):
+            continue        # Location, outside flat view
         assert header(pane).sectionSize(column) >= MIN_COLUMN
 
 

@@ -28,7 +28,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 def render(path: str, out: str, *, theme: str, accent: str, density: str,
            width: int, height: int, settle_ms: int, tabs: int = 1,
            menu: bool = False, queue: bool = False, cut: bool = False,
-           pane_preview: bool = False, grid: bool = False,
+           pane_preview: bool = False, grid: bool = False, flat: str = "",
            viewer: str = "", cell: int = 128, commands: bool = False) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
@@ -128,6 +128,11 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     if grid:
         _fill_grid(window, thumbnails, cell)
         QTimer.singleShot(300, app.quit)
+        app.exec()
+
+    if flat:
+        _fill_flat(window, flat)
+        QTimer.singleShot(400, app.quit)
         app.exec()
 
     if pane_preview:
@@ -518,6 +523,41 @@ def _show_menu(window) -> None:
     return menu
 
 
+def _fill_flat(window, layout: str) -> None:
+    """The left pane in flat view over an invented job folder.
+
+    Invented for the reason the other fills are: the names a real walk
+    produces here are Linux-shaped, and what is worth looking at is a tree of
+    dated folders, which this repository is not.
+    """
+    import time as _time
+
+    from app.io.protocol import Entry, Reply, Status
+
+    pane = window._panes[0]  # noqa: SLF001
+    now = _time.time()
+    days = [("2026-09-16", 0.2), ("2026-09-15", 1.1), ("2026-09-12", 4.2), ("2026-09-11", 5.1)]
+    rows = []
+    for day, age in days:
+        stamp = now - age * 86400
+        rows += [
+            Entry(f"{day}\\J2417_PaintLine_Main.ACD", False, 9_624_064, stamp, 0),
+            Entry(f"{day}\\J2417_PaintLine_Main.L5X", False, 18_223_104, stamp, 0),
+            Entry(f"{day}\\Change_Log.txt", False, 6_144, stamp + 60, 0),
+            Entry(f"{day}\\HMI\\Screen_Main_Overview.mer", False, 2_211_840, stamp - 7200, 0),
+        ]
+        if day == "2026-09-15":
+            rows.append(Entry(f"{day}\\Exports\\Tag_Export.csv", False, 512_000, stamp, 0))
+            rows.append(Entry(f"{day}\\IO_List_Rev_C.xlsx", False, 188_416, stamp - 30000, 0))
+    rows.append(Entry("README.md", False, 2_867, now - 2 * 86400, 0))
+    pane.set_flat_layout(layout)
+    pane.set_flat(True)
+    tab = pane.current
+    pane._on_reply(tab, Reply(tab.request_id, Status.OK, payload=rows))  # noqa: SLF001
+    from PySide6.QtCore import Qt
+    tab.model.sort(4, Qt.DescendingOrder)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--path", default=os.getcwd())
@@ -553,6 +593,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--viewer", default="", choices=["", "image", "text", "hex"],
                         help="render the viewer instead of the window, on an "
                              "invented file of this kind")
+    parser.add_argument("--flat", default="", choices=["", "column", "groups"],
+                        help="put the left pane in flat view, laid out this way, "
+                             "with an invented tree of PLC files")
     parser.add_argument("--all-themes", action="store_true",
                         help="one image per theme, to check the greys together")
     args = parser.parse_args(argv)
@@ -563,7 +606,7 @@ def main(argv: list[str] | None = None) -> int:
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
                      queue=args.queue, cut=args.cut, grid=args.grid,
                      commands=args.commands,
-                     pane_preview=args.preview_pane, viewer=args.viewer,
+                     pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
                      cell=args.cell))
         return 0
 
@@ -576,7 +619,7 @@ def main(argv: list[str] | None = None) -> int:
                      settle_ms=args.settle_ms, tabs=args.tabs, menu=args.menu,
                      queue=args.queue, cut=args.cut, grid=args.grid,
                      commands=args.commands,
-                     pane_preview=args.preview_pane, viewer=args.viewer,
+                     pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
                      cell=args.cell))
     return 0
 

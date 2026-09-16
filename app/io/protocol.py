@@ -60,6 +60,25 @@ class Op(str, Enum):
     #: avoided.
     FOLDERS = "folders"
 
+    #: Every file under a folder, streamed like LIST -- flat view, 0.25.
+    #:
+    #: Each entry's `name` is its path *relative to the folder asked about*
+    #: (`2026-09-15\\HMI\\Screen.mer`), which is what lets everything
+    #: downstream keep joining the tab's folder with a row's name and get the
+    #: real path. Files only; a folder is walked, not listed. A link or junction
+    #: to a folder is not followed, because a loop through one is a walk that
+    #: never ends. A folder that cannot be read is skipped and counted.
+    #:
+    #: `args["limit"]` caps the files. The final reply's message says why the
+    #: walk ended early -- `"limit"` -- and how many folders were skipped, as
+    #: `"skipped=N"`, separated by a space.
+    #:
+    #: A walk through thousands of folders with no files in them sends no rows
+    #: for a long time, and the pool's watchdog reads a quiet worker as a stuck
+    #: one. So a PARTIAL goes out at least every `WALK_HEARTBEAT` seconds, even
+    #: an empty one, which is what resets that deadline.
+    WALK = "walk"
+
     #: Shell icons for a set of kinds, `args["keys"]`, at `args["size"]`.
     #: A kind is an extension, `ICON_FOLDER` or `ICON_FILE` -- never a path,
     #: and that is the point. The shell is asked with SHGFI_USEFILEATTRIBUTES,
@@ -328,6 +347,9 @@ class Reply:
     message: str = ""
     seq: int = 0
 
+
+#: The longest a WALK goes without sending anything. See `Op.WALK`.
+WALK_HEARTBEAT = 2.0
 
 #: Rows per streamed batch. Large enough that the queue is not the bottleneck,
 #: small enough that the first rows paint while the rest are still arriving.

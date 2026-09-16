@@ -67,11 +67,17 @@ DEFAULTS: dict[str, Any] = {
     # the Ext column hidden, since the name now carries the extension.
     "look.024": False,
 
+    # Flat view (Ctrl+B): every file under a folder in one list. "column" puts
+    # the subfolder in a Location column; "groups" draws a heading per folder.
+    # The limit stops a flat view of a whole server share running away.
+    "flat.layout": "column",
+    "flat.limit": 50000,
+
     # The navigation rail down the left of the window: places, drives with
     # capacity meters, and the favourites under their group headings. One rail
     # for the window rather than one per pane -- a click in it goes to the
     # pane that has the keyboard, which is the same rule Ctrl+1 already
-    # follows. Ctrl+B collapses it; the width is what the splitter was left at.
+    # follows. Ctrl+Shift+B collapses it; the width is what the splitter was left at.
     "rail.shown": True,
     "rail.width": 232,
     # Which sections are folded up, by heading. A list rather than a flag per

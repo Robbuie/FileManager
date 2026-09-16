@@ -167,6 +167,8 @@ class MainWindow(QMainWindow):
             self._splitter.addWidget(widget)
         for pane in self._panes:
             pane.folderChanged.connect(self._on_folder_changed)
+            pane.flatChanged.connect(self._sync_flat_action)
+            pane.currentChanged.connect(self._sync_flat_action)
             pane.elevationOffered.connect(self._offer_elevation(pane))
             # The rail marks the row the active pane is standing on, which is
             # the one thing a rail can say that a menu cannot. Both panes are
@@ -473,8 +475,37 @@ class MainWindow(QMainWindow):
         self._action(view, "Clear filter", "Ctrl+Shift+F",
                      lambda: self._current_widget().clear_filter())
         view.addSeparator()
+        flat = QAction("Flat view", self, checkable=True)
+        flat.setShortcut(QKeySequence("Ctrl+B"))
+        flat.setShortcutContext(Qt.WindowShortcut)
+        flat.setToolTip("Every file under this folder in one list, in this tab. "
+                        "Going to another folder, or Ctrl+B again, ends it. Esc "
+                        "stops a walk that is still going.")
+        flat.triggered.connect(lambda _checked=False: self._current_pane().toggle_flat())
+        self._flat_action = flat
+        view.addAction(flat)
+        layouts = view.addMenu("Flat view layout")
+        layout_group = QActionGroup(self)
+        layout_group.setExclusive(True)
+        self._flat_layout_actions = {}
+        for key, label, tip in (
+                ("column", "Location column",
+                 "A column saying which subfolder each file is in."),
+                ("groups", "Grouped by folder",
+                 "A heading for each subfolder, with its files under it.")):
+            entry = QAction(label, self, checkable=True)
+            entry.setToolTip(tip)
+            entry.setChecked(self._config.get("flat.layout") == key)
+            entry.triggered.connect(
+                lambda _checked=False, k=key: self._set_flat_layout(k))
+            layout_group.addAction(entry)
+            layouts.addAction(entry)
+            self._flat_layout_actions[key] = entry
+        layouts.setToolTipsVisible(True)
+        view.addSeparator()
         rail = QAction("Navigation rail", self, checkable=True)
-        rail.setShortcut(QKeySequence("Ctrl+B"))
+        # Ctrl+Shift+B since 0.25, when Ctrl+B became flat view.
+        rail.setShortcut(QKeySequence("Ctrl+Shift+B"))
         rail.setShortcutContext(Qt.WindowShortcut)
         rail.setChecked(bool(self._config.get("rail.shown")))
         rail.setEnabled(self._rail is not None)
@@ -1362,6 +1393,18 @@ class MainWindow(QMainWindow):
         for position, widget in enumerate(self._widgets):
             widget.set_active(position == index)
         self._sync_rail_mark()
+        self._sync_flat_action()
+
+    def _sync_flat_action(self) -> None:
+        """The View menu's tick follows the tab in front of the active pane."""
+        action = getattr(self, "_flat_action", None)
+        if action is not None:
+            action.setChecked(bool(self._current_pane().current.flat))
+
+    def _set_flat_layout(self, layout: str) -> None:
+        # Both panes: the layout is a preference, not a property of one tab.
+        for pane in self._panes:
+            pane.set_flat_layout(layout)
 
     # ----------------------------------------------------------- live folders
 

@@ -134,7 +134,13 @@ DEFAULT_WIDTHS = {
     Column.SIZE: 92,
     Column.AGE: 46,
     Column.MODIFIED: 138,
+    Column.LOCATION: 170,
 }
+
+#: Extra height on a row that starts a group in grouped flat view, where the
+#: delegate draws the folder's heading above the row itself. One number, kept
+#: in `app/ui/rows.py` beside the code that draws into it.
+from app.ui.rows import GROUP_HEAD  # noqa: E402
 
 #: The narrowest the name column is allowed to get itself down to while it is
 #: working out its own width. A name at `MIN_COLUMN` is a column of first
@@ -154,7 +160,7 @@ NAME_FLOOR = 150
 #: A name cut to three letters is worse than any of them, which is why this
 #: exists at all. Hiding a column outright is on the header's own menu and is
 #: the better answer for somebody who works at that width.
-GIVE_WAY = (Column.AGE, Column.EXT, Column.MODIFIED, Column.SIZE)
+GIVE_WAY = (Column.AGE, Column.EXT, Column.LOCATION, Column.MODIFIED, Column.SIZE)
 
 #: The narrowest each giving-way column can be and still say what it says.
 #: Below this a column is not narrow, it is broken -- "EX", "GE" and "MO" in
@@ -167,6 +173,7 @@ READABLE = {
     Column.EXT: 40,
     Column.MODIFIED: 100,
     Column.SIZE: 64,
+    Column.LOCATION: 90,
 }
 
 #: The narrowest a column may be dragged or fitted to. Not zero: a column
@@ -514,6 +521,9 @@ class PaneWidget(QFrame):
         # built to avoid, and it is the gesture people already know.
         header.sectionHandleDoubleClicked.connect(self._fit_column)
         header.sectionResized.connect(self._on_section_resized)
+        # Location is last in the model and belongs beside the name.
+        header.moveSection(header.visualIndex(int(Column.LOCATION)), 1)
+        self._grouped_rows: list[int] = []
         self._apply_columns()
         # A header defaults its indicator to *descending*, and enabling sorting
         # applies it, so a model that sorted itself ascending gets flipped the
@@ -620,6 +630,7 @@ class PaneWidget(QFrame):
         layout.addLayout(footer)
 
         self._pane.tabsChanged.connect(self._sync_tabs)
+        self._pane.flatChanged.connect(self._on_flat_changed)
         self._pane.currentChanged.connect(self._sync_current)
         self._pane.statusChanged.connect(self._sync_status)
         self._pane.pathChanged.connect(self._on_path_changed)
@@ -1092,6 +1103,9 @@ class PaneWidget(QFrame):
             self._pane.make_folder(name)
 
     def rename_current(self) -> None:
+        if self._pane.current.flat:
+            self._pane.say("Rename works outside flat view -- Ctrl+B to leave it", "bad")
+            return
         row = self.current_row()
         names = self._pane.names_for({row}) if row >= 0 else []
         if not names:
@@ -1118,6 +1132,9 @@ class PaneWidget(QFrame):
         again, because a duplicate that merged into an existing folder would
         mix two days together.
         """
+        if self._pane.current.flat:
+            self._pane.say("Duplicate works outside flat view -- Ctrl+B to leave it", "bad")
+            return
         row = self.current_row()
         names = self._pane.names_for({row}) if row >= 0 else []
         if not names:
@@ -1428,6 +1445,8 @@ class PaneWidget(QFrame):
         function keys are checked for explicitly.
         """
         key = event.key()
+        if key == Qt.Key_Escape and self._pane.stop_walk():
+            return
         if key == Qt.Key_Escape and self._pane.sizes is not None \
                 and self._pane.sizes.busy:
             # Before the filter, because a walk of a tree over SMB is the more
@@ -1514,8 +1533,14 @@ class PaneWidget(QFrame):
         super().keyPressEvent(event)
 
     def _on_activated(self, index: QModelIndex) -> None:
-        if index.isValid():
-            self._pane.activate(index.row())
+        if not index.isValid():
+            return
+        if index.column() == int(Column.LOCATION) and self._pane.current.flat:
+            # A double click on where a file is goes there, and ends flat view
+            # on the way -- with the cursor put on that file.
+            self._pane.go_to_location(index.row())
+            return
+        self._pane.activate(index.row())
 
     def _on_path_entered(self) -> None:
         text = self._path.text().strip()
@@ -1590,8 +1615,9 @@ class PaneWidget(QFrame):
                 # Brackets rather than an icon for the lock. Status in this
                 # application is text and colour, and a bracketed name reads as
                 # held in place at any density without a bitmap to scale.
+                label = f"{tab.label} (flat)" if tab.flat else tab.label
                 self._tabs.setTabText(index,
-                                      f"[{tab.label}]" if tab.locked else tab.label)
+                                      f"[{label}]" if tab.locked else label)
                 tip = self._pane.display(tab.path)
                 if tab.locked:
                     tip += "\nLocked. Opening a folder here opens a new tab."
@@ -1708,7 +1734,7 @@ class PaneWidget(QFrame):
             header.resizeSection(int(column), width or fallback)
         for column in range(len(HEADERS)):
             self._view.setColumnHidden(
-                column, column in self._pane.hidden_columns
+                column, column in self._hidden_set()
                 and column != int(Column.NAME))
         if not stored:
             # Nothing has been dragged yet, so the name gets whatever is left.
@@ -1740,7 +1766,7 @@ class PaneWidget(QFrame):
 
         # Start from what the person chose to see; anything squeezed out on
         # an earlier, narrower pass comes back before this one decides again.
-        chosen = set(self._pane.hidden_columns)
+        chosen = self._hidden_set()
         visible = []
         for column in GIVE_WAY:
             hide = int(column) in chosen
@@ -1843,8 +1869,19 @@ class PaneWidget(QFrame):
         finally:
             self._laying_out = False
 
+    def _hidden_set(self) -> set[int]:
+        """The columns not to draw: the ones hidden by choice, and Location
+        everywhere except a flat view laid out with a Location column."""
+        hidden = {int(column) for column in self._pane.hidden_columns}
+        tab = self._pane.current
+        if tab.flat and self._pane.flat_layout == "column":
+            hidden.discard(int(Column.LOCATION))
+        else:
+            hidden.add(int(Column.LOCATION))
+        return hidden
+
     def _apply_hidden(self) -> None:
-        hidden = self._pane.hidden_columns
+        hidden = self._hidden_set()
         for column in range(len(HEADERS)):
             self._view.setColumnHidden(
                 column, column in hidden and column != int(Column.NAME))
@@ -1899,8 +1936,10 @@ class PaneWidget(QFrame):
         menu.addAction("Reset column widths", self.reset_columns)
         menu.addSeparator()
         for column in range(len(HEADERS)):
-            if column == int(Column.NAME):
-                continue        # a listing with no names is not a listing
+            if column in (int(Column.NAME), int(Column.LOCATION)):
+                # No names is not a listing; Location follows the flat view
+                # layout in the View menu rather than a tick here.
+                continue
             action = menu.addAction(HEADERS[column])
             action.setCheckable(True)
             # What was chosen, not what is drawn: a column the pane squeezed out
@@ -1913,6 +1952,7 @@ class PaneWidget(QFrame):
     def _watch(self, model) -> None:
         if model not in self._watched:
             model.modelReset.connect(self._on_rows_settled)
+            model.modelReset.connect(self._regroup)
             # A refresh or a live check reconciles rather than resets, and a
             # row that went can take a mark with it: the count has to follow.
             model.layoutChanged.connect(self._on_rows_settled)
@@ -1967,6 +2007,39 @@ class PaneWidget(QFrame):
         self._sync_tabs()
         self._sync_drives()
         self._ask_preview()
+        self._grouped_rows = []     # `setModel` put every row back to one height
+        self._regroup()
+
+    def _on_flat_changed(self) -> None:
+        # Laid out again rather than only re-hidden: the Location column
+        # arriving or leaving changes what the name can have.
+        self._apply_columns()
+        self._sync_tabs()
+        self._regroup()
+        self._view.viewport().update()
+
+    def _regroup(self) -> None:
+        """Make room above each row that starts a group, in grouped flat view.
+
+        The heading is drawn by the delegate inside the taller row rather than
+        being a row of its own, which is what keeps every row number in the
+        model meaning a file -- the selection, the marks and every operation
+        go on counting rows as they always have.
+        """
+        model = self._view.model()
+        header = self._view.verticalHeader()
+        base = header.defaultSectionSize()
+        count = model.rowCount() if model is not None else 0
+        for row in self._grouped_rows:
+            if row < count:
+                header.resizeSection(row, base)
+        self._grouped_rows = []
+        if model is None or not getattr(model, "grouped", False):
+            return
+        rows = [row for row in range(count) if model.group_heading(row) is not None]
+        for row in rows:
+            header.resizeSection(row, base + GROUP_HEAD)
+        self._grouped_rows = rows
 
     def _on_cursor_moved(self, *_args) -> None:
         """The keyboard moved to another row.
