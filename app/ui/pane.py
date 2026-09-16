@@ -156,6 +156,19 @@ NAME_FLOOR = 150
 #: the better answer for somebody who works at that width.
 GIVE_WAY = (Column.AGE, Column.EXT, Column.MODIFIED, Column.SIZE)
 
+#: The narrowest each giving-way column can be and still say what it says.
+#: Below this a column is not narrow, it is broken -- "EX", "GE" and "MO" in
+#: the header, an age chip drawn over the size -- which is what a pane with the
+#: preview panel open used to show. So a column squeezed past this is hidden
+#: for as long as the pane is that narrow, rather than drawn at `MIN_COLUMN`.
+#: The hiding is not stored: widen the pane and it comes back.
+READABLE = {
+    Column.AGE: 40,
+    Column.EXT: 40,
+    Column.MODIFIED: 100,
+    Column.SIZE: 64,
+}
+
 #: The narrowest a column may be dragged or fitted to. Not zero: a column
 #: dragged to nothing is indistinguishable from one that is hidden, and the
 #: header menu is where hiding belongs.
@@ -833,6 +846,14 @@ class PaneWidget(QFrame):
         # A property a stylesheet selects on only takes effect on a repolish.
         self.style().unpolish(self)
         self.style().polish(self)
+        # Including the header, which a descendant selector reaches but a
+        # repolish of this frame does not: Qt restyles a child only when the
+        # child itself is repolished.
+        header = self._view.horizontalHeader()
+        header.style().unpolish(header)
+        header.style().polish(header)
+        header.viewport().update()
+        self._grid.viewport().update()
 
     def _claim(self, *_ignored) -> None:
         """This pane was used, whether or not anything took focus.
@@ -1585,23 +1606,38 @@ class PaneWidget(QFrame):
         if room <= 0:
             return              # not laid out yet; `showEvent` comes back to it
 
-        visible = [column for column in GIVE_WAY
-                   if not self._view.isColumnHidden(int(column))]
-        for column in visible:
-            header.resizeSection(int(column), DEFAULT_WIDTHS[column])
+        # Start from what the person chose to see; anything squeezed out on
+        # an earlier, narrower pass comes back before this one decides again.
+        chosen = set(self._pane.hidden_columns)
+        visible = []
+        for column in GIVE_WAY:
+            hide = int(column) in chosen
+            if self._view.isColumnHidden(int(column)) != hide:
+                self._view.setColumnHidden(int(column), hide)
+            if not hide:
+                visible.append(column)
+                header.resizeSection(int(column), DEFAULT_WIDTHS[column])
 
         def others() -> int:
             return sum(header.sectionSize(int(column)) for column in visible)
 
+        # Squeeze each to what it can still be read at, in order, and only then
+        # take whole columns away, in the same order.
         short = NAME_FLOOR - (room - others())
-        for column in visible:
+        for column in list(visible):
             if short <= 0:
                 break
-            give = min(short, header.sectionSize(int(column)) - MIN_COLUMN)
+            give = min(short, header.sectionSize(int(column)) - READABLE[column])
             if give > 0:
                 header.resizeSection(int(column),
                                      header.sectionSize(int(column)) - give)
                 short -= give
+        for column in list(visible):
+            if short <= 0:
+                break
+            short -= header.sectionSize(int(column))
+            self._view.setColumnHidden(int(column), True)
+            visible.remove(column)
         header.resizeSection(int(Column.NAME), max(MIN_COLUMN, room - others()))
 
     def _on_section_resized(self, *_args) -> None:
@@ -1735,7 +1771,9 @@ class PaneWidget(QFrame):
                 continue        # a listing with no names is not a listing
             action = menu.addAction(HEADERS[column])
             action.setCheckable(True)
-            action.setChecked(not self._view.isColumnHidden(column))
+            # What was chosen, not what is drawn: a column the pane squeezed out
+            # for want of room is still one the person asked to see.
+            action.setChecked(column not in self._pane.hidden_columns)
             action.toggled.connect(
                 lambda shown, c=column: self._set_column_shown(c, shown))
         menu.exec(self._view.horizontalHeader().mapToGlobal(point))

@@ -61,6 +61,15 @@ BAND_GAP = 1
 #: which turns "this is going somewhere" into "this row is broken".
 CUT_OPACITY = 0.45
 
+#: How the pane that is not taking keystrokes draws its rows. 0.23: the accent
+#: bar down the active pane's edge was the only way to tell which side a key
+#: would land in, and it is two pixels wide. Opacity rather than a second set
+#: of muted tokens, for the reason the cut fade gives -- it has to reach the
+#: icon, the size bar and the age chip as well as the text. Multiplied with
+#: the cut fade, so a cut row in the idle pane is still fainter than its
+#: neighbours.
+IDLE_OPACITY = 0.6
+
 
 def parse_colour(value: str | None) -> QColor:
     """A token into a `QColor`, taking both forms the token set produces.
@@ -192,8 +201,11 @@ class RowDelegate(QStyledItemDelegate):
         # and a second set of greyed tokens per theme is five more numbers to
         # keep in step for no gain. The band underneath keeps its strength --
         # a cut row that is also the selected row still has to look selected.
+        fade = 1.0 if self._live else IDLE_OPACITY
         if index.data(ListingModel.CutRole):
-            painter.setOpacity(CUT_OPACITY)
+            fade *= CUT_OPACITY
+        if fade < 1.0:
+            painter.setOpacity(fade)
 
         if index.column() == Column.AGE:
             self._age(painter, opt, index)

@@ -312,3 +312,74 @@ def test_a_pane_whose_widths_were_set_is_left_alone_when_narrowed(pane) -> None:
     pane.resize(360, 500)
     QApplication.processEvents()
     assert header(pane).sectionSize(int(Column.MODIFIED)) == 300
+
+
+# -------------------------------------------------- squeezed out, not broken
+
+def test_a_very_narrow_pane_hides_columns_rather_than_breaking_them(pane) -> None:
+    """0.23. A column squeezed to `MIN_COLUMN` drew "EX", "GE" and "MO" in the
+    header and an age chip over the size. Past what it can be read at, a
+    column goes away for as long as the pane is that narrow.
+    """
+    from app.ui.pane import READABLE
+    pane.resize(260, 500)
+    QApplication.processEvents()
+    for column, least in READABLE.items():
+        if not pane._view.isColumnHidden(int(column)):
+            assert header(pane).sectionSize(int(column)) >= least
+    assert pane._view.isColumnHidden(int(Column.AGE))
+
+
+def test_the_age_column_goes_before_the_size(pane) -> None:
+    pane.resize(260, 500)
+    QApplication.processEvents()
+    if not pane._view.isColumnHidden(int(Column.AGE)):
+        assert not pane._view.isColumnHidden(int(Column.SIZE))
+    if pane._view.isColumnHidden(int(Column.SIZE)):
+        assert pane._view.isColumnHidden(int(Column.AGE))
+
+
+def test_a_squeezed_out_column_comes_back_when_there_is_room(pane) -> None:
+    pane.resize(260, 500)
+    QApplication.processEvents()
+    pane.resize(1400, 500)
+    QApplication.processEvents()
+    for column in (Column.AGE, Column.EXT, Column.MODIFIED, Column.SIZE):
+        assert not pane._view.isColumnHidden(int(column))
+
+
+def test_squeezing_out_is_not_stored_as_hidden(pane) -> None:
+    pane.resize(260, 500)
+    QApplication.processEvents()
+    assert pane._pane.hidden_columns == [] or int(Column.AGE) not in pane._pane.hidden_columns
+
+
+# ------------------------------------------------------------ the idle pane
+
+def test_the_idle_pane_is_faded_and_the_live_one_is_not(pane) -> None:
+    """0.23. The two-pixel accent bar was the only way to tell which pane a
+    key would land in. The idle pane's rows are now drawn faded.
+    """
+    from PySide6.QtGui import QImage, QPainter
+    from app.ui.rows import IDLE_OPACITY
+    fill(pane, ["a.txt"])
+    seen = []
+
+    class Spy(QPainter):
+        def setOpacity(self, value):  # noqa: N802
+            seen.append(value)
+            super().setOpacity(value)
+
+    delegate = pane._rows
+    index = pane._view.model().index(0, int(Column.NAME))
+    from PySide6.QtWidgets import QStyleOptionViewItem
+    option = QStyleOptionViewItem()
+    option.rect = pane._view.visualRect(index)
+    image = QImage(400, 40, QImage.Format_ARGB32)
+    for live, expect in ((True, False), (False, True)):
+        seen.clear()
+        pane.set_active(live)
+        painter = Spy(image)
+        delegate.paint(painter, option, index)
+        painter.end()
+        assert (IDLE_OPACITY in seen) is expect

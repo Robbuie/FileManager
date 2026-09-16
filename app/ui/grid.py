@@ -26,7 +26,7 @@ from PySide6.QtGui import QColor, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate
 
 from app.core.listing import Column
-from app.ui.rows import CUT_OPACITY, parse_colour, parse_px
+from app.ui.rows import CUT_OPACITY, IDLE_OPACITY, parse_colour, parse_px
 
 #: Air around a cell's picture, and between the picture and the name. Small
 #: numbers that decide whether a grid reads as a grid or as a wall.
@@ -89,10 +89,12 @@ class CellDelegate(QStyledItemDelegate):
         entry = model.data(index, ListingModel.EntryRole)
         is_dir = bool(model.data(index, ListingModel.IsDirRole))
         cut = bool(model.data(index, ListingModel.CutRole))
-        if cut:
-            # The same fade the listing uses, for the same reason and by the
-            # same number: a cut row and a cut cell are the same fact.
-            painter.setOpacity(CUT_OPACITY)
+        # The same fades the listing uses, for the same reasons and by the
+        # same numbers: a cut row and a cut cell are the same fact, and so are
+        # an idle pane's rows and its cells.
+        fade = (1.0 if self._live else IDLE_OPACITY) * (CUT_OPACITY if cut else 1.0)
+        if fade < 1.0:
+            painter.setOpacity(fade)
 
         box = QRect(option.rect)
         box.adjust(CELL_PAD, CELL_PAD, -CELL_PAD, -CELL_PAD)

@@ -449,6 +449,9 @@ QFrame[pane="true"][active="true"] {{
     border: 1px solid {accent_line};
     border-left: 2px solid {accent};
 }}
+/* And the other pane steps back: its rows are faded by the delegates (see
+   IDLE_OPACITY in app/ui/rows.py) and its header labels go one grey quieter. */
+QFrame[pane="true"][active="false"] QHeaderView::section {{ color: {line}; }}
 QLabel[role="status"] {{ background: transparent; color: {txt_1}; padding: 2px 6px; }}
 QLabel[role="status"][state="busy"] {{ color: {accent_text}; }}
 QLabel[role="status"][state="bad"] {{ color: {warn}; }}

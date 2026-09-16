@@ -5,6 +5,21 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.23.0]
+
+### Changed
+- **The pane that is not taking keystrokes steps back.** Its rows, icons, size
+  bars and age chips are drawn faded and its column headers go a grey quieter,
+  so which side a key will land in no longer rests on a two-pixel accent bar.
+
+### Fixed
+- **A narrow pane no longer draws broken columns.** With the preview panel
+  open, the columns were squeezed to 28 pixels -- "EX", "GE" and "MO" in the
+  header and the age chip drawn over the size. Each column now shrinks only to
+  what it can still be read at, then hides, in the order Age, Ext, Modified,
+  Size, and comes back when there is room. The hiding is not stored, and the
+  header menu still shows what was chosen.
+
 ## [0.22.0]
 
 ### Added
