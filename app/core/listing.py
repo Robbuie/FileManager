@@ -444,6 +444,15 @@ class ListingModel(QAbstractTableModel):
         """Every row a selection may hold, the parent row excluded."""
         return [index + self._offset for index in range(len(self._rows))]
 
+    def names(self) -> list[str]:
+        """Every name in the folder, filtered out or not.
+
+        What a new name has to avoid. The filter hides rows from view, not from
+        the disk, so checking a name against `_rows` would offer one that is
+        already taken by something the filter happens to be hiding.
+        """
+        return [entry.name for entry in self._all]
+
     def entries(self) -> list:
         """What the filter lets through, as the rows themselves.
 

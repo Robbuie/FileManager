@@ -800,3 +800,34 @@ def test_placing_a_menu_nobody_opened_does_nothing() -> None:
     widget._menu = None
     widget._menu_anchor = None
     widget._place_menu()            # must not raise
+
+
+def test_a_grown_menu_is_sized_to_everything_in_it() -> None:
+    """Properties could not be reached: `adjustSize` caps a top-level widget at
+    two thirds of the screen, so a menu grown past that by the shell's entries
+    was drawn shorter than its contents and the last entries were cut off.
+
+    Measured on a menu that is never shown, which is what keeps this out of
+    the offscreen-popup trouble the wiring test above describes.
+    """
+    pytest.importorskip("PySide6")
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QApplication, QMenu
+
+    from app.ui.pane import refit_popup
+
+    if QApplication.instance() is None:
+        pytest.skip("no Qt application")
+
+    menu = QMenu()
+    for index in range(60):
+        menu.addAction(f"Entry {index}")
+    last = menu.addAction("Properties")
+    area = QRect(0, 0, 1280, 720)
+    refit_popup(menu, QPoint(200, 300), area)
+
+    assert menu.size() == menu.sizeHint()
+    geometry = menu.actionGeometry(last)
+    assert geometry.bottom() < menu.height()
+    assert geometry.right() < menu.width()
+    menu.deleteLater()

@@ -537,6 +537,12 @@ class Job:
     sources: tuple[str, ...]
     destination: str
     conflict: Conflict = Conflict.ASK
+    #: The name the one source takes in the destination, for a duplicate: a
+    #: copy into the folder the source is already in, under a new name. Empty
+    #: for every other job, where each source keeps its own name. Only a copy
+    #: of exactly one source may carry it, and a duplicate never merges into
+    #: something already there -- `ops` refuses both rather than guessing.
+    rename: str = ""
 
 
 class Progress(str, Enum):

@@ -75,7 +75,7 @@ from app.io.protocol import LIST_FILE, Op, Reply, Status
 #: the editor says so rather than letting a copy key quietly stop copying.
 #: Written in the same form `normalise_shortcut` produces.
 RESERVED: frozenset[str] = frozenset({
-    "F2", "F3", "F5", "F6", "F7", "F8",
+    "F2", "F3", "F5", "F6", "F7", "F8", "Shift+F5",
     "Del", "Shift+Del", "Ins", "Backspace", "Space", "Tab", "Esc",
     "Ctrl+A", "Ctrl+Shift+A", "Ctrl+B", "Ctrl+C", "Ctrl+D", "Ctrl+F",
     "Ctrl+Shift+F", "Ctrl+G", "Ctrl+Shift+G", "Ctrl+J", "Ctrl+L", "Ctrl+P",

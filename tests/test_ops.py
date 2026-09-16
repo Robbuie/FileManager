@@ -24,13 +24,14 @@ from app.io.protocol import Conflict, Event, Progress, JobKind
 
 
 def run_job(kind, sources, destination, *, conflict=Conflict.SKIP,
-            answer=None, timeout=30.0):
+            answer=None, timeout=30.0, rename=""):
     """Run one transfer to completion and return every event it produced."""
     events: "queue.Queue[Event]" = queue.Queue()
     transfers = Transfers(events.put)
     collected: list[Event] = []
     try:
-        job = transfers.submit(kind, sources, destination, conflict=conflict)
+        job = transfers.submit(kind, sources, destination, conflict=conflict,
+                               rename=rename)
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
@@ -332,3 +333,57 @@ class _Usage:
 
     def __init__(self, total, used, free):
         self.total, self.used, self.free = total, used, free
+
+
+# ---------------------------------------------------------------- duplicate
+
+
+def test_a_duplicate_is_a_whole_copy_beside_the_original(pair):
+    """Yesterday's folder copied to today's name, and yesterday's untouched."""
+    source, _ = pair
+    before = tree(source)
+    events = run_job(JobKind.COPY, [str(source)], str(source.parent),
+                     rename="src 2026-09-16")
+
+    assert final(events).payload["failed"] == 0
+    assert tree(source.parent / "src 2026-09-16") == before
+    assert tree(source) == before
+
+
+def test_a_duplicate_never_merges_into_a_folder_already_there(pair):
+    """The folder-per-day backup is the reason: a merge would mix two days."""
+    source, _ = pair
+    existing = source.parent / "today"
+    existing.mkdir()
+    (existing / "keep.txt").write_text("mine")
+
+    events = run_job(JobKind.COPY, [str(source)], str(source.parent),
+                     rename="today", conflict=Conflict.OVERWRITE)
+
+    assert final(events).payload["failed"] == 1
+    assert Progress.COPYING not in [event.kind for event in events]
+    assert tree(existing) == {"keep.txt": b"mine"}
+
+
+def test_a_duplicate_of_a_file_keeps_its_contents(pair):
+    source, _ = pair
+    events = run_job(JobKind.COPY, [str(source / "a.txt")], str(source),
+                     rename="a - Copy.txt")
+    assert final(events).payload["failed"] == 0
+    assert (source / "a - Copy.txt").read_text() == "alpha"
+
+
+def test_a_duplicate_name_with_a_separator_is_refused(pair):
+    source, _ = pair
+    events = run_job(JobKind.COPY, [str(source / "a.txt")], str(source),
+                     rename="../escaped.txt")
+    assert final(events).payload["failed"] == 1
+    assert not (source.parent / "escaped.txt").exists()
+
+
+def test_a_rename_is_refused_on_more_than_one_source(pair):
+    source, destination = pair
+    events = run_job(JobKind.COPY, [str(source / "a.txt"), str(source / "deep")],
+                     str(destination), rename="x")
+    assert final(events).payload["failed"] >= 1
+    assert tree(destination) == {}

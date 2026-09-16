@@ -344,6 +344,14 @@ class Runner:
         # still say what it managed before it was stopped. "Cancelled" on its
         # own tells the user nothing about what is now in the destination.
         try:
+            if job.rename:
+                problem = _duplicate_problem(job)
+                if problem:
+                    totals.failed += len(job.sources) or 1
+                    self._emit(job.id, Progress.FAILED_ITEM,
+                               {"name": job.rename}, message=problem)
+                    sources = []
+
             if job.kind is JobKind.MOVE:
                 sources = self._rename_what_can_be_renamed(job, sources, totals)
 
@@ -537,7 +545,7 @@ class Runner:
         remaining: list[str] = []
         for source in sources:
             self._checkpoint(job)
-            target = os.path.join(job.destination, os.path.basename(source))
+            target = os.path.join(job.destination, _target_name(job, source))
             if os.path.exists(paths.api(target)):
                 remaining.append(source)   # a conflict is decided in the copy path
                 continue
@@ -578,7 +586,8 @@ class Runner:
         unreadable: list[tuple[str, str]] = []
         for source in sources:
             self._checkpoint(job)
-            target = os.path.join(destination, os.path.basename(source)) if destination else ""
+            target = (os.path.join(destination, _target_name(job, source))
+                      if destination else "")
             try:
                 if (os.path.isdir(paths.api(source))
                         and not os.path.islink(paths.api(source))):
@@ -833,9 +842,9 @@ class Transfers:
     # ------------------------------------------------------------- commands
 
     def submit(self, kind: JobKind, sources: Iterable[str], destination: str = "", *,
-               conflict: Conflict = Conflict.ASK) -> int:
+               conflict: Conflict = Conflict.ASK, rename: str = "") -> int:
         job = Job(id=next(self._ids), kind=kind, sources=tuple(sources),
-                  destination=destination, conflict=conflict)
+                  destination=destination, conflict=conflict, rename=rename)
         with self._lock:
             self._ensure()
             self._inbox.put(("enqueue", job))
@@ -938,6 +947,31 @@ class Transfers:
 # --------------------------------------------------------------------------
 # Helpers.
 # --------------------------------------------------------------------------
+
+
+def _target_name(job: Job, source: str) -> str:
+    """The name a source takes at the destination: its own, or a duplicate's."""
+    return job.rename or os.path.basename(source)
+
+
+def _duplicate_problem(job: Job) -> str:
+    """Why a duplicate cannot run, or empty when it can.
+
+    Refused here as well as in the dialog, for the reason every destructive
+    check in this application is made at both ends. A duplicate whose name has
+    been taken since the listing was read must **not** become a merge: the
+    folders are created with `exist_ok`, so a copy into an existing folder of
+    that name would quietly mix yesterday's files into it -- the one outcome
+    somebody keeping a folder per day as a backup cannot have.
+    """
+    if job.kind is not JobKind.COPY or len(job.sources) != 1:
+        return "a duplicate is a copy of exactly one item"
+    if any(ch in job.rename for ch in '\\/:*?"<>|') or job.rename in (".", ".."):
+        return f"{job.rename} is not a usable name"
+    target = os.path.join(job.destination, job.rename)
+    if os.path.lexists(paths.api(target)):
+        return f"{job.rename} already exists"
+    return ""
 
 
 def room_for(destination: str, needed: int) -> tuple[int, int] | None:

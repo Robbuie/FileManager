@@ -180,6 +180,16 @@ class TransferQueue(QObject):
              conflict: Conflict = Conflict.ASK) -> int:
         return self._start(JobKind.MOVE, sources, destination, conflict=conflict)
 
+    def duplicate(self, source: str, folder: str, name: str) -> int:
+        """A copy of one item beside itself, under a new name.
+
+        A copy job like any other -- the queue, the progress, the cancel, the
+        write-beside-and-rename -- with one difference the engine enforces: it
+        will not land on a name that is already taken. Merging into an existing
+        folder is exactly wrong for a folder-per-day backup.
+        """
+        return self._start(JobKind.COPY, [source], folder, rename=name)
+
     def recycle(self, sources: Iterable[str]) -> int:
         """To the Recycle Bin. No destination: the shell knows where that is."""
         return self._start(JobKind.RECYCLE, sources, "")
@@ -332,7 +342,7 @@ class TransferQueue(QObject):
         self.order.insert(target, self.order.pop(index))
 
     def _start(self, kind: JobKind, sources: Iterable[str], destination: str, *,
-               conflict: Conflict = Conflict.ASK) -> int:
+               conflict: Conflict = Conflict.ASK, rename: str = "") -> int:
         """Start a job. `conflict` is the rule the process applies without
         asking; `ASK` is the default and the only one that stops.
 
@@ -342,8 +352,11 @@ class TransferQueue(QObject):
         already answered by pressing Ctrl+V in that folder.
         """
         sources = tuple(sources)
+        # `rename` only when there is one, so everything that is not a
+        # duplicate is submitted exactly as it was before duplicates existed.
+        extra = {"rename": rename} if rename else {}
         job_id = self._transfers.submit(kind, sources, destination,
-                                        conflict=conflict)
+                                        conflict=conflict, **extra)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
                                      sources=sources, files=len(sources),
                                      total=len(sources) if kind.removes else 0)

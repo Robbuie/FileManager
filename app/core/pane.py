@@ -14,10 +14,12 @@ the wrong folder.
 
 from __future__ import annotations
 
+import datetime
 from typing import Callable
 
 from PySide6.QtCore import QObject, Signal
 
+from app.core import naming
 from app.core.clipboard import refusal
 from app.core.listing import ListingModel, format_size
 from app.io import elevate, paths
@@ -473,6 +475,40 @@ class Pane(QObject):
                      timeout=float(self._config.get("timeout.rename")),
                      args={"name": name}, reveal=name,
                      failed=f"could not rename to {name}")
+
+    def duplicate_suggestion(self, row: int, today: datetime.date | None = None) -> str | None:
+        """The name a duplicate of this row is offered, or None for no row.
+
+        Today's date in the old one's place, in the form it was written; see
+        `app/core/naming.py`. Checked against every name in the folder,
+        including the ones a filter is hiding.
+        """
+        entry = self.current.model.entry(row)
+        if entry is None:
+            return None
+        return naming.duplicate_name(entry.name, self.current.model.names(),
+                                     today or datetime.date.today(),
+                                     is_dir=entry.is_dir)
+
+    def name_taken(self, name: str) -> bool:
+        """Whether this folder, as last listed, already has something so named."""
+        wanted = name.strip().lower()
+        return any(existing.lower() == wanted for existing in self.current.model.names())
+
+    def duplicate(self, row: int, name: str) -> bool:
+        """Copy a row beside itself under `name`, through the queue.
+
+        The queue rather than a worker request for `delete`'s reason: a day's
+        worth of PLC projects is a real copy, and a copy has a person watching
+        it rather than a deadline. Without a queue this does nothing.
+        """
+        tab = self.current
+        source = self.row_path(row)
+        if source is None or not name or self.transfers is None:
+            return False
+        self._set_status(tab, f"duplicating to {name}", BUSY)
+        self.transfers.duplicate(source, tab.path, name)
+        return True
 
     def delete(self, names: list[str], *, permanent: bool = False) -> None:
         """Remove named items from this folder, through the queue.

@@ -12,6 +12,8 @@ Nothing here touches the filesystem. A dialog is handed names and shows them.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -36,11 +38,13 @@ NAMES_SHOWN = 12
 
 
 class NamePrompt(QDialog):
-    """One line of text, for a new folder or a rename."""
+    """One line of text, for a new folder, a rename or a duplicate."""
 
     def __init__(self, parent: QWidget | None, *, title: str, label: str,
-                 initial: str = "", ok_text: str = "OK") -> None:
+                 initial: str = "", ok_text: str = "OK",
+                 taken: Callable[[str], bool] | None = None) -> None:
         super().__init__(parent)
+        self._taken = taken
         self.setWindowTitle(title)
         self.setModal(True)
         self.setMinimumWidth(420)
@@ -59,6 +63,12 @@ class NamePrompt(QDialog):
         caption.setWordWrap(True)
         layout.addWidget(caption)
         layout.addWidget(self._field)
+        # Only shown when a name is refused for being in use. A disabled OK
+        # with no reason reads as a dialog that has stopped working.
+        self._why = QLabel("")
+        self._why.setProperty("role", "warn")
+        self._why.setVisible(False)
+        layout.addWidget(self._why)
         layout.addWidget(buttons)
         self._validate(initial)
 
@@ -71,7 +81,11 @@ class NamePrompt(QDialog):
         """
         name = text.strip()
         usable = bool(name) and not any(ch in name for ch in '\\/:*?"<>|')
-        self._ok.setEnabled(usable and name not in (".", ".."))
+        usable = usable and name not in (".", "..")
+        in_use = usable and self._taken is not None and self._taken(name)
+        self._why.setText(f"{name} already exists here" if in_use else "")
+        self._why.setVisible(bool(in_use))
+        self._ok.setEnabled(usable and not in_use)
 
     def value(self) -> str:
         return self._field.text().strip()
@@ -687,10 +701,15 @@ def _count(value: int) -> str:
 
 
 def ask_name(parent: QWidget, *, title: str, label: str, initial: str = "",
-             ok_text: str = "OK", stem: bool = False) -> str | None:
-    """A name, or None if the dialog was cancelled or nothing was typed."""
+             ok_text: str = "OK", stem: bool = False,
+             taken: Callable[[str], bool] | None = None) -> str | None:
+    """A name, or None if the dialog was cancelled or nothing was typed.
+
+    `taken` refuses a name already in use, in the dialog, while it can still be
+    changed.
+    """
     dialog = NamePrompt(parent, title=title, label=label, initial=initial,
-                        ok_text=ok_text)
+                        ok_text=ok_text, taken=taken)
     if stem:
         dialog.select_stem()
     if dialog.exec() != QDialog.Accepted:

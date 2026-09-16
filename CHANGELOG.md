@@ -5,6 +5,30 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.21.0]
+
+### Added
+- **Duplicate, on Shift+F5 and in the context menu.** Copies the item under the
+  cursor beside itself under a new name, for the folder-per-day habit: duplicate
+  yesterday's folder, work in today's, and yesterday's stays behind as the
+  backup. The name offered is the old one **with today's date in place of its
+  date, written the way it was written** -- `2026-09-15`, `2026_09_15`,
+  `20260915`, `09-15-2026` and `260915` are all recognised and kept in their
+  own form -- and `Name - Copy` when there is no date or today's name is taken.
+  It is a job in the queue like any other copy.
+
+  A duplicate **never merges into something already there.** The dialog refuses
+  a name in use, checked against every name in the folder including the ones a
+  filter is hiding, and the engine refuses it again, because a folder copied
+  onto an existing folder of the same name would quietly mix two days together.
+
+### Fixed
+- **The end of a long context menu was cut off, Properties with it.** When the
+  shell's entries arrived the menu was resized with `adjustSize`, which caps a
+  top-level widget at two thirds of the screen, so a menu taller than that was
+  drawn shorter than its contents. It is sized to its own size hint now, which
+  wraps into a second column rather than running off the screen.
+
 ## [0.20.1]
 
 ### Fixed

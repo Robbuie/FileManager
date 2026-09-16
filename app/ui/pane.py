@@ -181,6 +181,24 @@ ICON_GAP = 8
 HISTORY_BUTTONS = {Qt.BackButton: -1, Qt.ForwardButton: 1}
 
 
+def refit_popup(menu: QWidget, anchor: QPoint, area: QRect) -> None:
+    """Size a popup to everything now in it, then place it on the screen.
+
+    **`resize(sizeHint())`, never `adjustSize()`.** `adjustSize` on a top-level
+    widget caps it at two thirds of the screen, so a context menu grown past
+    that by the shell's entries was drawn shorter than its contents -- the last
+    entries, Properties among them, were cut off inside a menu that was itself
+    on screen. A `QMenu`'s own size hint already accounts for the screen: past
+    its height the entries wrap into another column.
+    """
+    size = menu.sizeHint()
+    if menu.size() != size:
+        menu.resize(size)
+    where = fit_popup(anchor, size, area)
+    if where != menu.pos():
+        menu.move(where)
+
+
 def fit_popup(anchor: QPoint, size: QSize, area: QRect) -> QPoint:
     """Where a popup of this size should sit so it stays on the screen.
 
@@ -953,6 +971,29 @@ class PaneWidget(QFrame):
         if name and name != names[0]:
             self._pane.rename(row, name)
 
+    def duplicate_current(self) -> None:
+        """Shift+F5: copy the row under the cursor beside itself, renamed.
+
+        For the folder-per-day habit: yesterday's folder is duplicated, the copy
+        is named for today, and yesterday's stays as the backup. The name
+        offered carries today's date in the form the old one used, and a name
+        already in the folder is refused in the dialog -- the engine refuses it
+        again, because a duplicate that merged into an existing folder would
+        mix two days together.
+        """
+        row = self.current_row()
+        names = self._pane.names_for({row}) if row >= 0 else []
+        if not names:
+            return
+        suggestion = self._pane.duplicate_suggestion(row) or names[0]
+        name = dialogs.ask_name(
+            self.window(), title="Duplicate",
+            label=f"Duplicate {names[0]} here as", initial=suggestion,
+            ok_text="Duplicate", taken=self._pane.name_taken,
+        )
+        if name and name != names[0]:
+            self._pane.duplicate(row, name)
+
     def delete_selection(self, *, permanent: bool = False) -> None:
         names = self.selected_names()
         if not names:
@@ -1053,6 +1094,7 @@ class PaneWidget(QFrame):
                            lambda: self.transferRequested.emit("copy"))
             menu.addAction("Move to other pane\tF6",
                            lambda: self.transferRequested.emit("move"))
+            menu.addAction("Duplicate\tShift+F5", self.duplicate_current)
             menu.addAction("Rename\tF2", self.rename_current)
             menu.addAction("Delete\tDel", self.delete_selection)
             menu.addAction("Delete permanently\tShift+Del",
@@ -1114,17 +1156,10 @@ class PaneWidget(QFrame):
         menu = self._menu
         if menu is None or self._menu_anchor is None or not menu.isVisible():
             return
-        # The size the menu *will* be. Its widget geometry has not caught up
-        # with the actions just added to it, and placing against the old one
-        # would move it to where the problem was.
-        menu.adjustSize()
         screen = QGuiApplication.screenAt(self._menu_anchor) or menu.screen()
         if screen is None:
             return
-        where = fit_popup(self._menu_anchor, menu.sizeHint(),
-                          screen.availableGeometry())
-        if where != menu.pos():
-            menu.move(where)
+        refit_popup(menu, self._menu_anchor, screen.availableGeometry())
 
     def _on_shell_unavailable(self, message: str) -> None:
         """Say why there are none, in the menu, without taking it over."""
@@ -1315,6 +1350,9 @@ class PaneWidget(QFrame):
         shift = bool(event.modifiers() & Qt.ShiftModifier)
         if key == Qt.Key_F3:
             self.view_current()
+            return
+        if key == Qt.Key_F5 and shift:
+            self.duplicate_current()
             return
         if key == Qt.Key_F5:
             self.transferRequested.emit("copy")
