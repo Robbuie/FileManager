@@ -5,7 +5,9 @@ things that only make sense together:
 
   * **Placement.** Workers are keyed on resolved server name, so `S:\\` and
     `\\\\server\\share\\` land on one process instead of two that hang
-    independently. Every local disk shares one worker.
+    independently. Every local disk shares one worker. Each volume has a
+    second worker, its side lane, for the slow decorations of a listing
+    (`SIDE_OPS`), so they never stand in front of the listing itself.
   * **The watchdog.** A worker cannot enforce its own deadline against a call
     that never returns, so the parent times requests instead. A request whose
     deadline passes is not a late request, it is evidence the process is stuck,
@@ -70,6 +72,38 @@ RESTART_WINDOW = 60.0
 #: until the watchdog kills it.
 HOST_OPS = frozenset({Op.MENU, Op.MENU_INVOKE, Op.MENU_RELEASE})
 
+#: The requests that decorate a listing rather than produce one, and so go to a
+#: second worker for the same volume instead of queueing in front of the next
+#: listing.
+#:
+#: A worker answers one request at a time, and every one of these can be slow
+#: on a share for reasons that have nothing to do with the folder being asked
+#: for: an overlay is a full `SHGetFileInfo` per row on screen, which on a
+#: Hyper-V or Remote Desktop redirected drive (`\\tsclient\C`) is a round trip
+#: through the redirector per file; a thumbnail or a preview reads the file;
+#: a folder size walks a tree for up to two minutes. In one queue, the listing
+#: of the folder somebody just opened waited behind the badges of the folder
+#: they left -- and since a deadline runs from submission, a listing that
+#: waited long enough was timed out, its worker killed, and after three of
+#: those the volume was marked unreachable. That is "slow, and sometimes fails
+#: to load", on a drive Explorer lists instantly.
+#:
+#: The side lane restarts and is marked unreachable on its own account, so a
+#: shell extension that wedges on a share costs the badges and not the folder.
+SIDE_OPS = frozenset({Op.OVERLAY, Op.FILE_ICON, Op.THUMBNAIL, Op.PREVIEW, Op.DIR_SIZE})
+
+#: Appended to a volume's key to name its side lane.
+SIDE_SUFFIX = " +side"
+
+
+def lane_key(op: Op, path: str) -> str:
+    """Which worker a request goes to: the shell host, a volume's main lane,
+    or that volume's side lane."""
+    if op in HOST_OPS:
+        return MENU_HOST
+    key = paths.volume_key(path)
+    return key + SIDE_SUFFIX if op in SIDE_OPS else key
+
 
 @dataclass
 class _Pending:
@@ -131,7 +165,7 @@ class WorkerPool:
         coming back.
         """
         resolved = paths.resolve(path)
-        key = MENU_HOST if op in HOST_OPS else paths.volume_key(resolved)
+        key = lane_key(op, resolved)
         request = Request(
             id=next(self._ids), op=op, path=resolved,
             timeout=timeout, args=dict(args or {}),
@@ -180,16 +214,18 @@ class WorkerPool:
         """
         key = paths.volume_key(path)
         with self._lock:
-            target = self._workers.get(key)
-        if target is None:
-            return False
-        self._restart(target, expired=set())
-        return True
+            targets = [t for t in (self._workers.get(key),
+                                   self._workers.get(key + SIDE_SUFFIX)) if t is not None]
+        for target in targets:
+            self._restart(target, expired=set())
+        return bool(targets)
 
     def retry(self, path: str) -> None:
         """Clear the unreachable mark on a volume so requests are accepted again."""
+        key = paths.volume_key(path)
         with self._lock:
-            self._restarts.pop(paths.volume_key(path), None)
+            self._restarts.pop(key, None)
+            self._restarts.pop(key + SIDE_SUFFIX, None)
 
     def retry_host(self) -> None:
         """The same, for the shell host.

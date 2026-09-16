@@ -376,3 +376,59 @@ def test_a_recycle_without_the_shell_deletes_nothing(pool, tmp_path):
 
     assert reply.status is Status.ERROR
     assert (tmp_path / "a.txt").exists(), "a file was deleted with no way back"
+
+
+def test_decorations_go_to_a_side_lane_and_listings_do_not():
+    """The placement rule behind a listing never waiting on a badge."""
+    from app.io import paths
+    from app.io.pool import SIDE_OPS, SIDE_SUFFIX, lane_key
+
+    share = r"\\tsclient\C\Users"
+    main = paths.volume_key(share)
+    for op in (Op.LIST, Op.FOLDERS, Op.STAT, Op.MKDIR, Op.RENAME, Op.FREE_SPACE):
+        assert lane_key(op, share) == main
+    for op in SIDE_OPS:
+        assert lane_key(op, share) == main + SIDE_SUFFIX
+    assert {Op.OVERLAY, Op.FILE_ICON, Op.THUMBNAIL, Op.PREVIEW, Op.DIR_SIZE} <= SIDE_OPS
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGSTOP stands in for a hung shell call")
+def test_a_wedged_side_lane_does_not_hold_up_a_listing(pool, tmp_path):
+    """The Hyper-V report: a folder on `\\\\tsclient\\C` slow or failing to load
+    while Explorer lists it at once, because the listing queued behind the
+    previous folder's overlays on the same worker."""
+    from app.io.pool import SIDE_SUFFIX
+
+    populate(tmp_path, 20)
+    warmup = Sink()
+    pool.submit(Op.DIR_SIZE, str(tmp_path), timeout=10, handler=warmup)
+    assert warmup.settle().status is Status.OK
+    side = next(state["pid"] for key, state in pool.status().items()
+                if key.endswith(SIDE_SUFFIX))
+
+    os.kill(side, signal.SIGSTOP)
+    try:
+        wedged = Sink()
+        pool.submit(Op.DIR_SIZE, str(tmp_path), timeout=30, handler=wedged)
+        listing = Sink()
+        started = time.monotonic()
+        pool.submit(Op.LIST, str(tmp_path), timeout=5, handler=listing)
+        reply = listing.settle(timeout=10)
+        elapsed = time.monotonic() - started
+    finally:
+        os.kill(side, signal.SIGCONT)
+
+    assert reply.status is Status.OK
+    assert len(reply.payload) == 20
+    assert elapsed < 3, f"the listing waited {elapsed:.1f}s behind the side lane"
+    assert wedged.settle(timeout=10).status in SETTLED
+
+
+def test_kill_and_retry_reach_both_lanes(pool, tmp_path):
+    for op in (Op.PING, Op.DIR_SIZE):
+        sink = Sink()
+        pool.submit(op, str(tmp_path), timeout=10, handler=sink)
+        sink.settle()
+    assert len(pool.status()) == 2
+    assert pool.kill(str(tmp_path)) is True
+    assert pool.status() == {}

@@ -5,6 +5,24 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.20.1]
+
+### Fixed
+- **A folder on a share could be slow to open, or fail to open, while Explorer
+  listed it at once.** Reported from a Hyper-V guest on `\\tsclient\C`. Each
+  volume had one worker answering one request at a time, and the listing
+  queued in the same line as the overlay badges, file icons, thumbnails,
+  previews and folder sizes -- so opening a folder waited behind the badges of
+  the folder just left, each of which is a round trip per file on a
+  redirected drive. A listing's deadline runs from when it is asked for, so one
+  that waited long enough was timed out, its worker killed, and three of those
+  in a minute marked the volume unreachable.
+
+  Each volume now has a second worker, a side lane, for those decorations
+  (`pool.SIDE_OPS`). A listing never waits behind a badge, and a side lane that
+  wedges restarts on its own account: it costs the badges and not the folder.
+  Retry and Ctrl+Shift+R reach both.
+
 ## [0.20.0]
 
 The io layer, made honest about three things it was quietly wrong about. No new
