@@ -15,9 +15,10 @@ the wrong folder.
 from __future__ import annotations
 
 import datetime
+import time
 from typing import Callable
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from app.core import naming
 from app.core.clipboard import refusal
@@ -35,6 +36,24 @@ BAD = "bad"
 #: working; it is there so a key held down, or a stored session someone has
 #: edited, cannot produce a strip with a thousand entries in it.
 MAX_TABS = 40
+
+
+#: How often a pane looks at whether the folder on screen is due a check.
+#: Not the check interval -- that is a setting per kind of volume -- just the
+#: resolution of the schedule.
+CHECK_TICK = 1.0
+
+#: A check costs at most a tenth of the time: the wait after a listing is at
+#: least ten times as long as the listing took.
+CHECK_COST_FACTOR = 10.0
+
+#: The shortest wait after a check that failed, before it doubles. Long enough
+#: that a dead share's worker cannot be killed three times inside the pool's
+#: restart window by checks alone.
+CHECK_FAILURE_WAIT = 30.0
+
+#: The longest any folder waits between checks, however slow or broken.
+CHECK_LONGEST = 300.0
 
 
 class Tab:
@@ -63,6 +82,20 @@ class Tab:
         self.status_state = IDLE
         self.space_text = ""
         self.reveal_name: str | None = None
+        #: Whether the model holds a finished listing of `path`, which is what
+        #: lets a refresh of the same folder be reconciled into it rather than
+        #: start from nothing.
+        self.listed = False
+        #: The rows of a listing being reconciled, gathered until it ends, or
+        #: None when rows stream straight into the model as they arrive.
+        self.buffer: list | None = None
+        #: Whether the request in flight is the live check nobody asked for,
+        #: which reports nothing unless it finds a change.
+        self.quiet = False
+        self.started = 0.0
+        #: When this tab is next due a live check, on `time.monotonic`.
+        self.check_after = 0.0
+        self.check_failures = 0
 
     @property
     def label(self) -> str:
@@ -100,6 +133,8 @@ class Pane(QObject):
         self._bridge = bridge
         self._config = config
         self._side = side
+        self._checks: QTimer | None = None
+        self._live = True
         # Shared with the other pane and with every tab either of them opens:
         # the picture for a .pdf is the same on both sides of the window.
         self.icons = icons
@@ -287,6 +322,7 @@ class Pane(QObject):
             self.open_tab(target)
             return
 
+        same_folder = tab.listed and target == tab.path
         tab.path = target
         tab.model.set_folder(target)
         if self.overlays is not None:
@@ -304,22 +340,39 @@ class Pane(QObject):
             tab.history.append(target)
             tab.position = len(tab.history) - 1
 
-        self._list(tab, announce=True)
+        self._list(tab, announce=True, keep=same_folder)
 
-    def _list(self, tab: Tab, *, announce: bool = False) -> None:
+    def _list(self, tab: Tab, *, announce: bool = False, keep: bool = False,
+              quiet: bool = False) -> None:
         """Ask for the rows of whatever folder a tab is on.
 
         Separate from `navigate` because a background tab lists without the
         pane's path bar, status line or drive picker changing -- those belong
         to whatever is on screen, and a tab opened behind is not it.
-        """
-        self._abandon(tab)
-        tab.model.begin(has_parent=paths.parent(tab.path) is not None)
-        self._set_status(tab, "listing", BUSY)
-        if announce:
-            self.pathChanged.emit(self.display(tab.path))
-        self.tabsChanged.emit()
 
+        `keep` is a listing of the folder already on screen: the rows are
+        gathered and reconciled into the model when the listing ends, so the
+        marks, the cursor and the scroll position survive it. A new folder
+        streams into an empty model instead, because there is nothing to keep
+        and a 50,000-row folder should start painting at once. `quiet` is the
+        live check, which says nothing unless it finds something.
+        """
+        if not quiet:
+            self._abandon(tab)
+        if keep:
+            tab.buffer = []
+        else:
+            tab.buffer = None
+            tab.listed = False
+            tab.model.begin(has_parent=paths.parent(tab.path) is not None)
+        tab.quiet = quiet
+        if not quiet:
+            self._set_status(tab, "refreshing" if keep else "listing", BUSY)
+            if announce:
+                self.pathChanged.emit(self.display(tab.path))
+            self.tabsChanged.emit()
+
+        tab.started = time.monotonic()
         tab.request_id = self._bridge.submit(
             Op.LIST, tab.path,
             timeout=float(self._config.get("timeout.listing")),
@@ -328,6 +381,93 @@ class Pane(QObject):
 
     def refresh(self) -> None:
         self.navigate(self.current.path, record=False)
+
+    # ------------------------------------------------------------ live folders
+
+    @property
+    def busy(self) -> bool:
+        """Whether the tab in front has a listing in flight that somebody asked
+        for. A live check does not count: anything that wants to re-list the
+        folder may go ahead, and it cancels the check."""
+        tab = self.current
+        return tab.request_id is not None and not tab.quiet
+
+    def start_checks(self) -> None:
+        """Start looking for changes to the folder on screen.
+
+        Started by the application rather than in `__init__`, so a pane built
+        for a test or a preview render never lists anything on its own.
+        """
+        if self._checks is None:
+            self._checks = QTimer(self)
+            self._checks.setInterval(int(CHECK_TICK * 1000))
+            self._checks.timeout.connect(self.check)
+        self._checks.start()
+
+    def set_live(self, live: bool) -> None:
+        """Whether checks run at all: off while the window is minimised, where
+        nobody is looking and a share would be asked for nothing."""
+        self._live = live
+
+    def check_now(self) -> None:
+        """Check the folder on screen at the next opportunity rather than on
+        its schedule -- for coming back to the window, which is when a change
+        made in another program is most likely to be waiting."""
+        self.current.check_after = 0.0
+        self.check()
+
+    def check(self, now: float | None = None) -> bool:
+        """List the folder on screen again if it is due, and say whether it was.
+
+        Polled, on every kind of volume, and deliberately not watched. SMB
+        change notification is not reliable enough to trust a view to, which is
+        in `PROJECT-CONTEXT.md`; a Hyper-V redirected drive is further from
+        reliable than that; and a watch is a request that never finishes, which
+        a worker answering one request at a time cannot hold. A poll is one
+        ordinary listing, with the listing's deadline and cancel, and the rows
+        are reconciled so nothing on screen moves unless the folder did.
+
+        Only the tab in front, and only one that has a finished listing and
+        nothing else in flight: a check never stands in front of something a
+        person asked for.
+        """
+        tab = self.current
+        if not self._live or not tab.listed or tab.request_id is not None:
+            return False
+        if (now if now is not None else time.monotonic()) < tab.check_after:
+            return False
+        if self._check_interval(tab) <= 0:
+            return False
+        self._list(tab, keep=True, quiet=True)
+        return True
+
+    def _check_interval(self, tab: Tab) -> float:
+        local = paths.volume_key(tab.path) == paths.LOCAL_VOLUME_KEY
+        key = "refresh.local_seconds" if local else "refresh.network_seconds"
+        return float(self._config.get(key) or 0.0)
+
+    def _schedule(self, tab: Tab, elapsed: float, *, ok: bool) -> None:
+        """When the next check is due, after a listing of this tab ended.
+
+        The interval is the setting, **stretched for a folder that is expensive
+        to list**: a check is never more than a tenth of the time, so a folder
+        of 50,000 rows that takes four seconds over a share is checked every
+        forty seconds rather than every five. A failure backs off, doubling,
+        because a share that has gone away should be asked less often rather
+        than on a schedule that keeps its worker being killed.
+        """
+        base = self._check_interval(tab)
+        now = time.monotonic()
+        if base <= 0:
+            tab.check_after = float("inf")
+            return
+        if ok:
+            tab.check_failures = 0
+            wait = max(base, elapsed * CHECK_COST_FACTOR)
+        else:
+            tab.check_failures += 1
+            wait = max(base, CHECK_FAILURE_WAIT) * (2 ** (tab.check_failures - 1))
+        tab.check_after = now + min(wait, CHECK_LONGEST)
 
     def parent_path(self) -> str | None:
         """The folder above this tab's, or None at a root.
@@ -849,22 +989,46 @@ class Pane(QObject):
             return  # an answer to a question this tab has stopped asking
 
         if reply.status is Status.PARTIAL:
+            if tab.buffer is not None:
+                tab.buffer.extend(reply.payload or [])
+                if not tab.quiet:
+                    self._set_status(tab, f"refreshing, {len(tab.buffer):,} rows", BUSY)
+                return
             tab.model.add(reply.payload or [])
             self._set_status(tab, f"listing, {tab.model.rowCount():,} rows", BUSY)
             return
 
         tab.request_id = None
+        quiet, tab.quiet = tab.quiet, False
+        elapsed = time.monotonic() - tab.started
         if reply.status is Status.OK:
-            tab.model.add(reply.payload or [])
-            tab.model.finish()
-            self._set_status(tab, tab.model.summary(), IDLE)
-            self._request_space(tab)
+            if tab.buffer is not None:
+                rows, tab.buffer = tab.buffer + list(reply.payload or []), None
+                changed = tab.model.reconcile(rows)
+            else:
+                tab.model.add(reply.payload or [])
+                tab.model.finish()
+                changed = True
+            tab.listed = True
+            self._schedule(tab, elapsed, ok=True)
+            if not quiet or changed or tab.status_state == BAD:
+                self._set_status(tab, tab.model.summary(), IDLE)
+            if not quiet:
+                self._request_space(tab)
             if tab.reveal_name and tab is self.current:
                 name, tab.reveal_name = tab.reveal_name, None
                 self.revealRequested.emit(name)
             return
 
-        tab.model.finish()
+        kept, tab.buffer = tab.buffer is not None, None
+        self._schedule(tab, elapsed, ok=False)
+        if quiet:
+            # Nobody asked, so nobody is told. The rows on screen stay, and the
+            # next check is further off; a person who navigates or presses
+            # Ctrl+R gets the real error.
+            return
+        if not kept:
+            tab.model.finish()
         self._set_status(tab, _explain(reply), BAD)
 
     def _request_space(self, tab: Tab) -> None:

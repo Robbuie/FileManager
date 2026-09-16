@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QWidget,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 
 from app import __version__
 from app.core import commands as core_commands
@@ -1134,7 +1134,7 @@ class MainWindow(QMainWindow):
         dual-pane file managers.
         """
         for pane in self._panes:
-            if pane.current.path == path and pane.current.request_id is None:
+            if pane.current.path == path and not pane.busy:
                 pane.refresh()
 
     # -------------------------------------------------------------- transfers
@@ -1209,7 +1209,7 @@ class MainWindow(QMainWindow):
         """
         touched = job.folders
         for pane in self._panes:
-            if pane.current.path in touched and pane.current.request_id is None:
+            if pane.current.path in touched and not pane.busy:
                 pane.refresh()
         self.statusBar().showMessage(_outcome(job), 8000)
         if job.problems:
@@ -1362,6 +1362,23 @@ class MainWindow(QMainWindow):
         for position, widget in enumerate(self._widgets):
             widget.set_active(position == index)
         self._sync_rail_mark()
+
+    # ----------------------------------------------------------- live folders
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """Checks stop while the window is minimised and catch up the moment
+        it comes back, which is when a file saved from another program is most
+        likely to be waiting to appear."""
+        if event.type() == QEvent.WindowStateChange:
+            minimised = bool(self.windowState() & Qt.WindowMinimized)
+            for pane in self._panes:
+                pane.set_live(not minimised)
+                if not minimised:
+                    pane.check_now()
+        elif event.type() == QEvent.ActivationChange and self.isActiveWindow():
+            for pane in self._panes:
+                pane.check_now()
+        super().changeEvent(event)
 
     # ------------------------------------------------------------------ close
 

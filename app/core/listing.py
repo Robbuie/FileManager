@@ -25,8 +25,9 @@ import time
 from enum import IntEnum
 from typing import Sequence
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, QUrl
 
+from app.io import paths
 from app.io.protocol import Entry
 
 #: The `..` row. Not a real entry, so it is kept out of the list and handled at
@@ -358,6 +359,54 @@ class ListingModel(QAbstractTableModel):
         self._scale = None
         self.endInsertRows()
 
+    def reconcile(self, entries: Sequence[Entry]) -> bool:
+        """Take a fresh listing of the same folder without starting over.
+
+        What a refresh and the live-folder check both use, and the difference
+        from `begin`/`add`/`finish` is everything a person has built up on
+        screen: `begin` resets the model, which throws away the marks, the
+        cursor and the scroll position, so a check every few seconds that did
+        that would make the listing unusable while it was being worked in.
+
+        A layout change instead, with every persistent index -- the selection
+        and the cursor are held as persistent indexes by the view -- moved to
+        the row its name is on now. A row that has gone takes its mark with it;
+        a row that arrived arrives unmarked; nothing else moves. The filter and
+        the sort carry over, because this is the same folder.
+
+        Returns False, and emits nothing, when the listing is exactly what is
+        already shown -- which is almost every check, and is what keeps a check
+        on an unchanged folder from repainting anything at all.
+        """
+        fresh = list(entries)
+        if _same_listing(self._all, fresh):
+            return False
+
+        self.layoutAboutToBeChanged.emit()
+        before = self.persistentIndexList()
+        keys = []
+        for index in before:
+            entry = self.entry(index.row())
+            keys.append(None if entry is None else entry.name.lower())
+
+        self._all = fresh
+        self._sort_rows()
+
+        where = {entry.name.lower(): row + self._offset
+                 for row, entry in enumerate(self._rows)}
+        after = []
+        for index, key in zip(before, keys):
+            if key is None:
+                keep = self._has_parent and index.row() == 0
+                after.append(self.index(0, index.column()) if keep else QModelIndex())
+                continue
+            row = where.get(key)
+            after.append(QModelIndex() if row is None
+                         else self.index(row, index.column()))
+        self.changePersistentIndexList(before, after)
+        self.layoutChanged.emit()
+        return True
+
     def finish(self) -> None:
         """Sort what arrived. The only point at which the order is settled."""
         self.beginResetModel()
@@ -541,6 +590,54 @@ class ListingModel(QAbstractTableModel):
 
     # ------------------------------------------------------- the model itself
 
+    def flags(self, index: QModelIndex):
+        """Every real row can be dragged out; `..` cannot.
+
+        Dragging is outward only -- into an email, onto the desktop, into
+        another program. The views are `DragOnly`, and `supportedDragActions`
+        below is copy and nothing else.
+        """
+        base = super().flags(index)
+        if index.isValid() and not self.is_parent_row(index.row()):
+            base |= Qt.ItemIsDragEnabled
+        return base
+
+    def supportedDragActions(self):
+        """Copy, never move.
+
+        Offering a move would let Explorer take the files away on a drop within
+        one disk, and on a move `QAbstractItemView` then asks the model to
+        remove the dragged rows itself. A drag out of a file manager into an
+        email is a copy in every sense that matters, and a move stays F6.
+        """
+        return Qt.CopyAction
+
+    def mimeTypes(self) -> list[str]:
+        return ["text/uri-list"]
+
+    def mimeData(self, indexes) -> QMimeData:
+        """The dragged rows as the file list Windows programs read.
+
+        `setUrls` with `file://` URLs is what Qt turns into `CF_HDROP` on
+        Windows, which is the format Outlook, Explorer and the rest take a
+        dropped file from -- the same one the clipboard already uses. Paths
+        only: nothing here opens or checks a file, for the clipboard's reason.
+        """
+        data = QMimeData()
+        seen: set[int] = set()
+        urls = []
+        for index in sorted(indexes, key=lambda i: i.row()):
+            row = index.row()
+            if row in seen:
+                continue
+            seen.add(row)
+            entry = self.entry(row)
+            if entry is None or not self._folder:
+                continue
+            urls.append(QUrl.fromLocalFile(paths.join(self._folder, entry.name)))
+        data.setUrls(urls)
+        return data
+
     def rowCount(self, parent=QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._rows) + self._offset
 
@@ -706,3 +803,15 @@ class ListingModel(QAbstractTableModel):
             e for e in self._all if self._passes(e)
         ]
         self._scale = None
+
+
+def _same_listing(old: Sequence[Entry], new: Sequence[Entry]) -> bool:
+    """Whether two listings of one folder hold the same rows, in any order.
+
+    By every field the enumeration delivered, so a file that grew or was
+    saved again counts as a change and its row is redrawn.
+    """
+    if len(old) != len(new):
+        return False
+    known = {entry.name: entry for entry in old}
+    return all(known.get(entry.name) == entry for entry in new)

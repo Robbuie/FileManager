@@ -5,6 +5,35 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.22.0]
+
+### Added
+- **Live folders.** The folder on screen is listed again every two seconds on
+  a local disk and every five on a share, so a file saved by another program
+  appears without a Ctrl+R. A folder that is slow to list is checked less
+  often -- never more than a tenth of the time -- a check that fails backs off
+  and says nothing, checks stop while the window is minimised, and coming back
+  to the window checks at once. `refresh.local_seconds` and
+  `refresh.network_seconds` set the intervals, and 0 turns them off.
+
+  Polled rather than watched, on every kind of volume: SMB change notification
+  is not reliable enough to trust a view to, a Hyper-V redirected drive less
+  so, and a watch is a request that never ends on a worker that answers one
+  request at a time.
+- **Drag files out of the window** -- into an email, onto the desktop, into
+  another program -- from the listing or the grid. Always a copy; nothing can
+  be dropped in.
+
+### Changed
+- **A refresh keeps what is on screen.** Ctrl+R, the re-list after a rename or
+  a copy, and the live check all reconcile the new listing into the old one
+  instead of starting over: the marks, the cursor, the scroll position, the
+  filter and the sort survive, a row that went takes its mark with it, and a
+  check that finds nothing repaints nothing. A new folder still streams in
+  from empty.
+- Rename and Duplicate find their file again by name after the dialog closes,
+  because a live folder can move rows while it is open.
+
 ## [0.21.0]
 
 ### Added

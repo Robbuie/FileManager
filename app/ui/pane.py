@@ -181,6 +181,21 @@ ICON_GAP = 8
 HISTORY_BUTTONS = {Qt.BackButton: -1, Qt.ForwardButton: 1}
 
 
+def _drag_out(view: QAbstractItemView) -> None:
+    """Let rows be dragged out of the window -- into an email, onto the
+    desktop, into another program -- and never dropped in.
+
+    `DragOnly` rather than `DragDrop`, because a drop here would be a copy or a
+    move this application did not confirm, which `CLAUDE.md` rules out; copy as
+    the only action for the reason `ListingModel.supportedDragActions` gives.
+    Both views get it, because a second view that inherits the commands and
+    not the gestures is the mistake 0.16 made with keys.
+    """
+    view.setDragEnabled(True)
+    view.setDragDropMode(QAbstractItemView.DragOnly)
+    view.setDefaultDropAction(Qt.CopyAction)
+
+
 def refit_popup(menu: QWidget, anchor: QPoint, area: QRect) -> None:
     """Size a popup to everything now in it, then place it on the screen.
 
@@ -365,6 +380,7 @@ class PaneWidget(QFrame):
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        _drag_out(self._view)
         self._view.setShowGrid(False)
         # Off. Stripes and a grid are two devices doing the job of row
         # spacing, and the pair of them is the strongest single signal of
@@ -426,6 +442,7 @@ class PaneWidget(QFrame):
         # widget go on asking `self._view.selectionModel()` without caring which
         # view is in front.
         self._grid = GridView(self._pane.thumbnails)
+        _drag_out(self._grid)
         self._grid.activated.connect(self._on_activated)
         self._grid.setContextMenuPolicy(Qt.CustomContextMenu)
         self._grid.customContextMenuRequested.connect(self._on_context_menu)
@@ -968,7 +985,12 @@ class PaneWidget(QFrame):
             self.window(), title="Rename", label=f"Rename {names[0]} to",
             initial=names[0], ok_text="Rename", stem=True,
         )
-        if name and name != names[0]:
+        # Found again by name, never by the row it was on: the folder is live,
+        # and a check that landed while the dialog was open can have moved
+        # every row under it. Renaming whatever is on that row now would be
+        # renaming the wrong file.
+        row = self._pane.current.model.row_of(names[0])
+        if name and name != names[0] and row >= 0:
             self._pane.rename(row, name)
 
     def duplicate_current(self) -> None:
@@ -991,7 +1013,8 @@ class PaneWidget(QFrame):
             label=f"Duplicate {names[0]} here as", initial=suggestion,
             ok_text="Duplicate", taken=self._pane.name_taken,
         )
-        if name and name != names[0]:
+        row = self._pane.current.model.row_of(names[0])      # see rename_current
+        if name and name != names[0] and row >= 0:
             self._pane.duplicate(row, name)
 
     def delete_selection(self, *, permanent: bool = False) -> None:
@@ -1078,8 +1101,12 @@ class PaneWidget(QFrame):
             row = self.current_row()
             entry = self._pane.current.model.entry(row) if row >= 0 else None
             if entry is not None and entry.is_dir:
+                # By name for `rename_current`'s reason: a menu is open for as
+                # long as somebody reads it, and the folder can change under it.
                 menu.addAction("Open in new tab\tCtrl+Enter",
-                               lambda: self._open_row_in_tab(row, background=False))
+                               lambda name=entry.name: self._open_row_in_tab(
+                                   self._pane.current.model.row_of(name),
+                                   background=False))
             if entry is not None and not entry.is_dir:
                 # Above Open rather than below, because for a drawing or a
                 # photograph this is the entry somebody wants and Open hands the
@@ -1716,6 +1743,9 @@ class PaneWidget(QFrame):
     def _watch(self, model) -> None:
         if model not in self._watched:
             model.modelReset.connect(self._on_rows_settled)
+            # A refresh or a live check reconciles rather than resets, and a
+            # row that went can take a mark with it: the count has to follow.
+            model.layoutChanged.connect(self._on_rows_settled)
             self._watched.add(model)
 
     def _watch_selection(self) -> None:

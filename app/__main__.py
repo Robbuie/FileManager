@@ -139,6 +139,9 @@ def main() -> int:
     # touched a volume before this line.
     left.refresh()
     right.refresh()
+    # And from then on, keep the folders on screen current. See `Pane.check`.
+    left.start_checks()
+    right.start_checks()
     volumes.refresh()
     network.refresh()
     # The screen is only knowable once there is one. A scaled display gets the

@@ -207,13 +207,15 @@ DEFAULTS: dict[str, Any] = {
     "left.columns_hidden": [],
     "right.columns_hidden": [],
 
-    # Network paths are polled rather than watched: SMB change notification is
-    # not reliable enough to trust a view to. NOT WIRED UP YET, and off until
-    # it is -- a poll today would re-list the folder, which resets the model
-    # and throws away the selection and the scroll position while the user is
-    # working. Polling needs the model to reconcile a new listing against the
-    # old one rather than replace it, and that is its own piece of work.
-    "refresh.network_seconds": 0.0,
+    # Live folders: how often the folder on screen is listed again to pick up
+    # a change made by another program. Polled on every kind of volume rather
+    # than watched -- SMB change notification is not reliable enough to trust a
+    # view to -- and reconciled into the listing, so the marks, the cursor and
+    # the scroll position survive a check. Seconds; 0 turns checks off for
+    # that kind of volume. A folder that is slow to list is checked less often
+    # than this, never more.
+    "refresh.local_seconds": 2.0,
+    "refresh.network_seconds": 5.0,
 
     # The one network call the application makes, and the two things worth
     # remembering about it: whether to make it at all, and which version the

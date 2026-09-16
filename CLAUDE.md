@@ -172,8 +172,10 @@ Rules that hold across the boundary:
   operation without one is an incomplete operation, not a simpler one.
 - **Drive enumeration is lazy and local.** Never probe drives at startup.
   `WNetGetConnection` reads local session state and does not touch the network.
-- **Network paths are polled, not watched.** SMB change notification is
-  unreliable. Configurable interval plus a manual refresh key.
+- **Folders are polled, not watched.** SMB change notification is
+  unreliable. `Pane.check` lists the folder in front again on an interval per
+  kind of volume, stretched for a slow folder and backed off on failure, and
+  reconciles the answer into the model.
 - **Qt's view is used; `QFileSystemModel` is not.** The stock model has its own
   network hang behaviour, which is the thing being escaped. Custom model, fed by
   the workers. The view is kept because its virtualisation is free and good.
@@ -631,6 +633,16 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   Anything here that returns "nothing" from a call that can fail says *why* it
   is empty, and the surface that draws it shows the reason instead of the
   reassuring blank.
+- **The folder is live, so a row number does not survive a wait.** Since
+  0.22 the folder on screen is listed again every few seconds and the new
+  listing is *reconciled* into the model -- a layout change with every
+  persistent index moved to its name's new row -- rather than reset, which is
+  the only reason marks, the cursor and the scroll position survive it. Two
+  rules follow. **Never reset the model to refresh a folder already on
+  screen**; `begin` is for a new folder. And **anything that holds a row
+  across a dialog, a menu or any other event loop has to find it again by
+  name afterwards** -- a check can land while the dialog is open and put a
+  different file on that row, and renaming that file is the bug.
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.
