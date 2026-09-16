@@ -62,7 +62,7 @@ def test_a_folder_shows_no_size_rather_than_zero(model):
     model.begin(has_parent=False)
     model.add([entry("folder", True)])
     model.finish()
-    assert model.data(model.index(0, Column.SIZE)) == "<DIR>"
+    assert model.data(model.index(0, Column.SIZE)) == ""
 
 
 def test_extension_is_split_off_the_name():

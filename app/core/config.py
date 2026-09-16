@@ -60,7 +60,12 @@ DEFAULTS: dict[str, Any] = {
     # Whether the favorites bar is drawn under each tab strip. On, and it
     # costs nothing until there is a favourite to put in it -- the bar hides
     # itself entirely while the list is empty.
-    "favorites.bar": True,
+    "favorites.bar": False,
+
+    # Set once the 0.24 look has been applied to a settings file written by an
+    # earlier version: the favorites bar off (the rail already lists them) and
+    # the Ext column hidden, since the name now carries the extension.
+    "look.024": False,
 
     # The navigation rail down the left of the window: places, drives with
     # capacity meters, and the favourites under their group headings. One rail
@@ -204,8 +209,8 @@ DEFAULTS: dict[str, Any] = {
     # Which columns are hidden, by their index in the same enum. The name
     # cannot be hidden and is refused rather than guarded against, because a
     # listing with no names is not a listing.
-    "left.columns_hidden": [],
-    "right.columns_hidden": [],
+    "left.columns_hidden": [1],
+    "right.columns_hidden": [1],
 
     # Live folders: how often the folder on screen is listed again to pick up
     # a change made by another program. Polled on every kind of volume rather
@@ -273,6 +278,25 @@ DEFAULTS: dict[str, Any] = {
 }
 
 
+def _look_024(values: dict[str, Any]) -> dict[str, Any]:
+    """Bring a settings file from before 0.24 onto the 0.24 look, once.
+
+    Only keys somebody set are in the file, so the new defaults alone would
+    leave anybody who ever touched these two settings on the old look. The
+    flag makes it once: a bar turned back on afterwards stays on.
+    """
+    if values.get("look.024"):
+        return values
+    if "favorites.bar" in values:
+        values["favorites.bar"] = False
+    for side in ("left", "right"):
+        key = f"{side}.columns_hidden"
+        if key in values and 1 not in values[key]:
+            values[key] = sorted([*values[key], 1])
+    values["look.024"] = True
+    return values
+
+
 class Config:
     """A flat dotted-key store over `DEFAULTS`."""
 
@@ -301,7 +325,8 @@ class Config:
                 values = {}
         except (OSError, ValueError):
             values = {}
-        return cls({k: v for k, v in values.items() if k in DEFAULTS}, target)
+        return cls(_look_024({k: v for k, v in values.items() if k in DEFAULTS}),
+                   target)
 
     def get(self, key: str) -> Any:
         if key not in DEFAULTS:

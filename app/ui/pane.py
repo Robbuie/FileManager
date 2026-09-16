@@ -283,6 +283,55 @@ def shortcut_text(event) -> str:
         return ""
 
 
+class SortHeader(QHeaderView):
+    """The listing's header, with a chevron on the column it is sorted by.
+
+    0.24. The stylesheet sets Qt's own arrows to nothing, because the style's
+    arrow is a platform bitmap in the platform's grey -- so for fourteen
+    releases nothing on screen said which column was sorted, or which way.
+    Painted from the same glyph set as the rest of the chrome, in the accent.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(Qt.Horizontal, parent)
+        self._colour = "#4aa8ff"
+
+    def set_colour(self, colour: str) -> None:
+        self._colour = colour
+        self.viewport().update()
+
+    def paintSection(self, painter, rect, logical: int) -> None:  # noqa: N802
+        painter.save()
+        super().paintSection(painter, rect, logical)
+        painter.restore()
+        if not self.isSortIndicatorShown() or logical != self.sortIndicatorSection():
+            return
+        model = self.model()
+        if model is None:
+            return
+        text = str(model.headerData(logical, Qt.Horizontal, Qt.DisplayRole) or "")
+        font = self.font()
+        font.setBold(True)
+        width = QFontMetrics(font).horizontalAdvance(text.upper()) + 2
+        size = 12
+        name = ("sort_up" if self.sortIndicatorOrder() == Qt.AscendingOrder
+                else "sort_down")
+        pixmap = glyphs.icon(name, colour=self._colour, muted=self._colour,
+                             size=size,
+                             ratio=float(self.devicePixelRatioF() or 1.0)
+                             ).pixmap(size, size)
+        align = model.headerData(logical, Qt.Horizontal, Qt.TextAlignmentRole)
+        right = bool(align is not None and int(align) & int(Qt.AlignRight))
+        pad = 7
+        if right:
+            x = rect.right() - pad - width - size - 1
+        else:
+            x = rect.left() + pad + width + 3
+        x = max(rect.left() + 1, min(x, rect.right() - size))
+        y = rect.center().y() - size // 2
+        painter.drawPixmap(x, y, pixmap)
+
+
 class PaneWidget(QFrame):
 
     activated = Signal(object)          # this widget, when it takes focus
@@ -323,7 +372,15 @@ class PaneWidget(QFrame):
         self._tabs.setTabsClosable(False)
         self._tabs.setMovable(True)
         self._tabs.setDrawBase(False)
+        # 0.24: a folder icon, the folder name cut at the end rather than the
+        # tab growing, and a close button only where the pointer or the
+        # current tab is. The width cap is in the sheet.
+        self._tabs.setElideMode(Qt.ElideRight)
+        self._tabs.setUsesScrollButtons(True)
+        self._tabs.setMouseTracking(True)
+        self._tab_hover = -1
         self._tabs.currentChanged.connect(self._pane.select_tab)
+        self._tabs.currentChanged.connect(lambda _i: self._show_close_buttons())
         self._tabs.tabCloseRequested.connect(self._pane.close_tab)
         # Without this the strip's order and the pane's disagree after a drag,
         # and every index afterwards -- the one a click selects, the one a
@@ -346,6 +403,18 @@ class PaneWidget(QFrame):
         self._drives.setToolTip("Drive")
         self._drives.activated.connect(self._claim)
         self._drives.activated.connect(self._on_drive_chosen)
+        # 0.24: the picker is no longer on screen. The drive is the first thing
+        # in the path bar, as a button that drops the same list down -- one box
+        # saying where you are instead of two. The combo stays as the list's
+        # model, so nothing else that reads it changes.
+        self._drive_button = QToolButton()
+        self._drive_button.setProperty("role", "crumbdrive")
+        self._drive_button.setToolTip("Drive")
+        self._drive_button.setFocusPolicy(Qt.NoFocus)
+        self._drive_button.setCursor(Qt.PointingHandCursor)
+        self._drive_button.setIconSize(QSize(16, 16))
+        self._drive_button.clicked.connect(self._claim)
+        self._drive_button.clicked.connect(self._open_drive_menu)
 
         # Drawn icons, not text glyphs. Both follow the theme; only one of
         # them is the same weight and size as the other four, because a text
@@ -367,6 +436,7 @@ class PaneWidget(QFrame):
         self._crumbs.navigate.connect(self._claim)
         self._crumbs.navigate.connect(self._pane.navigate)
         self._crumbs.editRequested.connect(self.focus_path)
+        self._crumbs.set_lead(self._drive_button)
         # A chevron is a target now, and a target in a pane claims it -- the
         # same rule the nav buttons, the crumbs, the favourites and the drive
         # picker follow. Opening a dropdown in the other pane and choosing
@@ -389,6 +459,8 @@ class PaneWidget(QFrame):
         self._filter.hide()
 
         self._view = QTableView()
+        self._header = SortHeader(self._view)
+        self._view.setHorizontalHeader(self._header)
         self._view.setModel(self._pane.current.model)
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
@@ -494,7 +566,7 @@ class PaneWidget(QFrame):
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(4)
-        controls.addWidget(self._drives)
+        self._drives.hide()
         for widget in (self._back, self._forward, self._up):
             controls.addWidget(widget)
         controls.addWidget(self._crumbs, 1)
@@ -521,10 +593,25 @@ class PaneWidget(QFrame):
             self._bar.addRequested.connect(self.addFavoriteRequested)
             self._bar.manageRequested.connect(self.manageFavoritesRequested)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
+        # The tab strip is its own band, a step darker than the pane, with the
+        # current tab drawn in the pane's own colour so it reads as the top of
+        # the listing below it -- the way a browser does it.
+        self._strip = QWidget()
+        self._strip.setProperty("role", "tabstrip")
+        self._strip.setAttribute(Qt.WA_StyledBackground, True)
+        strip = QHBoxLayout(self._strip)
+        strip.setContentsMargins(8, 5, 8, 0)
+        strip.setSpacing(0)
+        strip.addWidget(self._tabs, 1, Qt.AlignBottom)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._strip)
+        layout = QVBoxLayout()
+        layout.setContentsMargins(6, 6, 6, 4)
         layout.setSpacing(4)
-        layout.addWidget(self._tabs)
+        outer.addLayout(layout, 1)
         if self._bar is not None:
             layout.addWidget(self._bar)
         layout.addLayout(controls)
@@ -668,6 +755,13 @@ class PaneWidget(QFrame):
                              (self._sift, "filter")):
             button.setIcon(glyphs.icon(
                 name, colour=tokens["txt_1"], muted=tokens["txt_2"], ratio=ratio))
+        self._drive_button.setIcon(glyphs.icon(
+            "drive", colour=tokens["txt_1"], muted=tokens["txt_2"], ratio=ratio))
+        self._tab_icon = glyphs.icon(
+            "folder", colour=tokens["txt_1"], muted=tokens["txt_2"], ratio=ratio)
+        for index in range(self._tabs.count()):
+            self._tabs.setTabIcon(index, self._tab_icon)
+        self._header.set_colour(tokens.get("accent", "#4aa8ff"))
         self._rows.apply_tokens(tokens)
         self._grid.apply_tokens(tokens)
         self._preview.apply_tokens(tokens)
@@ -1515,8 +1609,46 @@ class PaneWidget(QFrame):
                 elif not closable and existing is not None:
                     self._tabs.setTabButton(index, QTabBar.RightSide, None)
             self._tabs.setCurrentIndex(self._pane.index)
+            icon = getattr(self, "_tab_icon", None)
+            if icon is not None:
+                for index in range(self._tabs.count()):
+                    self._tabs.setTabIcon(index, icon)
         finally:
             self._tabs.blockSignals(blocked)
+        self._show_close_buttons()
+
+    def _show_close_buttons(self) -> None:
+        """A close button on the current tab and the one under the pointer.
+
+        Hidden rather than removed, so a tab does not change width as the
+        pointer crosses it -- a strip whose tabs jump sideways under the mouse
+        is a strip nobody can click on.
+        """
+        current = self._tabs.currentIndex()
+        for index in range(self._tabs.count()):
+            button = self._tabs.tabButton(index, QTabBar.RightSide)
+            if button is None:
+                continue
+            shown = index in (current, self._tab_hover)
+            button.setProperty("shown", "true" if shown else "false")
+            button.setEnabled(shown)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+    def _open_drive_menu(self) -> None:
+        menu = QMenu(self)
+        for row in range(self._drives.count()):
+            action = menu.addAction(self._drives.itemText(row))
+            tip = self._drives.itemData(row, Qt.ToolTipRole)
+            if tip:
+                action.setText(str(tip))
+            action.setCheckable(True)
+            action.setChecked(row == self._drives.currentIndex())
+            action.triggered.connect(
+                lambda _=False, r=row: (self._drives.setCurrentIndex(r),
+                                        self._on_drive_chosen(r)))
+        button = self._drive_button
+        menu.exec(button.mapToGlobal(QPoint(0, button.height())))
 
     def _sync_drives(self) -> None:
         """Rebuild the picker and put it on the drive this tab is looking at.
@@ -2369,6 +2501,13 @@ class PaneWidget(QFrame):
                 return True
             if self._on_search_key(event):
                 return True
+        if watched is self._tabs and event.type() in (QEvent.MouseMove,
+                                                       QEvent.Leave):
+            hover = (self._tabs.tabAt(event.position().toPoint())
+                     if event.type() == QEvent.MouseMove else -1)
+            if hover != self._tab_hover:
+                self._tab_hover = hover
+                self._show_close_buttons()
         if watched is self._tabs and event.type() == QEvent.MouseButtonDblClick \
                 and event.button() == Qt.LeftButton:
             # Empty strip only. Double-clicking a tab is how a lot of people

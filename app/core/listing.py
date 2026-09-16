@@ -719,6 +719,8 @@ class ListingModel(QAbstractTableModel):
             return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.ToolTipRole and column == Column.SIZE and not entry.is_dir:
             return f"{entry.size:,} bytes"
+        if role == Qt.ToolTipRole and column == Column.SIZE and entry.is_dir:
+            return "Space counts what is in this folder"
         if role != Qt.DisplayRole:
             return None
 
@@ -727,15 +729,18 @@ class ListingModel(QAbstractTableModel):
         if column == Column.EXT:
             return split_name(entry)[1]
         if column == Column.SIZE:
-            # A folder's size is a separate, lazy request. Showing a blank
-            # would read as zero bytes, which is worse than saying nothing.
+            # A folder's size is a separate, lazy request. Blank until it is
+            # asked for: 0.24 dropped `<DIR>`, which was Double Commander's
+            # word and the loudest thing in the column. A file of no bytes
+            # still says "0 B", so a blank cannot be read as zero -- and the
+            # folder icon already says what `<DIR>` did.
             if not entry.is_dir:
                 return format_size(entry.size)
             if self._sizes is not None and self._folder:
                 counted = self._sizes.known(self._folder, entry.name)
                 if counted is not None:
                     return counted
-            return "<DIR>"
+            return ""
         if column == Column.AGE:
             return format_age(entry.mtime)
         if column == Column.MODIFIED:

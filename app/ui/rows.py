@@ -37,8 +37,8 @@ the model's own `size_scale`, computed once per change and cached there.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QPainter
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
+from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from app.core.listing import Column, ListingModel
 
@@ -60,6 +60,18 @@ BAND_GAP = 1
 #: close to this. Lower and the name stops being readable on the dark themes,
 #: which turns "this is going somewhere" into "this row is broken".
 CUT_OPACITY = 0.45
+
+
+def tabular(font: QFont) -> QFont:
+    """The same font with every digit the same width, so a column of sizes or
+    dates lines up digit under digit. Qt 6.7 and later; a font without the
+    feature, or an older Qt, just draws as it did."""
+    copy = QFont(font)
+    try:
+        copy.setFeature(QFont.Tag("tnum"), 1)
+    except (AttributeError, TypeError):
+        pass
+    return copy
 
 #: How the pane that is not taking keystrokes draws its rows. 0.23: the accent
 #: bar down the active pane's edge was the only way to tell which side a key
@@ -207,12 +219,70 @@ class RowDelegate(QStyledItemDelegate):
         if fade < 1.0:
             painter.setOpacity(fade)
 
+        if index.column() in (Column.SIZE, Column.AGE, Column.MODIFIED):
+            opt.font = tabular(opt.font)
+        ext = self._inline_ext(opt, index)
         if index.column() == Column.AGE:
             self._age(painter, opt, index)
+        elif ext:
+            # Not `super().paint`: that runs `initStyleOption` again and puts
+            # the text straight back, so the stem is drawn twice, a pixel apart.
+            # The style draws the icon and the background; this draws the text.
+            stem = opt.text
+            opt.text = ""
+            style = opt.widget.style() if opt.widget is not None else QApplication.style()
+            style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+            opt.text = stem
+            self._name_and_ext(painter, opt, stem, ext)
         else:
             super().paint(painter, opt, index)
             if index.column() == Column.SIZE:
                 self._bar(painter, option, index)
+        painter.restore()
+
+    @staticmethod
+    def _inline_ext(opt: QStyleOptionViewItem, index) -> str:
+        """The extension to draw after the name, or "" when the Ext column is
+        on screen to say it instead.
+
+        0.24 hides that column by default and puts the extension back on the
+        name in the muted grey -- and a pane squeezed narrow enough to lose the
+        column gets the same, which is when it matters most.
+        """
+        if index.column() != Column.NAME:
+            return ""
+        view = opt.widget
+        if view is None or not hasattr(view, "isColumnHidden") \
+                or not view.isColumnHidden(int(Column.EXT)):
+            return ""
+        return str(index.siblingAtColumn(int(Column.EXT)).data(Qt.DisplayRole) or "")
+
+    def _name_and_ext(self, painter: QPainter, opt: QStyleOptionViewItem,
+                      stem: str, ext: str) -> None:
+        """The stem in the row's text colour and `.ext` after it, muted.
+
+        The stem is what gets elided when the two do not fit. The extension is
+        the part that says which of two same-named files this is, so it is the
+        part kept whole.
+        """
+        style = opt.widget.style() if opt.widget is not None else None
+        if style is None:
+            return
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        rect = rect.adjusted(3, 0, -2, 0)
+        metrics = QFontMetrics(opt.font)
+        tail = "." + ext
+        tail_w = metrics.horizontalAdvance(tail)
+        shown = metrics.elidedText(stem, Qt.ElideRight, max(0, rect.width() - tail_w))
+        stem_w = metrics.horizontalAdvance(shown)
+        painter.save()
+        painter.setFont(opt.font)
+        painter.setPen(opt.palette.color(QPalette.Text))
+        painter.drawText(rect.adjusted(0, 0, 0, 0), int(Qt.AlignLeft | Qt.AlignVCenter), shown)
+        muted = parse_colour(self._t.get("txt_2"))
+        painter.setPen(muted if muted.isValid() else QColor(Qt.gray))
+        painter.drawText(rect.adjusted(stem_w, 0, 0, 0),
+                         int(Qt.AlignLeft | Qt.AlignVCenter), tail)
         painter.restore()
 
     def _band(self, painter: QPainter, option: QStyleOptionViewItem,

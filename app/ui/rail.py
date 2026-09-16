@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 
 from app.core.favorites import UNGROUPED
 from app.core.listing import format_size
+from app.ui import glyphs
 from app.ui.rows import parse_colour
 
 #: The fold marks. Characters rather than drawn glyphs: at nine pixels the two
@@ -296,22 +297,33 @@ class NavigationRail(QFrame):
     def _place_row(self, label: str, path: str) -> None:
         if PLACES in self._collapsed:
             return
-        self._row(label, path, tip=path)
+        self._row(label, path, tip=path, glyph="place")
 
     def _favorite_row(self, position: int, entry) -> None:
         heading = entry.group or UNGROUPED
         if heading in self._collapsed:
             return
         key = f"\nCtrl+{position + 1}" if position < 9 else ""
-        button = self._row(entry.name, entry.path, tip=f"{entry.path}{key}")
+        button = self._row(entry.name, entry.path, tip=f"{entry.path}{key}",
+                           glyph="star")
         button.setContextMenuPolicy(Qt.CustomContextMenu)
         button.customContextMenuRequested.connect(
             lambda point, owner=button, index=position:
             self._favorite_menu(owner, point, index))
 
-    def _row(self, label: str, path: str, *, tip: str = "") -> QPushButton:
+    def _row(self, label: str, path: str, *, tip: str = "",
+             glyph: str = "") -> QPushButton:
         button = QPushButton()
         button.setProperty("role", "railrow")
+        if glyph and self._tokens:
+            # 0.24: every row says what kind of place it is before it says
+            # which. The current row's icon takes the accent with its text.
+            current = bool(path) and path.rstrip("\\").lower() == self._current
+            colour = self._tokens.get("accent_text" if current else "txt_2", "")
+            button.setIcon(glyphs.icon(
+                glyph, colour=colour, muted=self._tokens.get("txt_2", ""),
+                ratio=float(self.devicePixelRatioF() or 1.0)))
+            button.setIconSize(QSize(16, 16))
         # The path is carried on the widget rather than read back out of its
         # text or its tooltip: the text is elided and the tooltip has a
         # shortcut on the end of it, and both would be the wrong string.
@@ -348,7 +360,8 @@ class NavigationRail(QFrame):
             return
         tip = location.remote if not location.local else \
             f"{location.remote}\n{location.local}"
-        button = self._row(location.label, location.path, tip=tip)
+        button = self._row(location.label, location.path, tip=tip,
+                           glyph="network")
         button.setProperty(
             "state",
             "current" if location.path.lower() == self._current.lower()[:len(location.path)]
@@ -579,6 +592,16 @@ class DriveRow(QWidget):
         left = rect.left() + 8
         right = rect.right() - 8
         top = rect.top() + 3
+
+        if self._tokens:
+            current = self.property("state") == "current"
+            glyph = glyphs.icon(
+                "network" if self._unc else "drive",
+                colour=self._tokens.get("accent_text" if current else "txt_2", ""),
+                muted=self._tokens.get("txt_2", ""),
+                ratio=float(self.devicePixelRatioF() or 1.0)).pixmap(16, 16)
+            painter.drawPixmap(left, top + (metrics.height() - 16) // 2, glyph)
+            left += 16 + 8
 
         painter.setPen(self._colour("txt_0"))
         font = painter.font()

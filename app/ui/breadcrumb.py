@@ -104,6 +104,14 @@ class Breadcrumb(QWidget):
 
     # ------------------------------------------------------------------ input
 
+    def set_lead(self, widget: QWidget) -> None:
+        """Put a widget in front of the crumbs -- the drive button, since 0.24.
+
+        Inserted at the very front, so `_add` (which inserts before the empty
+        space at the end) keeps putting crumbs after it.
+        """
+        self._row.insertWidget(0, widget)
+
     def set_crumbs(self, crumbs: list[tuple[str, str]]) -> None:
         self._crumbs = list(crumbs)
         self._rebuild()

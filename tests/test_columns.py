@@ -69,7 +69,10 @@ def pane(tmp_path):
         def refresh(self, *, rescan=False):
             pass
 
-    config = Config({"left.path": "C:\\Jobs"}, str(tmp_path / "config.json"))
+    # Every column on screen, which is what these tests were written against.
+    # Since 0.24 Ext starts hidden; `test_look.py` covers that default.
+    config = Config({"left.path": "C:\\Jobs", "left.columns_hidden": []},
+                    str(tmp_path / "config.json"))
     model = Pane(FakeBridge(), config, "left")
     widget = PaneWidget(model, Volumes(), sheet.metrics("normal"), None)
     widget.resize(900, 500)

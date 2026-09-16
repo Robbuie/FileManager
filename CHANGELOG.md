@@ -5,6 +5,31 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.24.0]
+
+### Changed
+- **Two rows of chrome above the listing instead of three.** The favorites bar
+  is off by default (the rail and the Favorites menu still list them; it can be
+  turned back on there), and a settings file from an earlier version is moved
+  onto the new look once.
+- **The drive is the first thing in the path bar**, as a button that drops the
+  list of drives down, rather than a separate picker beside it.
+- **Browser-style tabs**: a band a step darker than the pane, the current tab
+  cut from the pane's colour, a folder icon, a width cap with the name cut at
+  the end, and a close button only on the current tab and the one under the
+  pointer.
+- **The rail's rows carry icons** -- a place, a favourite, a network location,
+  a drive -- with the current one in the accent.
+- **No `<DIR>`.** A folder's size is blank until Space counts it.
+- **The Ext column starts hidden and the extension is drawn on the name**, in
+  the muted grey, whenever that column is not on screen -- including when a
+  narrow pane has squeezed it out. Shown again from the header menu, the name
+  goes back to the stem.
+- **Sizes, ages and dates use tabular figures**, so the digits line up.
+- **The sorted column has a chevron** in the accent, pointing the way it sorts.
+- **Softer pane edges**: the one-pixel border is gone; the active pane keeps
+  its accent bar and the other one its fade.
+
 ## [0.23.0]
 
 ### Changed

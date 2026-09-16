@@ -145,9 +145,20 @@ QLineEdit[state="stale"] {{ color: {txt_2}; }}
 
 QWidget[role="crumbbar"] {{
     background: {bg_1};
-    border: 1px solid {line_soft};
+    border: 1px solid transparent;
     border-radius: {radius};
 }}
+/* The drive, at the front of the path. Looks like the crumbs beside it until
+   the mouse is on it. */
+QToolButton[role="crumbdrive"] {{
+    background: transparent;
+    border: none;
+    border-radius: {radius_sm};
+    padding: 2px 4px;
+    margin-right: 1px;
+}}
+QToolButton[role="crumbdrive"]:hover {{ background: {bg_3}; }}
+QToolButton[role="crumbdrive"]:pressed {{ background: {bg_4}; }}
 QWidget[role="crumbbar"][state="hot"] {{ border: 1px solid {accent_line}; }}
 /* A segment. The whole bar is a path, so the segments are not separate
    objects and are not drawn as any -- until the mouse is on one, which is the
@@ -234,21 +245,29 @@ QComboBox QAbstractItemView {{
    one in front, with the accent as a rule under it -- which is the one place
    the eye goes back to after looking at a listing. */
 QTabBar {{ background: transparent; qproperty-drawBase: 0; }}
+/* 0.24: browser tabs. The strip is a band a step darker than the pane, and
+   the current tab is cut from the pane's own colour, so it reads as the top
+   edge of the listing it belongs to rather than as a button above it. */
+QWidget[role="tabstrip"] {{
+    background: {bg_1};
+    border-top-left-radius: {radius_lg};
+    border-top-right-radius: {radius_lg};
+}}
 QTabBar::tab {{
     background: transparent;
     color: {txt_2};
     border: none;
-    border-bottom: 2px solid transparent;
-    border-radius: {radius};
-    padding: 3px 10px;
+    border-top-left-radius: {radius};
+    border-top-right-radius: {radius};
+    padding: 3px 8px 3px 10px;
     min-height: {tab_h};
+    max-width: 190px;
     margin-right: 2px;
 }}
 QTabBar::tab:hover {{ background: {bg_3}; color: {txt_1}; }}
 QTabBar::tab:selected {{
-    background: {bg_3};
+    background: {bg_2};
     color: {txt_0};
-    border-bottom: 2px solid {accent};
 }}
 QToolButton[role="tabclose"] {{
     background: transparent;
@@ -261,6 +280,7 @@ QToolButton[role="tabclose"] {{
     min-height: 14px;
     max-height: 14px;
 }}
+QToolButton[role="tabclose"][shown="false"] {{ color: transparent; }}
 QToolButton[role="tabclose"]:hover {{
     color: {txt_0};
     background: {bg_4};
@@ -441,12 +461,11 @@ QHeaderView::up-arrow, QHeaderView::down-arrow {{ width: 0px; height: 0px; }}
    moves. */
 QFrame[pane="true"] {{
     background: {bg_2};
-    border: 1px solid {line_soft};
-    border-left: 2px solid {line_soft};
+    border: none;
+    border-left: 2px solid transparent;
     border-radius: {radius_lg};
 }}
 QFrame[pane="true"][active="true"] {{
-    border: 1px solid {accent_line};
     border-left: 2px solid {accent};
 }}
 /* And the other pane steps back: its rows are faded by the delegates (see
