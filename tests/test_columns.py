@@ -388,3 +388,59 @@ def test_the_idle_pane_is_faded_and_the_live_one_is_not(pane) -> None:
         delegate.paint(painter, option, index)
         painter.end()
         assert (IDLE_OPACITY in seen) is expect
+
+
+# ------------------------------------------------------------------- sorting
+
+
+def click_section(widget, column) -> None:
+    """A click on a column's heading, where a person clicks it: the middle of
+    the section, not the divider."""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    bar = header(widget)
+    x = bar.sectionViewportPosition(int(column)) + bar.sectionSize(int(column)) // 2
+    QTest.mouseClick(bar.viewport(), Qt.LeftButton, Qt.NoModifier,
+                     QPoint(x, bar.height() // 2))
+    QApplication.processEvents()
+
+
+def names_in_order(widget) -> list[str]:
+    model = widget.model.current.model
+    return [model.data(model.index(row, 0), Qt.DisplayRole)
+            for row in range(model.rowCount())]
+
+
+def test_the_heading_hears_a_click():
+    """0.24 gave the listing a header of its own so the sorted column could
+    carry a chevron, and a header built by hand is not clickable -- which
+    `setSortingEnabled` does not change, because all it does is show the
+    indicator and listen for it. Sorting by clicking a heading did nothing at
+    all from then until 0.29.9, and the dividers went on dragging, which is
+    what made it look like the sort rather than the header.
+    """
+    from app.ui.pane import SortHeader
+
+    assert SortHeader(None).sectionsClickable() is False, \
+        "if Qt ever changes this default, the line in PaneWidget is still right"
+
+
+def test_clicking_a_heading_sorts_by_that_column(pane):
+    fill(pane, ["b.txt", "a.txt", "c.txt"])
+    assert header(pane).sortIndicatorSection() == int(Column.NAME)
+
+    click_section(pane, Column.SIZE)
+    assert header(pane).sortIndicatorSection() == int(Column.SIZE)
+    assert pane.model.current.model.sort_column == Column.SIZE
+
+
+def test_clicking_the_same_heading_again_turns_it_round(pane):
+    fill(pane, ["b.txt", "a.txt", "c.txt"])
+    click_section(pane, Column.NAME)
+    first_order = header(pane).sortIndicatorOrder()
+    first_rows = names_in_order(pane)
+
+    click_section(pane, Column.NAME)
+    assert header(pane).sortIndicatorOrder() != first_order
+    assert names_in_order(pane) == list(reversed(first_rows))

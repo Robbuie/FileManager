@@ -5,6 +5,17 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.9]
+
+### Fixed
+- **Clicking a column heading sorts the listing again.** It had done nothing
+  since 0.24, when the listing was given a header of its own so the sorted
+  column could carry a chevron: a header built by hand does not hear clicks
+  unless it is told to, and turning sorting on does not tell it -- that only
+  shows the indicator and waits for it to change. The dividers went on
+  dragging the whole time, which is what made it look like the sort rather
+  than the header.
+
 ## [0.29.8]
 
 ### Added

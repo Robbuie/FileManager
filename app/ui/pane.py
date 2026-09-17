@@ -469,6 +469,14 @@ class PaneWidget(QFrame):
 
         self._view = QTableView()
         self._header = SortHeader(self._view)
+        # Clickable, said out loud. A header a view makes for itself is
+        # clickable already, and one built here is not -- and `setSortingEnabled`
+        # does not set it, it only shows the indicator and listens for it to
+        # change. So from 0.24, when this header was added to draw the chevron,
+        # until 0.29.9, clicking a column heading did nothing at all: the
+        # dividers still dragged, which is what made it read as sorting being
+        # broken rather than as the header not hearing the click.
+        self._header.setSectionsClickable(True)
         self._view.setHorizontalHeader(self._header)
         self._view.setModel(self._pane.current.model)
         self._view.setSelectionBehavior(QAbstractItemView.SelectRows)
