@@ -5,6 +5,73 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.12]
+
+A security and footprint pass. No feature changes: everything here is either a
+refusal that was missing, or something that grew without a ceiling.
+
+### Fixed
+- **A delete is checked against the folder it says it is in.** `Op.DELETE`
+  joined each name onto the folder without looking at it, and
+  `os.path.join` throws the folder away when the name turns out to be absolute
+  -- so a name that was really a path addressed something else on the machine
+  rather than the wrong file in that folder. Names come from a listing in
+  ordinary use, which is why this never showed; the request that does not come
+  from a listing is the elevation plan, a file in `%TEMP%` that `io/elevate.py`
+  is already plain anything running as this user can rewrite between being
+  written and being read. Both ends now refuse a name that is not a name --
+  the handler, and `plan_for` before a consent prompt is ever raised for one.
+  `paths.is_bare_name` is the rule and it is deliberately narrower than the
+  one `rename` applies: a file already on a share has to stay deletable even
+  under a name Windows itself would not have allowed. The context menu makes
+  the same check, for a milder version of the same reason.
+- **The update manifest cannot point outside this repository by spelling.**
+  The prefix test passed on a URL carrying dot segments --
+  `.../releases/download/v1/../../../elsewhere.exe` starts with the prefix,
+  ends with the right name, and asks GitHub for a file in another repository,
+  because `urllib` sends a path as written and the server resolves it. The
+  hash in the manifest proves nothing when the manifest is the thing that is
+  wrong, so that check had to hold on its own. Percent-encoded dots are
+  refused too.
+- **The hang log is bounded within a run, not only across launches.** The size
+  was checked when the log was opened and never again, and the run that needs
+  bounding is the long one: a window left alone while Windows still reports it
+  as not responding dumps every thirty seconds. It is now truncated in place
+  once it passes the ceiling -- in place rather than reopened, because
+  `faulthandler` is armed with the descriptor and closing it would send a
+  later traceback into whatever reused the number.
+
+### Changed
+- **The installer stops shipping about 46 MB of Qt the application never
+  loads.** The spec already excluded QtQuick, QtQml, QtPdf and the rest by
+  name, and those exclusions worked -- but they keep out *modules*, while the
+  libraries behind them arrive as dependencies of the plugins PyInstaller
+  collects wholesale. `qtvirtualkeyboardplugin.dll`, a few hundred kilobytes
+  for an on-screen keyboard, was pulling in thirteen megabytes of QML runtime
+  on its own. Dropped now: that plugin and the QML libraries behind it,
+  `opengl32sw.dll` (a software OpenGL fallback a widgets application does not
+  ask for, and 20 MB by itself), Qt's 96 translation files, Qt's networking
+  and its TLS backends, and the TUIO touch plugin. `packaging/trim.py` holds
+  the list with the reasoning beside each entry, and is a module rather than
+  spec code so the deciding is tested without a Windows build.
+
+  Kept deliberately, and pinned by tests naming the feature each is for:
+  Qt6Pdf and its image plugin, because `.pdf` is a previewable kind on
+  purpose; Qt6Svg and its plugins, because `.svg` is too; `win32ui`, which is
+  how an `HBITMAP` from the shell becomes pixels; and `libcrypto`/`libssl`,
+  which are Python's rather than Qt's and are what the update check's HTTPS
+  and SHA-256 run on.
+- **Three caches that only ever grew now have ceilings.** The per-file icon
+  cache kept every picture and every row for the life of the process: the
+  keying that makes it good -- an answer holds until the file's mtime or size
+  moves, so a refresh is free -- is exactly what meant nothing was ever
+  dropped, and `reload` cleared the rows while keeping the pictures. It now
+  trims the way the thumbnail grid always has. A tab's history is capped at
+  200 steps, which is also the dropdown 0.27 put in front of it. And the
+  folder holding downloaded installers is swept, rather than keeping every
+  installer ever downloaded at around 34 MB each, permanently, for as long as
+  updating kept working.
+
 ## [0.29.11]
 
 ### Added

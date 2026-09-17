@@ -104,3 +104,46 @@ def _request(args):
     from app.io.protocol import Request
 
     return Request(id=1, op=Op.ELEVATE, path="C:\\Windows", timeout=5.0, args=args)
+
+
+def test_no_plan_is_written_for_a_name_that_is_really_a_path():
+    """Refused before the consent prompt, not only inside it.
+
+    The handler refuses these too, which is `ACTIONS`' own rule -- both ends
+    check. The two refusals do different work: that one stops an elevated
+    process acting outside the folder, and this one stops Windows ever putting
+    a prompt on screen for it. A prompt that is never raised is a prompt
+    nobody answers out of habit, and the prompt says "File Manager" rather
+    than what it is about to do.
+    """
+    assert elevate.plan_for(Op.DELETE, "C:\\Program Files",
+                            {"names": ["a.txt", "C:\\Windows\\System32"]}) is None
+    assert elevate.plan_for(Op.DELETE, "C:\\Program Files",
+                            {"names": ["..\\..\\Windows"]}) is None
+    assert elevate.plan_for(Op.DELETE, "C:\\Program Files",
+                            {"names": ["a.txt", "b.txt"]}) is not None
+
+
+def test_the_elevated_process_refuses_a_plan_rewritten_after_it_was_written(tmp_path):
+    """The gap this module's own docstring is plain about, closed at the far end.
+
+    A plan is a file in the temp folder between being written and being read,
+    and anything running as this user can rewrite it in between. It still can
+    -- what it can no longer do is get a delete of an arbitrary path out of
+    the elevated process at the other end.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = outside / "keep.txt"
+    victim.write_text("keep")
+    folder = tmp_path / "folder"
+    folder.mkdir()
+
+    plan = tmp_path / "plan.json"
+    plan.write_text(json.dumps({
+        "action": "delete", "path": str(folder),
+        "args": {"names": [str(victim)], "permanent": True},
+    }), encoding="utf-8")
+
+    assert elevate.perform(str(plan)) == 1
+    assert victim.exists(), "an elevated delete reached outside its folder"

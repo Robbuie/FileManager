@@ -92,6 +92,22 @@ def test_parse_accepts_a_good_manifest():
     manifest(installer={"url": "https://example.invalid/FileManager-Setup-1.2.0.exe"}),
     manifest(installer={"url": "http://github.com/Robbuie/FileManager/releases/download/v1.2.0/FileManager-Setup-1.2.0.exe"}),
     manifest(installer={"url": updates.DOWNLOAD_PREFIX + "v1.2.0/other.exe"}),
+    # A url that starts with the prefix and ends with the name and still asks
+    # GitHub for a file somewhere else: `urllib` sends dot segments as written
+    # and the server is what resolves them. The hash in the manifest proves
+    # nothing here, because the manifest is the thing that is wrong.
+    manifest(installer={
+        "name": "FileManager-Setup-1.2.0.exe",
+        "url": updates.DOWNLOAD_PREFIX
+               + "v1.2.0/../../../../elsewhere/releases/download/v1/FileManager-Setup-1.2.0.exe"}),
+    manifest(installer={
+        "name": "FileManager-Setup-1.2.0.exe",
+        "url": updates.DOWNLOAD_PREFIX
+               + "v1.2.0/%2e%2e/%2e%2e/FileManager-Setup-1.2.0.exe"}),
+    manifest(installer={
+        "name": "FileManager-Setup-1.2.0.exe",
+        "url": updates.DOWNLOAD_PREFIX
+               + "v1.2.0/./FileManager-Setup-1.2.0.exe"}),
     # Checksums and sizes that cannot be checked against anything.
     manifest(installer={"sha256": "short"}),
     manifest(installer={"sha256": "z" * 64}),
@@ -365,3 +381,51 @@ def test_the_installed_folder_is_matched_through_a_link(monkeypatch, tmp_path):
     assert updates.same_folder(str(real), str(real) + os.sep)
     assert not updates.same_folder(str(real), str(tmp_path / "Other"))
     assert not updates.same_folder(None, str(real))
+
+
+# ------------------------------------------------------------------- sweeping
+
+
+def test_sweep_removes_installers_left_by_earlier_sessions(tmp_path):
+    """The staging folder was never emptied before 0.29.12.
+
+    Nothing runs an installer it did not download this session, so everything
+    in there by the time a check happens is tens of megabytes of nothing --
+    and it accumulated one release at a time, for as long as updating worked.
+    """
+    (tmp_path / "FileManager-Setup-1.0.0.exe").write_bytes(b"old")
+    (tmp_path / "FileManager-Setup-1.1.0.exe").write_bytes(b"older")
+    (tmp_path / "FileManager-Setup-1.2.0.exe.part").write_bytes(b"unfinished")
+    assert updates.sweep(str(tmp_path)) == 3
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_sweep_keeps_what_is_staged_now(tmp_path):
+    """The one waiting to be run on the way out has to survive a later sweep."""
+    staged = tmp_path / "FileManager-Setup-1.2.0.exe"
+    staged.write_bytes(b"new")
+    (tmp_path / "FileManager-Setup-1.0.0.exe").write_bytes(b"old")
+    assert updates.sweep(str(tmp_path), keep=str(staged)) == 1
+    assert staged.exists()
+
+
+def test_sweep_leaves_anything_that_is_not_an_installer(tmp_path):
+    """A folder somebody has put something in is not a folder to empty."""
+    (tmp_path / "notes.txt").write_text("mine")
+    (tmp_path / "sub").mkdir()
+    assert updates.sweep(str(tmp_path)) == 0
+    assert (tmp_path / "notes.txt").exists()
+
+
+def test_sweep_says_nothing_about_a_folder_that_is_not_there(tmp_path):
+    assert updates.sweep(str(tmp_path / "absent")) == 0
+
+
+def test_download_clears_the_folder_before_it_writes(monkeypatch, tmp_path):
+    """A download is also a moment when whatever is already there is stale."""
+    (tmp_path / "FileManager-Setup-0.9.0.exe").write_bytes(b"previous")
+    body = b"installer bytes" * 400
+    _serve(monkeypatch, body)
+    landed = updates.download(_release(body), folder=str(tmp_path))
+    assert os.path.basename(landed) == "FileManager-Setup-1.2.0.exe"
+    assert os.listdir(tmp_path) == ["FileManager-Setup-1.2.0.exe"]

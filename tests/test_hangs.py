@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import time
 
+from app.core import hangs
 from app.core.hangs import HangRecorder, default_path
 
 
@@ -107,3 +108,64 @@ def test_a_loop_that_turns_but_is_slow_is_written_down(tmp_path):
     text = (tmp_path / "hangs.log").read_text(encoding="utf-8")
     assert "slow: one turn of the event loop took" in text
     assert "Timeout" not in text          # nothing was stuck, so no stacks
+
+
+def test_the_log_is_bounded_within_a_run_and_not_only_across_launches(tmp_path):
+    """The ceiling was checked in `start` alone until 0.29.12.
+
+    Which bounded the log across launches and not within one -- and the run
+    that needs bounding is the long one. A window left alone while Windows
+    still reports it as not responding dumps every `HUNG_REPEAT_SECONDS`, so
+    an afternoon of that is hundreds of megabytes of stacks nobody reads past
+    the first.
+    """
+    path = tmp_path / "hangs.log"
+    recorder = HangRecorder(str(path), version="t", stall=60.0)
+    recorder.start()
+    try:
+        recorder._file.write("x" * (hangs.MAX_BYTES + 1))
+        recorder._file.flush()
+        assert path.stat().st_size > hangs.MAX_BYTES
+        recorder.dump("after the log got long")
+    finally:
+        recorder.stop()
+
+    text = path.read_text(encoding="utf-8")
+    assert path.stat().st_size < hangs.MAX_BYTES
+    assert "was started again" in text
+    assert "after the log got long" in text, "the dump that triggered it was lost"
+    assert "xxxx" not in text
+
+
+def test_rotating_keeps_the_descriptor_faulthandler_was_armed_with(tmp_path):
+    """Truncated in place rather than reopened, and not as a preference.
+
+    `faulthandler.dump_traceback_later` keeps the file *descriptor*. Closing it
+    frees the number, the next thing to open a file gets it, and a stall a
+    moment later writes a traceback into whatever that turned out to be.
+    """
+    path = tmp_path / "hangs.log"
+    recorder = HangRecorder(str(path), version="t", stall=60.0)
+    recorder.start()
+    try:
+        before = recorder._file.fileno()
+        recorder._file.write("x" * (hangs.MAX_BYTES + 1))
+        recorder._rotate()
+        assert recorder._file.fileno() == before
+        assert not recorder._file.closed
+    finally:
+        recorder.stop()
+
+
+def test_a_log_under_the_ceiling_is_left_alone(tmp_path):
+    path = tmp_path / "hangs.log"
+    recorder = HangRecorder(str(path), version="t", stall=60.0)
+    recorder.start()
+    try:
+        recorder.dump("first")
+        recorder.dump("second")
+    finally:
+        recorder.stop()
+    text = path.read_text(encoding="utf-8")
+    assert "first" in text and "second" in text
+    assert "was started again" not in text

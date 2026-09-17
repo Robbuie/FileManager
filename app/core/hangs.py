@@ -155,6 +155,11 @@ class HangRecorder(QObject):
             # Not a stall and not nothing: the loop is turning, so no stack
             # would say anything, and the window is still too slow to use.
             self._slow += 1
+            # Checked on this path as well as before a dump. One line is not a
+            # dump, but a window slow enough to write one every second writes
+            # tens of thousands of them over a working day, and the ceiling is
+            # on the file rather than on any one thing that fills it.
+            self._rotate()
             self._write(f"{_now()}  slow: one turn of the event loop took "
                         f"{gap:.2f} s ({self._slow} so far)\n")
         self._last = now
@@ -222,6 +227,7 @@ class HangRecorder(QObject):
         """
         if self._file is None:
             return
+        self._rotate()
         self._write(f"\n---- {_now()}  {reason}\n")
         try:
             faulthandler.dump_traceback(file=self._file, all_threads=True)
@@ -239,6 +245,35 @@ class HangRecorder(QObject):
         self._write("----\n")
         if self._file is not None:
             self._file.flush()
+
+    def _rotate(self) -> None:
+        """Start the log again once it is past `MAX_BYTES`.
+
+        The ceiling was checked only in `start` until 0.29.12, which meant it
+        bounded the log across launches and not within one -- and the run that
+        needs bounding is precisely the long one. A window left alone while
+        Windows still reports it as not responding dumps every
+        `HUNG_REPEAT_SECONDS`, so an afternoon of it is a few hundred
+        megabytes of stacks nobody will read past the first.
+
+        **Truncated in place rather than reopened**, and that is not a
+        preference. `faulthandler.dump_traceback_later` is armed with this
+        file and keeps the *descriptor*, not the Python object: closing it
+        frees the number, the next thing to open a file gets it, and a stall a
+        moment later writes a traceback into whatever that turned out to be.
+        Truncating keeps the descriptor valid and pointing at the same file.
+        """
+        if self._file is None:
+            return
+        try:
+            self._file.flush()
+            if os.fstat(self._file.fileno()).st_size <= MAX_BYTES:
+                return
+            self._file.truncate(0)
+        except (OSError, ValueError):
+            return
+        self._write(f"---- {_now()}  the log passed {MAX_BYTES} bytes and was "
+                    f"started again; what came before this line is gone\n")
 
     def _write(self, text: str) -> None:
         if self._file is None:

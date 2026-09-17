@@ -360,6 +360,45 @@ def test_a_permanent_delete_removes_files_and_folders(pool, tmp_path):
     assert not (tmp_path / "a.txt").exists() and not (tmp_path / "tree").exists()
 
 
+def test_a_delete_refuses_a_name_that_is_really_a_path(pool, tmp_path):
+    r"""The one destructive handler whose argument is a list of names.
+
+    `os.path.join(folder, name)` throws the folder away when the name turns
+    out to be absolute, so an unchecked name here is not a delete of the wrong
+    file in this folder -- it is a delete somewhere else on the machine. The
+    check is in the handler rather than in the caller because this handler is
+    also what the elevated process runs, and that request arrives as a file in
+    the temp folder rather than from a listing.
+    """
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep")
+    folder = tmp_path / "folder"
+    folder.mkdir()
+
+    sink = Sink()
+    pool.submit(Op.DELETE, str(folder), timeout=10,
+                args={"names": [str(outside / "keep.txt")], "permanent": True},
+                handler=sink)
+
+    assert sink.settle().status is Status.ERROR
+    assert (outside / "keep.txt").exists(), "a delete reached outside the folder"
+
+
+@pytest.mark.parametrize("name", ["..", "sub/deeper.txt", r"sub\deeper.txt"])
+def test_a_delete_refuses_the_other_ways_out_of_a_folder(pool, tmp_path, name):
+    folder = tmp_path / "folder"
+    (folder / "sub").mkdir(parents=True)
+    (folder / "sub" / "deeper.txt").write_text("deep")
+    sink = Sink()
+    pool.submit(Op.DELETE, str(folder), timeout=10,
+                args={"names": [name], "permanent": True}, handler=sink)
+
+    assert sink.settle().status is Status.ERROR
+    assert (folder / "sub" / "deeper.txt").exists()
+    assert folder.exists()
+
+
 def test_a_delete_of_nothing_is_refused_rather_than_reported_as_success(pool, tmp_path):
     sink = Sink()
     pool.submit(Op.DELETE, str(tmp_path), timeout=10,

@@ -616,6 +616,39 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   positive Explorer has, for the same reason. The other half matters more: a
   destination that **will not say** how much room it has proceeds. An unknown
   is not a refusal.
+- **A destructive op is a folder plus names, and a name that is not a name
+  escapes it.** `Op.DELETE` and `Op.MENU` take `path` and `args["names"]`, and
+  `os.path.join(folder, name)` **discards the folder** the moment the name is
+  absolute -- so an unchecked name there is not the wrong file in that folder,
+  it is a file somewhere else on the machine. In ordinary use the names come
+  from a listing and this cannot happen; the request that does not come from a
+  listing is the elevation plan, which is a file in `%TEMP%` that anything
+  running as this user can rewrite between `write_plan` and the elevated read.
+  `paths.is_bare_name` is the rule, both ends check it for `elevate.ACTIONS`'
+  reason, and `plan_for` checks too so no consent prompt is ever raised for
+  one -- a prompt saying "File Manager" is a prompt answered by reflex.
+  It is deliberately **narrower** than the character list `rename` refuses:
+  that one is asking whether Windows would accept a new name, this one is
+  asking whether the folder is escaped, and a file a POSIX client put on a
+  share under a name Windows would not allow still has to be deletable. Any
+  new op taking a list of names makes the same check.
+- **`excludes` in the spec keeps out modules; the plugins drag the libraries
+  in behind them.** The two are collected by different routes, which is how a
+  build whose spec excluded QtQuick and QtQml twice over still shipped 13 MB
+  of QML runtime: `qtvirtualkeyboardplugin.dll` is collected because it lives
+  in `plugins/platforminputcontexts`, and everything it links to comes with
+  it. So dropping a Qt library means filtering `analysis.binaries` and
+  `analysis.datas` after `Analysis`, and the entry that matters is usually the
+  plugin rather than the library. `packaging/trim.py` is that filter, kept as
+  a module rather than spec code so the string comparison -- which is where
+  the mistake would be -- is tested without a four-minute Windows build.
+  **Read what the application does, not what the spec excludes**, before
+  adding to it: `QtPdf` is excluded as a module and `.pdf` is a previewable
+  kind, so Qt6Pdf and its image plugin have to stay, and `ui/glyphs.py` saying
+  it needs no QtSvg is about the chrome rather than about the previewer. Both
+  were on the list while it was written and came off after a look. The test
+  pins each kept file against the feature it is there for, which is what a
+  later pass reading only the exclusions would otherwise remove again.
 - **Replacing Explorer is only half supported by Windows.** Registering a
   Directory verb mostly works; Win+E needs a key remap. Do not promise more.
 - **`GetLogicalDrives` reports letters, and not everything reachable has one.**

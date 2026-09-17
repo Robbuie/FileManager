@@ -237,6 +237,93 @@ def test_a_timeout_does_not_record_the_rows_it_never_reached(icons):
 # ------------------------------------------------------------------- the switch
 
 
+# ------------------------------------------------------------- what is kept
+
+
+def test_the_pictures_are_bounded(icons):
+    """Unbounded until 0.29.12, and the keying is exactly why.
+
+    An answer here stays valid until the file's mtime or size moves, which is
+    what makes a refresh free -- and also what meant nothing was ever dropped.
+    A session spent walking a Program Files tree ended with every icon in it
+    still held. `core/thumbnails.py` had this bound from the start; this cache
+    is its sibling and did not.
+    """
+    from app.core.fileicons import MAX_IMAGES
+
+    provider, bridge = icons
+    wanted = MAX_IMAGES + 50
+    for index in range(wanted):
+        provider.icon(f"C:\\Menu{index}", entry("tool.exe"))
+        provider.flush()
+        bridge.answer(index, rows={"tool.exe": f"key{index}"},
+                      images={f"key{index}": pixels()})
+
+    assert len(provider._images) <= MAX_IMAGES
+
+
+def test_a_row_pointing_at_a_dropped_picture_goes_with_it(icons):
+    """`core/thumbnails.py`'s rule, for its reason.
+
+    A row whose image key no longer names anything looks up nothing and draws
+    nothing, for as long as the file does not change. Asking again is one
+    read; drawing nothing is permanent.
+    """
+    from app.core.fileicons import MAX_IMAGES
+
+    provider, bridge = icons
+    for index in range(MAX_IMAGES + 20):
+        provider.icon(f"C:\\Menu{index}", entry("tool.exe"))
+        provider.flush()
+        bridge.answer(index, rows={"tool.exe": f"key{index}"},
+                      images={f"key{index}": pixels()})
+
+    for _, _, key in provider._rows.values():
+        assert key == "" or key in provider._images
+
+
+def test_the_rows_are_bounded_too(icons):
+    """The larger of the two caches, and the one the grid does not have.
+
+    A row is recorded for every file asked about, including the ones the shell
+    had nothing for -- that empty answer is what stops them being re-read on
+    every repaint. So the rows outgrow the pictures rather than tracking them,
+    and bounding only the pictures would have left the bigger one growing.
+    """
+    from app.core import fileicons
+
+    provider, bridge = icons
+    monkey = fileicons.MAX_ROWS
+    fileicons.MAX_ROWS = 50
+    try:
+        for index in range(30):
+            names = [f"file{index}-{n}.exe" for n in range(10)]
+            for name in names:
+                provider.icon("C:\\Big", entry(name))
+            provider.flush()
+            bridge.answer(index, rows={name: "" for name in names}, images={})
+        assert len(provider._rows) <= 50
+    finally:
+        fileicons.MAX_ROWS = monkey
+
+
+def test_reload_drops_the_pictures_as_well_as_the_rows(icons):
+    """"Forget everything" that kept every picture was the whole of the leak.
+
+    Turning the setting off and on again was the one moment this cache could
+    have been emptied, and the one moment it looked as though it had been.
+    """
+    provider, bridge = icons
+    provider.icon("C:\\Menu", entry("Word.lnk"))
+    provider.flush()
+    bridge.answer(0, rows={"Word.lnk": "abc"}, images={"abc": pixels()})
+    assert provider._images
+
+    provider.reload()
+    assert not provider._images
+    assert not provider._rows
+
+
 def test_turning_them_off_reads_nothing(icons):
     provider, bridge = icons
     provider._config.set("icons.per_file", False)

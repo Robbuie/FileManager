@@ -26,7 +26,7 @@ import re
 import string
 import threading
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Iterable, Mapping
 
 #: Why pywin32 could not be imported, if it could not. Kept as text because a
 #: broken install and an absent one both raise ImportError and only the message
@@ -172,6 +172,44 @@ def share_root(path: str) -> str | None:
     if parts is None:
         return None
     return "\\\\" + parts[0] + "\\" + parts[1]
+
+
+def is_bare_name(name: str) -> bool:
+    r"""Whether `name` names something *inside* a folder and nowhere else.
+
+    Every destructive op in this application is addressed as a folder plus the
+    names in it, and the join that puts the two together is
+    `os.path.join(folder, name)` -- which **discards the folder** when the name
+    turns out to be absolute. `os.path.join("S:\\Jobs", "C:\\Windows")` is
+    `C:\Windows`, so a name that is not a name is not a mis-delete inside the
+    folder, it is a delete somewhere else entirely. That is a check rather than
+    an assumption because the names do not always come from a listing: an
+    elevation plan is a file in the temp folder, and `io/elevate.py` is plain
+    that anything running as this user can rewrite it between the moment it is
+    written and the moment the elevated process reads it.
+
+    Deliberately narrower than the character list `_rename` refuses. That one
+    is answering "would Windows accept this as a new name", which is a bigger
+    question and can afford to be strict. This one is answering "does this
+    escape the folder", and a file that already exists has to stay deletable
+    even if a POSIX client on the other end of a share gave it a name Windows
+    itself would not have allowed. So it refuses exactly the four shapes that
+    leave the folder: a separator, a drive-relative colon, the two dot names,
+    and nothing at all.
+    """
+    if not name or name in (".", ".."):
+        return False
+    return not any(ch in name for ch in "\\/:")
+
+
+def bare_names(names: Iterable[str]) -> list[str]:
+    """The names in `names` that are not bare, for a caller that refuses them.
+
+    Returns the offenders rather than a yes or no: an operation that stops has
+    to say which name stopped it, and a message naming the file is the
+    difference between a bug report and a shrug.
+    """
+    return [str(name) for name in names if not is_bare_name(str(name))]
 
 
 # --------------------------------------------------------------------------

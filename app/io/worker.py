@@ -1417,6 +1417,15 @@ def _delete(request: Request, outbox: Any) -> None:
     if not names:
         outbox.put(Reply(request.id, Status.ERROR, message="nothing to delete"))
         return
+    # Checked here rather than trusted from the caller, because this handler is
+    # also what the elevated process runs and its request comes from a file on
+    # disk. `paths.is_bare_name` explains what a name that is not a name does
+    # to the join below.
+    stray = paths.bare_names(names)
+    if stray:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message=f"{stray[0]!r} is not a name in this folder"))
+        return
     targets = [os.path.join(request.path, name) for name in names]
 
     if win32shell is not None:

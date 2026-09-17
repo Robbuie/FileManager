@@ -8,6 +8,8 @@ They run anywhere, including off Windows, because the session table is
 injectable — `resolve` and its neighbours take a mapping.
 """
 
+import ntpath
+
 import pytest
 
 from app.io import paths
@@ -113,3 +115,56 @@ def test_join_and_leaf_are_string_work_only():
     assert paths.leaf(r"C:\Windows\System32") == "System32"
     assert paths.leaf("C:\\") == "C:\\"
     assert paths.leaf(r"\\dc01\projects") == r"\\dc01\projects"
+
+
+# --------------------------------------------------------------- bare names
+
+
+@pytest.mark.parametrize("name", [
+    "report.txt", "a file with spaces.dwg", ".gitignore", "no-extension",
+    "cheeky..name.txt", "...", "café.txt", "a|b", "what?.txt",
+])
+def test_a_name_in_a_folder_is_a_bare_name(name):
+    """Including ones Windows would refuse for a *new* file.
+
+    `is_bare_name` answers "does this escape the folder", not "would Windows
+    accept this". A file that is already on a share can carry a name the local
+    rules would not have allowed -- a POSIX client put it there -- and it has
+    to stay deletable.
+    """
+    assert paths.is_bare_name(name)
+
+
+@pytest.mark.parametrize("name", [
+    "", ".", "..",
+    r"..\..\Windows", "../../etc/passwd",
+    r"C:\Windows\System32", "C:relative", "c:",
+    r"\\server\share\file", "/etc/passwd",
+    r"sub\file.txt", "sub/file.txt",
+    "file.txt:stream",
+])
+def test_anything_that_leaves_the_folder_is_not(name):
+    assert not paths.is_bare_name(name)
+
+
+def test_bare_names_reports_the_offenders():
+    """The caller has to name the file that stopped it, so this returns which."""
+    assert paths.bare_names(["one.txt", "two.txt"]) == []
+    assert paths.bare_names(["ok.txt", r"C:\Windows", ".."]) == [r"C:\Windows", ".."]
+
+
+@pytest.mark.parametrize("name", [r"C:\Windows\System32", r"\\other\share\x"])
+def test_an_absolute_name_would_have_escaped_the_join(name):
+    r"""Why the check exists, stated as the thing it prevents.
+
+    `os.path.join` discards everything to the left of an absolute path, so a
+    name that is really a path does not mis-address something inside the
+    folder -- it addresses something else entirely.
+
+    `ntpath` by name rather than `os.path`, because these tests run off
+    Windows and posixpath does not think `C:\Windows` is absolute. The worker
+    doing the join runs on Windows, where `os.path` *is* this module, so this
+    is the behaviour that matters however the test is hosted.
+    """
+    assert ntpath.join(r"S:\Jobs", name) == name
+    assert not paths.is_bare_name(name)

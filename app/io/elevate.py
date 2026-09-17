@@ -65,9 +65,21 @@ def plan_for(op: Op, path: str, args: dict[str, Any] | None = None) -> dict[str,
 
     Here rather than in the window so that there is one place that decides
     what is elevatable, and it is next to the code that runs it.
+
+    The names are checked here as well as in the handler that will run them,
+    which is `ACTIONS`' own rule -- both ends check -- and the two refusals are
+    not the same refusal. The handler's stops an elevated process doing
+    something outside the folder. This one stops a consent prompt being raised
+    for it at all, and a prompt that is never shown is a prompt nobody can
+    answer by reflex.
     """
+    from app.io import paths
+
     for action, known in ACTIONS.items():
         if known is op:
+            names = (args or {}).get("names") or []
+            if paths.bare_names(names):
+                return None
             return {"action": action, "path": path, "args": dict(args or {})}
     return None
 

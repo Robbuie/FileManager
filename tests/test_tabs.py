@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.config import Config
-from app.core.pane import MAX_TABS, Pane
+from app.core.pane import MAX_HISTORY, MAX_TABS, Pane
 from app.io.protocol import Entry, Op, Reply, Status
 
 
@@ -187,6 +187,37 @@ def test_a_locked_tab_offers_no_history(pane):
     assert core.current.can_go_back
     core.set_locked(0, True)
     assert not core.current.can_go_back
+
+
+def test_history_stops_growing(pane):
+    """Unbounded until 0.29.12, across up to `MAX_TABS` tabs.
+
+    Not much memory on its own -- a path is a short string -- but it is the
+    other list here that only ever grew, and 0.27 put a dropdown in front of
+    it, so it is also a menu nobody can read.
+    """
+    core, _, _ = pane
+    for index in range(MAX_HISTORY + 60):
+        core.navigate(f"C:\\Folder{index}")
+
+    tab = core.current
+    assert len(tab.history) == MAX_HISTORY
+    assert tab.position == len(tab.history) - 1
+    assert tab.history[-1] == tab.path
+
+
+def test_trimming_history_leaves_back_pointing_where_it_looks(pane):
+    """`position` is an index into the list, so trimming the front without
+    moving it would send Alt+Left to a folder somebody was never in.
+    """
+    core, _, _ = pane
+    for index in range(MAX_HISTORY + 10):
+        core.navigate(f"C:\\Folder{index}")
+
+    tab = core.current
+    expected = tab.history[tab.position - 1]
+    core.go_back()
+    assert core.current.path == expected
 
 
 # ------------------------------------------------------------------ opening

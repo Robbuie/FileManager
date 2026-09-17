@@ -19,6 +19,9 @@ sys.path.insert(0, ROOT)
 
 from app import __version__  # noqa: E402
 
+sys.path.insert(0, SPECPATH)
+import trim  # noqa: E402 - beside this file, not on the path until now
+
 # The Windows version resource: what the file's Properties tab shows and what
 # the installer reads back to check it packed what it thinks it did. Written
 # here rather than committed so it cannot disagree with `app/__init__.py` --
@@ -103,6 +106,16 @@ analysis = Analysis(
     excludes=EXCLUDE_QT + EXCLUDE_DEV,
     noarchive=False,
 )
+
+# `excludes` above keeps modules out. It does not keep out the Qt libraries
+# behind them, because those arrive as dependencies of the plugins the PySide6
+# hook collects wholesale -- which is how a build whose spec excludes QtQuick
+# and QtQml twice over still shipped 13 MB of QML runtime. That has to be done
+# here, on what `Analysis` actually collected. `packaging/trim.py` holds the
+# list and the reasoning, and is a separate module so the deciding can be
+# tested without a four-minute Windows build.
+for _what, _dropped in trim.apply(analysis):
+    print(f"trim: {_dropped} entries dropped from {_what}")
 
 pyz = PYZ(analysis.pure)
 

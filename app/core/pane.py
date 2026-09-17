@@ -37,6 +37,13 @@ BAD = "bad"
 #: edited, cannot produce a strip with a thousand entries in it.
 MAX_TABS = 40
 
+#: How many steps of one tab's history are kept. `MAX_TABS`' reasoning applied
+#: to the other list that only ever grows: forty tabs each remembering every
+#: folder visited since the window opened is a list nobody is navigating and a
+#: dropdown (0.27) nobody can read. Dropping from the front costs the oldest
+#: Alt+Left, which is a step past the point anybody backs up to.
+MAX_HISTORY = 200
+
 
 #: How often a pane looks at whether the folder on screen is due a check.
 #: Not the check interval -- that is a setting per kind of volume -- just the
@@ -350,6 +357,12 @@ class Pane(QObject):
         if record and (not tab.history or tab.history[tab.position] != target):
             del tab.history[tab.position + 1:]
             tab.history.append(target)
+            if len(tab.history) > MAX_HISTORY:
+                # From the front, and `position` moves with it: the index is
+                # into this list, so trimming without adjusting it would point
+                # Alt+Left at a folder somebody was never in.
+                going = len(tab.history) - MAX_HISTORY
+                del tab.history[:going]
             tab.position = len(tab.history) - 1
 
         self._list(tab, announce=True, keep=same_folder)

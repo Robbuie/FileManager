@@ -138,6 +138,15 @@ def parse(payload: object) -> Release:
         raise UpdateError(f"the update manifest names a bad installer: {name!r}")
     if not url.startswith(DOWNLOAD_PREFIX) or not url.endswith("/" + name):
         raise UpdateError("the update manifest points somewhere other than this repository's releases")
+    # A prefix test alone is not the guarantee it reads as. `urllib` sends a
+    # path as it is given, dot segments and all, and the server is what
+    # resolves them -- so `.../releases/download/v1/../../../elsewhere.exe`
+    # starts with the prefix, ends with the name, and asks GitHub for a file
+    # in another repository. The download is checked against the manifest's
+    # own hash, which proves nothing when the manifest is what is wrong, so
+    # this check is the one that has to hold.
+    if _traverses(url):
+        raise UpdateError("the update manifest points outside this repository's releases")
     if len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
         raise UpdateError("the update manifest has no usable checksum")
     if not isinstance(size, int) or not 0 < size <= MAX_INSTALLER_BYTES:
@@ -152,6 +161,21 @@ def parse(payload: object) -> Release:
         notes=str(payload.get("notes", "")),
         page=str(payload.get("release", "")),
     )
+
+
+def _traverses(url: str) -> bool:
+    """Whether a URL's path walks upwards, in any of the spellings it can use.
+
+    Percent-encoded as well as plain: the server decodes before it resolves, so
+    a check that reads only the literal dots is reading the wrong string. Any
+    `%2e` at all is refused rather than decoded and re-examined, because a
+    release asset of ours has no business carrying one and "refuse what is not
+    understood" is the cheaper half of that trade.
+    """
+    path = url.split("#", 1)[0].split("?", 1)[0].lower()
+    if "%2e" in path:
+        return True
+    return any(segment in ("..", ".") for segment in path.split("/"))
 
 
 #: The AppId in `packaging/installer.iss`, which is what Inno Setup names its
@@ -293,6 +317,12 @@ def download(release: Release, *, folder: str | None = None,
     except OSError as error:
         raise UpdateError("Could not create the download folder.") from error
 
+    # Whatever is in there is from a release that is no longer the one being
+    # installed, and this is the moment it is certainly not in use: the new
+    # download has not started and the old installer was never run by this
+    # session. On the download thread, like everything else below this line.
+    sweep(target_folder)
+
     final = os.path.join(target_folder, release.name)
     partial = final + ".part"
 
@@ -339,6 +369,43 @@ def _discard(path: str) -> None:
         pass
 
 
+def sweep(folder: str | None = None, *, keep: str = "") -> int:
+    """Delete installers left in the staging folder. Returns how many went.
+
+    Nothing did this until 0.29.12 and the arithmetic is why it is worth a
+    function: the installer is tens of megabytes, every accepted update leaves
+    one behind, and the folder is never looked at again by anybody -- so the
+    cost of updating was a permanent thirty-odd megabytes of `%LOCALAPPDATA%`
+    per release, growing for as long as the application kept working properly.
+
+    `keep` is the one staged this session, which is waiting to be run on the
+    way out and must survive a sweep that happens to run after it landed.
+    `.part` files go too: one of those is a download that did not finish, and
+    an unfinished download is never resumed here -- it is started again.
+    """
+    target = folder or staging_folder()
+    keeping = os.path.normcase(os.path.abspath(keep)) if keep else ""
+    removed = 0
+    try:
+        entries = list(os.scandir(target))
+    except OSError:
+        return 0
+    for entry in entries:
+        if not entry.is_file():
+            continue
+        lowered = entry.name.lower()
+        if not (lowered.endswith(".exe") or lowered.endswith(".part")):
+            continue
+        if keeping and os.path.normcase(os.path.abspath(entry.path)) == keeping:
+            continue
+        try:
+            os.remove(entry.path)
+        except OSError:
+            continue
+        removed += 1
+    return removed
+
+
 def launch(installer: str) -> bool:
     """Run the staged installer and return whether it started.
 
@@ -369,12 +436,24 @@ def launch(installer: str) -> bool:
 
 
 class _Check(QThread):
-    """One GET of the manifest."""
+    """One GET of the manifest, and the tidying that goes with it.
+
+    The sweep is here rather than anywhere tidier because this is the only
+    thing that runs off the UI thread early in a session. An installer left in
+    the staging folder is one a previous session downloaded: this session will
+    not run it -- what is staged is only ever what was fetched since the window
+    opened -- so by the time a check is being made it is thirty megabytes of
+    nothing. Failing to remove it is not worth reporting.
+    """
 
     found = Signal(object)      # Release
     failed = Signal(str)
 
     def run(self) -> None:      # noqa: D102 - QThread
+        try:
+            sweep()
+        except OSError:
+            pass
         try:
             release = fetch()
         except UpdateError as error:

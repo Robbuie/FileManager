@@ -39,6 +39,7 @@ import signal
 import time
 from typing import Any
 
+from app.io import paths
 from app.io.protocol import (
     MENU_COMMAND,
     MENU_SEPARATOR,
@@ -204,6 +205,15 @@ def _build(request: Request, outbox: Any, state: dict[str, Any]) -> None:
         return
 
     names = [str(name) for name in (request.args.get("names") or [])]
+    # The same check `_delete` makes, for a milder version of the same reason.
+    # `IShellFolder.ParseDisplayName` takes a path as readily as a name, so a
+    # name that is not one builds a menu -- and therefore invokes a verb -- for
+    # a file somewhere other than the folder the menu appears over.
+    stray = paths.bare_names(names)
+    if stray:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message=f"{stray[0]!r} is not a name in this folder"))
+        return
     extended = bool(request.args.get("extended"))
     folder = request.path
     deadline = time.monotonic() + request.timeout

@@ -48,6 +48,17 @@ from app.io.protocol import Entry, Op, Reply, Status, carries_own_icon
 #: cannot turn into a request naming a thousand files.
 MAX_PER_REQUEST = 120
 
+#: How many pictures are kept, and how many rows may point at them. Both are
+#: here for `core/thumbnails.py`'s reason and were missing for longer: the
+#: keying that makes this cache good -- an answer is valid until the file's
+#: mtime or size moves, so nothing is dropped when a folder is listed again --
+#: is exactly what stops anything ever being dropped at all. A session spent
+#: walking a Program Files tree would otherwise end with every icon in it still
+#: in memory. An icon is a 16 or 32 pixel square, so this is generous; a row is
+#: two strings and a tuple, so that one can afford to be more so.
+MAX_IMAGES = 400
+MAX_ROWS = 20_000
+
 
 class FileIcons(QObject):
     """The per-file icon cache, shared by both panes."""
@@ -63,6 +74,12 @@ class FileIcons(QObject):
         #: other: without it that row is asked about again on every repaint.
         self._rows: dict[tuple[str, str], tuple[float, int, str]] = {}
         self._images: dict[str, QIcon] = {}
+        #: Image keys in the order they arrived, so `_trim` has an oldest to
+        #: drop. A list rather than an `OrderedDict` of the images themselves
+        #: because a re-used key is deliberately *not* moved to the end: what
+        #: is being bounded is how many pictures are held, and re-reading one
+        #: that has been dropped is one file read, not a listing.
+        self._recent: list[str] = []
         #: folder -> {name: (mtime, size)}. The stamp is remembered from the
         #: paint that asked rather than read again when the answer lands: what
         #: the reply describes is the file as the listing saw it.
@@ -87,8 +104,17 @@ class FileIcons(QObject):
         self._size = 32 if scale > 1.25 else ROW_ICON
 
     def reload(self) -> None:
-        """Forget everything and draw again. What the View toggle runs."""
+        """Forget everything and draw again. What the View toggle runs.
+
+        The pictures go too. They did not until 0.29.12, and "forget
+        everything" that kept every icon it had ever decoded was the whole of
+        the leak: turning the setting off and on again was the one moment this
+        cache could have been emptied and the one moment it looked as though
+        it had been.
+        """
         self._rows.clear()
+        self._images.clear()
+        self._recent.clear()
         self._pending.clear()
         self.changed.emit()
 
@@ -178,14 +204,43 @@ class FileIcons(QObject):
             icon = _icon_from(pixels, size)
             if icon is not None:
                 self._images[str(key)] = icon
+                self._recent.append(str(key))
         rows = payload.get("rows") or {}
         settled = reply.status is Status.OK
         for name, (mtime, entry_size) in stamps.items():
             key = str(rows.get(name) or "")
             if key or settled:
                 self._rows[_row_key(folder, name)] = (mtime, entry_size, key)
+        self._trim()
         if rows:
             self.changed.emit()
+
+    def _trim(self) -> None:
+        """Drop the oldest pictures, and the rows left pointing at them.
+
+        `core/thumbnails.py` gives the reason the rows have to go with the
+        pictures: a row whose key names an image that is no longer held looks
+        up nothing and draws nothing, for as long as the file does not change.
+        Asking again is one read; drawing nothing is permanent.
+
+        The rows have a ceiling of their own as well, which the grid does not
+        need. A row here is recorded for every file asked about including the
+        ones the shell had no icon for -- that empty answer is what stops those
+        being re-read on every repaint -- so the rows outgrow the pictures
+        rather than tracking them, and bounding only the pictures would leave
+        the larger of the two caches unbounded.
+        """
+        if len(self._images) > MAX_IMAGES:
+            going = set(self._recent[: len(self._images) - MAX_IMAGES])
+            self._recent = [key for key in self._recent if key not in going]
+            for key in going:
+                self._images.pop(key, None)
+            self._rows = {row: value for row, value in self._rows.items()
+                          if value[2] not in going}
+        if len(self._rows) > MAX_ROWS:
+            # Insertion order, which for a dict is the order they were learned.
+            for row in list(self._rows)[: len(self._rows) - MAX_ROWS]:
+                del self._rows[row]
 
 
 def _row_key(folder: str, name: str) -> tuple[str, str]:
