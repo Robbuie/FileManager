@@ -142,9 +142,13 @@ def main() -> int:
     # like the drive list, and asked for the same way: the table it reads is
     # local, so this costs nothing and touches no server.
     network = Network(bridge, config)
+    from app.core.eject import Ejector
+
+    ejector = Ejector(bridge, config)
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
-                        favorites, capacity, commands, network, backdrop=backdrop)
+                        favorites, capacity, commands, network, backdrop=backdrop,
+                        ejector=ejector)
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

@@ -36,12 +36,20 @@ the model's own `size_scale`, computed once per change and cached there.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRect, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPalette
+from PySide6.QtCore import QRect, QRectF, QSize, Qt
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
+from app.core import filetypes
 from app.core.listing import Column, ListingModel
 from app.io import paths
+from app.ui import glyphs
+
+#: 0.27: the type badge that stands where the icon was. Wide enough for four
+#: capitals in the small mono face; the listing's name column moves over by the
+#: difference, which is the price of being able to read the type at a glance.
+BADGE_W = 32
+BADGE_H = 16
 
 #: The heading drawn above the first row of each folder in grouped flat view.
 GROUP_HEAD = 26
@@ -156,6 +164,10 @@ class RowDelegate(QStyledItemDelegate):
         self._live = True
         self._hovered = -1
         self._chip_font: QFont | None = None
+        self._badge_font: QFont | None = None
+        #: Badges in place of icons. Off keeps the shell's pictures, which is
+        #: the pre-0.27 listing exactly.
+        self.badges = False
 
     # ------------------------------------------------------------- the state
 
@@ -169,6 +181,7 @@ class RowDelegate(QStyledItemDelegate):
         self._t = dict(tokens)
         self._radius = max(3, parse_px(tokens.get("radius_sm"), 5) + 1)
         self._chip_font = None
+        self._badge_font = None
 
     def set_live(self, live: bool) -> None:
         """Whether this pane is the one taking keystrokes.
@@ -208,6 +221,15 @@ class RowDelegate(QStyledItemDelegate):
             option.rect = full
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
+        entry = None
+        if self.badges and index.column() == Column.NAME:
+            entry = index.data(ListingModel.EntryRole)
+            if entry is not None:
+                # Keep the room an icon would take, draw nothing in it, and put
+                # the badge there afterwards.
+                opt.icon = QIcon()
+                opt.features |= QStyleOptionViewItem.HasDecoration
+                opt.decorationSize = QSize(BADGE_W, BADGE_H)
 
         selected = bool(opt.state & QStyle.State_Selected)
         hovered = index.row() == self._hovered and not selected
@@ -241,20 +263,59 @@ class RowDelegate(QStyledItemDelegate):
         ext = self._inline_ext(opt, index)
         if index.column() == Column.AGE:
             self._age(painter, opt, index)
-        elif ext:
+        elif ext or entry is not None:
             # Not `super().paint`: that runs `initStyleOption` again and puts
             # the text straight back, so the stem is drawn twice, a pixel apart.
             # The style draws the icon and the background; this draws the text.
             stem = opt.text
-            opt.text = ""
+            if ext:
+                opt.text = ""
             style = opt.widget.style() if opt.widget is not None else QApplication.style()
             style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
-            opt.text = stem
-            self._name_and_ext(painter, opt, stem, ext)
+            if entry is not None:
+                self._badge(painter, opt, style, entry)
+            if ext:
+                opt.text = stem
+                self._name_and_ext(painter, opt, stem, ext)
         else:
             super().paint(painter, opt, index)
             if index.column() == Column.SIZE:
                 self._bar(painter, option, index)
+        painter.restore()
+
+    def _badge(self, painter: QPainter, opt: QStyleOptionViewItem, style, entry) -> None:
+        """The family-coloured tag where the icon would have been."""
+        area = style.subElementRect(QStyle.SE_ItemViewItemDecoration, opt, opt.widget)
+        height = min(BADGE_H, max(10, opt.rect.height() - 4))
+        box = QRectF(area.left(), opt.rect.top() + (opt.rect.height() - height) / 2,
+                     BADGE_W, height)
+        kind = filetypes.family(entry.name, entry.is_dir)
+        fill = parse_colour(self._t.get(f"kind_{kind}_fill"))
+        ink = parse_colour(self._t.get(f"kind_{kind}_text"))
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        shape = QPainterPath()
+        shape.addRoundedRect(box, 4, 4)
+        if fill.isValid():
+            painter.fillPath(shape, fill)
+        if entry.is_dir:
+            size = int(height - 4)
+            picture = glyphs.icon("folder", colour=self._t.get("txt_1", ""),
+                                  muted=self._t.get("txt_2", ""), size=size,
+                                  ratio=float(painter.device().devicePixelRatioF()
+                                              if painter.device() else 1.0))
+            painter.drawPixmap(int(box.center().x() - size / 2),
+                               int(box.center().y() - size / 2), picture.pixmap(size, size))
+        else:
+            if self._badge_font is None:
+                font = QFont(opt.font)
+                font.setFamilies(["Cascadia Mono", "Consolas", "monospace"])
+                font.setPixelSize(9)
+                font.setBold(True)
+                self._badge_font = font
+            painter.setFont(self._badge_font)
+            painter.setPen(ink if ink.isValid() else opt.palette.color(QPalette.Text))
+            painter.drawText(box, int(Qt.AlignCenter), filetypes.tag(entry.name))
         painter.restore()
 
     def _heading(self, painter: QPainter, rect: QRect, index, heading) -> None:

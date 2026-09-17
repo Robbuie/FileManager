@@ -598,6 +598,14 @@ class Pane(QObject):
             tab.position -= 1
             self.navigate(tab.history[tab.position], record=False)
 
+    def go_to_history(self, index: int) -> None:
+        """Jump straight to one step of this tab's history (0.27's dropdown)."""
+        tab = self.current
+        if tab.locked or not 0 <= index < len(tab.history) or index == tab.position:
+            return
+        tab.position = index
+        self.navigate(tab.history[index], record=False)
+
     def go_forward(self) -> None:
         tab = self.current
         if tab.can_go_forward:

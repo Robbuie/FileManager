@@ -103,6 +103,8 @@ class Drive:
     letter: str          # "S:", never with a trailing separator
     type: str            # one of the `_DRIVE_TYPES` values
     unc: str | None      # resolved target for a mapping, else None
+    #: 0.27: a stick, a card, or a USB disk -- something Eject is offered for.
+    ejectable: bool = False
 
 
 #: A path is rewritten only if it is recognisably a Windows one: a drive
@@ -315,7 +317,12 @@ def drives(*, refresh: bool = False) -> list[Drive]:
     for letter in logical_drives():
         kind = drive_type(letter)
         unc = mapping_for(letter, refresh=refresh) if kind == "remote" else None
-        result.append(Drive(letter=letter, type=kind, unc=unc))
+        ejectable = False
+        if kind in ("removable", "fixed"):
+            from app.io.eject import is_ejectable
+
+            ejectable = is_ejectable(letter, kind)
+        result.append(Drive(letter=letter, type=kind, unc=unc, ejectable=ejectable))
     return result
 
 

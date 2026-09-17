@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtCore import QEvent, Qt
+from PySide6.QtCore import QEvent, Qt, QTimer
 
 from app import __version__
 from app.core import commands as core_commands
@@ -92,9 +92,11 @@ class MainWindow(QMainWindow):
     def __init__(self, config, left, right, volumes, transfers, updates=None,
                  favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None, *, backdrop: str = "solid",
-                 frame: str | None = None) -> None:
+                 frame: str | None = None, ejector=None) -> None:
         super().__init__(parent)
         self._config = config
+        #: 0.27: USB eject, or None for a window built without io.
+        self._ejector = ejector
         #: "glass" or "solid", decided before the window exists by
         #: `core.backdrop.choose`, because a translucent window has to be
         #: translucent from the moment it is created. Changing it takes a
@@ -160,6 +162,7 @@ class MainWindow(QMainWindow):
             self._rail.chosen.connect(self._on_rail_chosen)
             self._rail.measureRequested.connect(capacity.measure)
             self._rail.reconnectRequested.connect(self._reconnect)
+            self._rail.ejectRequested.connect(self._eject)
             self._rail.rescanRequested.connect(
                 lambda: self._volumes.refresh(rescan=True))
             self._rail.addFavoriteRequested.connect(self._add_favorite)
@@ -209,6 +212,8 @@ class MainWindow(QMainWindow):
             self._commands.ran.connect(self._on_command_ran)
             self._commands.problem.connect(
                 lambda _id, why: self.statusBar().showMessage(why, 8000))
+        if self._ejector is not None:
+            self._ejector.finished.connect(self._on_ejected)
         transfers.conflict.connect(self._on_conflict)
         transfers.finished.connect(self._on_transfer_finished)
         if updates is not None:
@@ -568,6 +573,18 @@ class MainWindow(QMainWindow):
         unc.setChecked(bool(self._config.get("left.show_unc")))
         unc.triggered.connect(self._set_show_unc)
         view.addAction(unc)
+        badges = QAction("Type badges instead of icons", self, checkable=True)
+        badges.setChecked(self._config.get("icons.style") == "badges")
+        badges.setToolTip("A tag with the extension, coloured by kind of file: "
+                          "Logix, HMI, drawings, PDF. Off shows Windows' icons.")
+        badges.triggered.connect(self._set_badges)
+        view.addAction(badges)
+        header = QAction("Folder header", self, checkable=True)
+        header.setChecked(bool(self._config.get("pane.header")))
+        header.setToolTip("The folder's name above the listing, and a bar of "
+                          "what it holds by kind of file.")
+        header.triggered.connect(self._set_header)
+        view.addAction(header)
         shell_icons = QAction("Shell icons", self, checkable=True)
         shell_icons.setChecked(bool(self._config.get("icons.shell")))
         shell_icons.setEnabled(self._icons is not None)
@@ -746,6 +763,21 @@ class MainWindow(QMainWindow):
             self._reconnect(share)
             return
         pane.retry()
+
+    def _eject(self, letter: str) -> None:
+        if self._ejector is None:
+            self.statusBar().showMessage("ejecting is not available here", 6000)
+            return
+        why = self._ejector.eject(letter, self._panes, self._transfers, self._volumes)
+        if why:
+            self.statusBar().showMessage(why, 10000)
+        else:
+            self.statusBar().showMessage(f"ejecting {letter.rstrip(chr(92))}", 0)
+
+    def _on_ejected(self, message: str, ok: bool) -> None:
+        self.statusBar().showMessage(message, 8000 if ok else 15000)
+        if ok:
+            self._volumes.refresh(rescan=True)
 
     def _reconnect(self, path: str) -> None:
         if self._network is None:
@@ -991,6 +1023,16 @@ class MainWindow(QMainWindow):
         self._config.set("favorites.bar", bool(checked))
         for widget in self._widgets:
             widget.show_favorites_bar(bool(checked))
+
+    def _set_badges(self, checked: bool) -> None:
+        self._config.set("icons.style", "badges" if checked else "icons")
+        for widget in self._widgets:
+            widget.set_badges(bool(checked))
+
+    def _set_header(self, checked: bool) -> None:
+        self._config.set("pane.header", bool(checked))
+        for widget in self._widgets:
+            widget.set_header_shown(bool(checked))
 
     def _set_shell_icons(self, checked: bool) -> None:
         """Turn the pictures off, or back on, without a restart.
@@ -1550,6 +1592,15 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage(self._frame.problem, 12000)
 
     def nativeEvent(self, event_type, message):  # noqa: N802 - Qt naming
+        # 0.27: a drive plugged in or pulled out. Windows broadcasts volume
+        # arrivals to every top-level window, so the rail follows a USB stick
+        # without anybody pressing Rescan and without polling for it.
+        if bytes(event_type) == b"windows_generic_MSG":
+            from ctypes import wintypes
+
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0219 and msg.wParam in (0x8000, 0x8004):
+                QTimer.singleShot(500, lambda: self._volumes.refresh(rescan=True))
         if self._frame is not None:
             answer = self._frame.handle(event_type, message)
             if answer is not None:

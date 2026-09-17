@@ -189,6 +189,25 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_eject(args: argparse.Namespace) -> int:
+    """Eject a USB drive, or with --check only say whether it could be.
+
+    Directly, not through a worker: this is for trying the Windows call, and
+    the harness has no panes standing on the drive to move off it first.
+    """
+    from app.io import eject
+
+    letter = args.letter.rstrip("\\").upper()
+    kind = paths.drive_type(letter)
+    _report("type", kind)
+    _report("ejectable", "yes" if eject.is_ejectable(letter, kind) else "no")
+    if args.check:
+        return 0
+    outcome = eject.eject(letter)
+    _report("result", outcome.message)
+    return 0 if outcome.ok else 1
+
+
 def cmd_space(args: argparse.Namespace) -> int:
     """Whether a transfer of a given size would be refused, before running one.
 
@@ -1156,6 +1175,12 @@ def build_parser() -> argparse.ArgumentParser:
                        help="bytes a job would write; prints the verdict the "
                             "queue would reach before starting one")
     space.set_defaults(func=cmd_space)
+
+    ejecting = sub.add_parser("eject", help="eject a USB drive the way Explorer does")
+    ejecting.add_argument("letter", help="E: or similar")
+    ejecting.add_argument("--check", action="store_true",
+                          help="only say whether the drive counts as ejectable")
+    ejecting.set_defaults(func=cmd_eject)
 
     drives = sub.add_parser("drives", help="enumerate drive letters without probing them")
     drives.add_argument("--refresh", action="store_true",

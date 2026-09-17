@@ -17,6 +17,7 @@ from app.theme.tokens import (
     ACCENT_ALPHA,
     ACCENTS,
     AGE_ALPHA,
+    KINDS,
     DEFAULTS,
     DENSITIES,
     SHAPE,
@@ -125,6 +126,14 @@ def build(
     # larger than the rows it is labelling.
     ui = float(DENSITIES[density_name]["ui_font"])
     out["head_font"] = f"{max(9.0, ui - 2.5):g}px"
+
+    # File families. The bar is the hue itself; the badge is the hue at a low
+    # alpha behind text pulled most of the way to the theme's ink, the rule the
+    # age chip uses, so one triple works on every theme.
+    for name, hue in KINDS.items():
+        out[f"kind_{name}"] = rgb(hue)
+        out[f"kind_{name}_fill"] = rgba(hue, 0.17)
+        out[f"kind_{name}_text"] = mix(hue, ink, 0.62)
 
     # What sits directly on the window: the gaps around the cards, the title
     # bar, the rail and the status line. One token so glass and solid differ

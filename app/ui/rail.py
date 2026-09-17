@@ -37,7 +37,7 @@ its own text to the width it actually got.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QFrame,
@@ -111,6 +111,7 @@ class NavigationRail(QFrame):
     addLocationRequested = Signal()
     refreshNetworkRequested = Signal()
     reconnectRequested = Signal(str)
+    ejectRequested = Signal(str)
     forgetLocationRequested = Signal(str)
 
     def __init__(self, favorites, volumes, capacity, config, network=None,
@@ -347,12 +348,14 @@ class NavigationRail(QFrame):
         letter = drive.get("letter", "")
         row = DriveRow(letter, drive.get("unc") or "", drive.get("type", ""),
                        usage=self._capacity.usage(letter),
-                       tokens=self._tokens)
+                       tokens=self._tokens,
+                       ejectable=bool(drive.get("ejectable")))
         row.setProperty("state",
                         "current" if letter.lower() == self._current[:2] else "")
         row.chosen.connect(self.chosen)
         row.measureRequested.connect(self.measureRequested)
         row.reconnectRequested.connect(self.reconnectRequested)
+        row.ejectRequested.connect(self.ejectRequested)
         self._column.insertWidget(self._column.count() - 1, row)
 
     def _network_row(self, location) -> None:
@@ -541,16 +544,21 @@ class DriveRow(QWidget):
     #: The UNC behind a mapped drive, for re-attaching to it. Only a remote
     #: drive has one, which is why the entry is only offered for those.
     reconnectRequested = Signal(str)
+    #: 0.27: a USB drive's eject button, or Eject on its menu.
+    ejectRequested = Signal(str)
 
     def __init__(self, letter: str, unc: str, kind: str, *, usage=None,
-                 tokens=None, parent: QWidget | None = None) -> None:
+                 tokens=None, ejectable: bool = False,
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._letter = letter
+        self._ejectable = ejectable
         self._unc = unc
         self._kind = kind
         self._usage = usage
         self._tokens = dict(tokens or {})
         self._hover = False
+        self._hover_eject = False
         self.setProperty("role", "raildrive")
         self.setFocusPolicy(Qt.NoFocus)
         self.setMouseTracking(True)
@@ -614,6 +622,17 @@ class DriveRow(QWidget):
         painter.setFont(font)
 
         label_left = left + letter_width
+        if self._ejectable and self._tokens:
+            button = self.eject_rect()
+            if self._hover_eject:
+                shape = QPainterPath()
+                shape.addRoundedRect(button, 5, 5)
+                painter.fillPath(shape, self._colour("bg_4"))
+            mark = glyphs.icon("eject", colour=self._tokens.get("txt_0", ""),
+                               muted=self._tokens.get("txt_2", ""), size=14,
+                               ratio=float(self.devicePixelRatioF() or 1.0)).pixmap(14, 14)
+            painter.drawPixmap(int(button.center().x() - 7), int(button.center().y() - 7), mark)
+            right = int(button.left()) - 6
         painter.setPen(self._colour("txt_2"))
         painter.drawText(
             label_left, top, max(0, right - label_left), metrics.height(),
@@ -641,6 +660,13 @@ class DriveRow(QWidget):
                 self._colour("warn" if self._usage.share >= NEARLY_FULL
                              else "accent"))
         painter.end()
+
+    def eject_rect(self) -> QRectF:
+        """The eject button's square at the right of the first line."""
+        line = self.fontMetrics().height()
+        side = 22
+        top = 1 + 3 + (line - side) / 2
+        return QRectF(self.width() - 8 - side + 2, top, side, side)
 
     def _label(self) -> str:
         """The line beside the letter: what the drive is, in as few characters
@@ -673,10 +699,22 @@ class DriveRow(QWidget):
 
     def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self._hover = False
+        self._hover_eject = False
         self.update()
 
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        over = self._ejectable and self.eject_rect().contains(event.position())
+        if over != self._hover_eject:
+            self._hover_eject = over
+            self.setToolTip(f"Eject {self._letter}" if over else self._tip())
+            self.update()
+        super().mouseMoveEvent(event)
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.LeftButton and self._ejectable \
+                and self.eject_rect().contains(event.position()):
+            self.ejectRequested.emit(self._letter)
+        elif event.button() == Qt.LeftButton:
             self.chosen.emit(self.path, False)
         elif event.button() == Qt.MiddleButton:
             self.chosen.emit(self.path, True)
@@ -702,4 +740,7 @@ class DriveRow(QWidget):
             menu.addSeparator()
             menu.addAction("Reconnect",
                            lambda: self.reconnectRequested.emit(self._unc))
+        if self._ejectable:
+            menu.addSeparator()
+            menu.addAction("Eject", lambda: self.ejectRequested.emit(self._letter))
         menu.exec(self.mapToGlobal(point))

@@ -290,6 +290,13 @@ class Op(str, Enum):
     #: the process exists, not when somebody closes it.
     RUN = "run"
 
+    #: 0.27: remove a USB drive the way Explorer's Eject does. The path is
+    #: the local volume's (empty) so it runs on the local worker and never on
+    #: a worker that might have the drive's folder open; `args["letter"]` is
+    #: the drive. OK carries `{"message"}`; a refusal is ERROR with Windows'
+    #: veto already turned into a sentence. See `app/io/eject.py`.
+    EJECT = "eject"
+
     #: Fault injection, and the harness is the only thing allowed to send it.
     #: It exists because the failure this application is built around -- a call
     #: that has not returned and never will -- cannot otherwise be produced on

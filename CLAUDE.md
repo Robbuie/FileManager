@@ -91,6 +91,7 @@ python -m app.io.harness run S:\Jobs terminal            # which program, and wh
 python -m app.io.harness network                         # connections, letters or not
 python -m app.io.harness connect \\tsclient\C            # attach to a share again
 python -m app.io.harness space D:\scratch --need 8e9    # would a copy fit
+python -m app.io.harness eject E: --check              # is it a USB drive; drop --check to eject
 ```
 
 The transfer commands run the real engine: the queue, the scan, the conflict

@@ -5,6 +5,25 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.27.0]
+
+### Added
+- **Eject USB drives from the rail.** Sticks, card readers and USB hard
+  drives get an eject button on their row, and Eject on their right-click
+  menu. A pane standing on the drive is moved to a local disk first, and a
+  transfer still using the drive stops the eject with a message. When another
+  program has a file open on it, the status line names that program.
+- **The rail follows drives being plugged in and pulled out** without Rescan.
+- **Type badges.** Each row shows a small tag with its extension, coloured by
+  kind: Logix (ACD, L5X), HMI (MER, APA), drawings (DWG, DXF), PDF, sheets,
+  documents, images, archives. Folders get a folder tag. View > Type badges
+  instead of icons turns Windows' icons back on.
+- **Folder header.** Above each listing: the folder's name, how many folders
+  and files it holds and their size, and a bar of what it is made of by kind
+  of file, largest share first. View > Folder header hides it.
+- **History on Back and Forward.** Hold either button, or right-click it, for
+  the folders behind or ahead in that tab, and jump straight to one.
+
 ## [0.26.0]
 
 ### Changed

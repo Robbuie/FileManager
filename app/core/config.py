@@ -109,6 +109,9 @@ DEFAULTS: dict[str, Any] = {
     "timeout.delete": 300.0,
     "timeout.drives": 10.0,
     "timeout.free_space": 10.0,
+    # Eject waits for Windows to ask every program holding the drive, which is
+    # how long a veto takes to come back.
+    "timeout.eject": 30.0,
     # The subfolders behind a breadcrumb chevron. Short on purpose: nothing is
     # waiting on a dropdown, so a share that is answering slowly should lose it
     # rather than hold the volume. A timeout still delivers the names it got.
@@ -238,6 +241,11 @@ DEFAULTS: dict[str, Any] = {
     # folder reads at a glance. Off is here for the day a shell extension
     # misbehaves: it costs the pictures and nothing else, and a file manager
     # that starts is worth more than one that looks right.
+    # 0.27: "badges" draws a family-coloured tag with the extension where the
+    # icon was; "icons" is the shell's pictures, as before.
+    "icons.style": "badges",
+    # 0.27: the folder's name and a bar of what it holds, above the listing.
+    "pane.header": True,
     "icons.shell": True,
 
     # Overlay badges on those icons -- shared folders, OneDrive, source

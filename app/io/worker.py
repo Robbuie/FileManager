@@ -168,6 +168,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _walk(request, outbox, control, cancelled)
     elif request.op is Op.DRIVES:
         _drives(request, outbox)
+    elif request.op is Op.EJECT:
+        _eject(request, outbox)
     elif request.op is Op.FREE_SPACE:
         _free_space(request, outbox)
     elif request.op is Op.MKDIR:
@@ -775,8 +777,20 @@ def _drives(request: Request, outbox: Any) -> None:
     refresh = bool(request.args.get("refresh", False))
     listed = paths.drives(refresh=refresh)
     outbox.put(Reply(request.id, Status.OK, payload=[
-        {"letter": d.letter, "type": d.type, "unc": d.unc} for d in listed
+        {"letter": d.letter, "type": d.type, "unc": d.unc, "ejectable": d.ejectable}
+        for d in listed
     ]))
+
+
+def _eject(request: Request, outbox: Any) -> None:
+    """Ask Windows to remove a USB drive. See `app/io/eject.py`."""
+    from app.io.eject import eject
+
+    outcome = eject(str(request.args.get("letter", "")))
+    if outcome.ok:
+        outbox.put(Reply(request.id, Status.OK, payload={"message": outcome.message}))
+    else:
+        outbox.put(Reply(request.id, Status.ERROR, message=outcome.message))
 
 
 def _free_space(request: Request, outbox: Any) -> None:

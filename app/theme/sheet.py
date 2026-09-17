@@ -480,6 +480,11 @@ QLabel[role="status"][state="busy"] {{ color: {accent_text}; }}
 QLabel[role="status"][state="bad"] {{ color: {warn}; }}
 QLabel[role="space"] {{ background: transparent; color: {txt_2}; padding: 2px 6px; }}
 
+/* 0.27: Back and Forward carry the tab's history as a held-down menu. The
+   arrow Qt draws for a button with a menu is not wanted: the button already
+   says what it does, and the menu is for the second look. */
+QToolButton[role="nav"]::menu-indicator {{ image: none; width: 0px; }}
+
 /* --------------------------------------------------------------- title bar */
 
 /* 0.26: the row that replaces the system title bar and the menu bar. It sits

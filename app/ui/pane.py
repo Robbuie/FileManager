@@ -40,6 +40,7 @@ from app.core.listing import (
     format_size,
     split_name,
 )
+from app.io import paths
 from app.io.protocol import (
     MENU_COMMAND,
     MENU_SEPARATOR,
@@ -52,6 +53,7 @@ from app.ui import dialogs, glyphs
 from app.ui.breadcrumb import Breadcrumb
 from app.ui.favorites import FavoritesBar
 from app.ui.grid import GridView
+from app.ui.header import FolderHeader
 from app.ui.preview import PANE_TEXT_BYTES, PreviewPanel
 from app.ui.rows import RowDelegate
 from PySide6.QtWidgets import (
@@ -584,6 +586,25 @@ class PaneWidget(QFrame):
         controls.addWidget(self._reload)
         controls.addWidget(self._sift)
 
+        # 0.27: the folder's name and what it is made of, between the path bar
+        # and the listing. See `app/ui/header.py`.
+        self._folder_header = FolderHeader()
+        self._folder_header.setVisible(bool(pane.config.get("pane.header")))
+        self._rows.badges = pane.config.get("icons.style") == "badges"
+
+        # 0.27: the tab's history, from Back and Forward. Hold either, or
+        # right-click it. Built when it opens, because the history is the
+        # tab's and changes with every step.
+        for button, direction in ((self._back, -1), (self._forward, 1)):
+            menu = QMenu(button)
+            menu.aboutToShow.connect(
+                lambda m=menu, d=direction: self._fill_history(m, d))
+            button.setMenu(menu)
+            button.setPopupMode(QToolButton.DelayedPopup)
+            button.setContextMenuPolicy(Qt.CustomContextMenu)
+            button.customContextMenuRequested.connect(
+                lambda _point, b=button: b.showMenu())
+
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(8)
@@ -625,6 +646,7 @@ class PaneWidget(QFrame):
         if self._bar is not None:
             layout.addWidget(self._bar)
         layout.addLayout(controls)
+        layout.addWidget(self._folder_header)
         layout.addWidget(self._filter)
         layout.addWidget(self._body, 1)
         layout.addLayout(footer)
@@ -632,6 +654,9 @@ class PaneWidget(QFrame):
         self._pane.tabsChanged.connect(self._sync_tabs)
         self._pane.flatChanged.connect(self._on_flat_changed)
         self._pane.currentChanged.connect(self._sync_current)
+        # The first listing is set on the view directly in the constructor, not
+        # through `_sync_current`, so the header is pointed at it here.
+        self._folder_header.follow(self._pane.current.model, self._header_title())
         self._pane.statusChanged.connect(self._sync_status)
         self._pane.pathChanged.connect(self._on_path_changed)
         self._pane.spaceChanged.connect(self._space.setText)
@@ -774,6 +799,7 @@ class PaneWidget(QFrame):
             self._tabs.setTabIcon(index, self._tab_icon)
         self._header.set_colour(tokens.get("accent", "#4aa8ff"))
         self._rows.apply_tokens(tokens)
+        self._folder_header.apply_tokens(tokens)
         self._grid.apply_tokens(tokens)
         self._preview.apply_tokens(tokens)
         self._view.viewport().update()
@@ -946,6 +972,7 @@ class PaneWidget(QFrame):
         # The selection is painted, not styled, so the delegate has to be told
         # as well -- it draws the live pane's wash stronger than the other's.
         self._rows.set_live(active)
+        self._folder_header.set_live(active)
         self._grid.set_live(active)
         self._view.viewport().update()
         # A property a stylesheet selects on only takes effect on a repolish.
@@ -1549,8 +1576,44 @@ class PaneWidget(QFrame):
         self._show_crumbs()
         self._view.setFocus(Qt.OtherFocusReason)
 
+    def _header_title(self) -> str:
+        shown = self._pane.display(self._pane.current.path)
+        name = paths.leaf(shown) or shown
+        return f"{name}  (flat)" if self._pane.current.flat else name
+
+    def _fill_history(self, menu, direction: int) -> None:
+        """The steps behind or ahead of this tab, nearest first."""
+        self._claim()
+        menu.clear()
+        tab = self._pane.current
+        if direction < 0:
+            steps = range(tab.position - 1, -1, -1)
+        else:
+            steps = range(tab.position + 1, len(tab.history))
+        shown = 0
+        for index in steps:
+            where = self._pane.display(tab.history[index])
+            action = menu.addAction(paths.leaf(where) or where)
+            action.setToolTip(where)
+            action.triggered.connect(
+                lambda _checked=False, i=index: self._pane.go_to_history(i))
+            shown += 1
+            if shown >= 20:
+                break
+        if not shown:
+            empty = menu.addAction("Nothing " + ("back" if direction < 0 else "ahead"))
+            empty.setEnabled(False)
+
+    def set_header_shown(self, shown: bool) -> None:
+        self._folder_header.setVisible(shown)
+
+    def set_badges(self, on: bool) -> None:
+        self._rows.badges = on
+        self._view.viewport().update()
+
     def _on_path_changed(self, text: str) -> None:
         self._path.setText(text)
+        self._folder_header.set_title(self._header_title())
         self._sync_crumbs(text)
         # Navigating from anywhere else -- a crumb, a favourite, a double
         # click -- puts the bar back, so the field is never left open showing
@@ -2009,6 +2072,7 @@ class PaneWidget(QFrame):
         self._ask_preview()
         self._grouped_rows = []     # `setModel` put every row back to one height
         self._regroup()
+        self._folder_header.follow(model, self._header_title())
 
     def _on_flat_changed(self) -> None:
         # Laid out again rather than only re-hidden: the Location column

@@ -206,6 +206,27 @@ DENSITY_LABELS: dict[str, str] = {
 # Shape and type. Not axed; the same in every combination.
 # --------------------------------------------------------------------------
 
+#: 0.27: file families, for the badge on a row and the folder's bar. Channel
+#: triples like the accents, because the badge's fill and text are derived from
+#: them per theme in `qss.build` -- the same hue reads on dark and on paper.
+#: These are semantic colours in CLAUDE.md's sense: they say what a file is,
+#: so they follow neither the accent nor the theme's hue.
+KINDS: dict[str, tuple[int, int, int]] = {
+    "logix":   (45, 196, 176),
+    "hmi":     (154, 122, 255),
+    "cad":     (240, 160, 40),
+    "pdf":     (238, 96, 96),
+    "sheet":   (70, 190, 110),
+    "doc":     (80, 145, 245),
+    "image":   (220, 110, 180),
+    "archive": (190, 150, 100),
+    "code":    (100, 180, 220),
+    "program": (150, 160, 175),
+    "text":    (140, 148, 160),
+    "other":   (125, 133, 145),
+    "folder":  (125, 133, 145),
+}
+
 SHAPE: dict[str, str] = {
     "radius": "7px",
     "radius_sm": "5px",
