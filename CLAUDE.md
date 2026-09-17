@@ -318,6 +318,8 @@ Ctrl+R  refresh            Ctrl+Shift+R  reconnect the share, then re-list
 Ctrl+F  filter             Ctrl+L  edit the path
 Ctrl+J  the job queue     Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
+Ctrl+K  the command palette: every menu command, saved and recent folders,
+the folders here, or a typed path (0.28)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail

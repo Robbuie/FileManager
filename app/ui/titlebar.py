@@ -6,8 +6,7 @@ it that no longer drags:
 
 - the application mark at the left, which opens every menu the menu bar used
   to show, as one menu;
-- a wide "go to" button, which is where the command palette arrives later and
-  for now puts the active pane's path bar into editing, the same as Ctrl+L;
+- a wide "go anywhere" button, which opens the command palette (Ctrl+K);
 - the three caption buttons.
 
 The tabs stay in the panes. There are two panes and each has its own tabs, so
@@ -59,16 +58,16 @@ class TitleBar(QWidget):
         self.go = QPushButton()
         self.go.setProperty("role", "gobox")
         self.go.setFocusPolicy(Qt.NoFocus)
-        self.go.setToolTip("Go to a folder (Ctrl+L)")
+        self.go.setToolTip("Go anywhere, run anything (Ctrl+K)")
         self.go.clicked.connect(self.goRequested)
         inner = QHBoxLayout(self.go)
         inner.setContentsMargins(10, 0, 6, 0)
         inner.setSpacing(8)
         self._go_icon = QLabel()
         self._go_icon.setProperty("role", "goicon")
-        self._go_text = QLabel("Go to a folder")
+        self._go_text = QLabel("Go anywhere, run anything")
         self._go_text.setProperty("role", "gotext")
-        self._go_key = QLabel("Ctrl L")
+        self._go_key = QLabel("Ctrl K")
         self._go_key.setProperty("role", "keycap")
         for label in (self._go_icon, self._go_text, self._go_key):
             label.setAttribute(Qt.WA_TransparentForMouseEvents, True)

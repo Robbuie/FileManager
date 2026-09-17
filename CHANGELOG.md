@@ -5,6 +5,17 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.28.0]
+
+### Added
+- **Command palette (Ctrl+K)**, also the "Go anywhere, run anything" box in
+  the title bar. Type a few letters of any menu command, a saved folder, a
+  folder either pane was recently in, or a folder inside the one on screen;
+  Up and Down pick, Enter runs, Esc closes. Commands show their key. Start with
+  `>` for commands only, `@` saved folders, `#` recent, `/` folders here. A
+  typed path such as `S:\Jobs\Riverside` offers going straight there.
+- The key hints along the bottom show Ctrl K.
+
 ## [0.27.0]
 
 ### Added

@@ -535,6 +535,23 @@ QLabel[role="keycap"] {{
     padding: 0px 5px;
 }}
 
+/* 0.28: the command palette, over the window. */
+QFrame[role="palette"] {{
+    background: {bg_2};
+    border: 1px solid {line};
+    border-radius: 14px;
+}}
+QLineEdit[role="palettefield"] {{
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid {line_soft};
+    border-radius: 0px;
+    color: {txt_0};
+    font-size: 17px;
+    padding: 10px 12px;
+}}
+QLineEdit[role="palettefield"]:focus {{ border: none; border-bottom: 1px solid {accent_line}; background: transparent; }}
+
 /* ----------------------------------------------------------------- dialogs */
 
 QDialog QLabel {{ background: transparent; color: {txt_0}; }}

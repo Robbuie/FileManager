@@ -36,7 +36,9 @@ from app.theme.tokens import (
 )
 from app.ui import dialogs, winframe
 from app.ui.deck import Deck
+from app.core import palette as core_palette
 from app.ui.hints import HintBar
+from app.ui.palette import CommandPalette
 from app.ui.titlebar import TitleBar
 from app.ui.pane import PaneWidget
 from app.ui.rail import NavigationRail
@@ -234,7 +236,7 @@ class MainWindow(QMainWindow):
         if self._frame_kind == "custom":
             self._titlebar = TitleBar()
             self._titlebar.menuRequested.connect(self._show_app_menu)
-            self._titlebar.goRequested.connect(lambda: self._current_widget().focus_path())
+            self._titlebar.goRequested.connect(self._open_palette)
             self._titlebar.minimizeRequested.connect(self.showMinimized)
             self._titlebar.maximizeRequested.connect(self.toggle_maximized)
             self._titlebar.closeRequested.connect(self.close)
@@ -267,6 +269,9 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._transfer_bar)
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
+        self._palette = CommandPalette(self)
+        self._palette.apply_tokens(tokens)
+        self._palette.chosen.connect(self._on_palette_chosen)
         self._build_menus()
         if self._frame_kind == "custom":
             # The menus are reached from the mark in the title bar now. A hidden
@@ -453,6 +458,9 @@ class MainWindow(QMainWindow):
         go.addSeparator()
         self._action(go, "Edit path", "Ctrl+L", lambda: self._current_widget().focus_path())
         self._action(go, "Other pane", "Tab", self._switch_pane)
+        self._palette_action = self._action(go, "Command palette", "Ctrl+K",
+                                            self._open_palette)
+        go.addSeparator()
         self._action(go, "Swap panes", "Ctrl+U", self._swap_panes)
         self._action(go, "Other pane here", "Ctrl+Shift+M", self._mirror_pane)
         go.addSeparator()
@@ -1256,6 +1264,7 @@ class MainWindow(QMainWindow):
         if self._titlebar is not None:
             self._titlebar.apply_tokens(tokens)
         self._hints.apply_tokens(tokens)
+        self._palette.apply_tokens(tokens)
         self._splitter.set_glow_colour(tokens["accent"])
         if self._frame is not None:
             # Mica takes its tint from the window's dark-mode flag, so a switch
@@ -1535,6 +1544,59 @@ class MainWindow(QMainWindow):
             pane.set_flat_layout(layout)
 
     # ------------------------------------------------------------ the frame
+
+    def focus_active_pane(self) -> None:
+        self._current_widget().focus_listing()
+
+    def palette_sources(self) -> list:
+        """Everything Ctrl+K can reach, in the order ties are broken."""
+        items: list = []
+
+        def walk(menu, trail: str) -> None:
+            for action in menu.actions():
+                if action.isSeparator() or not action.isVisible():
+                    continue
+                label, key = core_palette.clean_label(action.text())
+                if action.menu() is not None:
+                    walk(action.menu(), f"{trail} > {label}" if trail else label)
+                    continue
+                if not label or not action.isEnabled() or action is self._palette_action:
+                    continue
+                shortcut = action.shortcut().toString() or key
+                items.append(core_palette.Item(
+                    "command", label, detail=trail, shortcut=shortcut, target=action,
+                    checked=action.isChecked() if action.isCheckable() else None))
+
+        walk(self.menuBar(), "")
+        pane = self._current_pane()
+        if self._favorites is not None:
+            for entry in self._favorites.entries:
+                items.append(core_palette.Item("favorite", entry.name,
+                                               detail=pane.display(entry.path),
+                                               target=entry.path))
+        histories = [list(tab.history[:tab.position + 1])
+                     for side in self._panes for tab in side.tabs]
+        on_screen = {side.current.path for side in self._panes}
+        for path in core_palette.unique_recent(histories, on_screen):
+            shown = pane.display(path)
+            items.append(core_palette.Item("recent", paths.leaf(shown) or shown,
+                                           detail=shown, target=path))
+        folder = pane.current.path
+        for name in pane.current.model.folder_names()[:500]:
+            items.append(core_palette.Item("here", name, detail=pane.display(folder),
+                                           target=paths.join(folder, name)))
+        return items
+
+    def _open_palette(self) -> None:
+        self._palette.open(self.palette_sources())
+
+    def _on_palette_chosen(self, item) -> None:
+        if item.kind == "command":
+            item.target.trigger()
+            return
+        pane = self._current_pane()
+        pane.navigate(str(item.target))
+        self._current_widget().focus_listing()
 
     def _adopt_shortcuts(self) -> None:
         """Put every action that carries a key onto the window itself.

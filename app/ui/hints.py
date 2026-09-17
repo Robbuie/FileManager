@@ -27,7 +27,7 @@ HINTS: tuple[tuple[str, str], ...] = (
     ("F2", "Rename"),
     ("Del", "Recycle"),
     ("Ctrl B", "Flat view"),
-    ("Ctrl L", "Go to"),
+    ("Ctrl K", "Commands"),
 )
 
 _PAD_X = 5.0
