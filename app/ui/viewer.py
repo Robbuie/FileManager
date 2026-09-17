@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 from app.core.previews import describe
 from app.io.protocol import PREVIEW_TEXT_BYTES, VIEWER_BOX, Preview, PreviewForm
 from app.ui import glyphs
+from app.ui.dialogs import Dialog
 
 #: Zoom steps, as multiples of the picture's own size. Fixed steps rather than a
 #: continuous factor so that 1.0 is always reachable by pressing the key, which
@@ -207,7 +208,7 @@ class ImageView(QWidget):
         event.accept()
 
 
-class Viewer(QDialog):
+class Viewer(Dialog):
     """One file at a time, with the folder to walk through it."""
 
     #: The path now on screen, so whoever opened it can follow along -- the

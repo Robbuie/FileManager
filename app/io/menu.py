@@ -489,11 +489,13 @@ def _invoke(request: Request, outbox: Any, state: dict[str, Any]) -> None:
     hwnd = _owner_window(state)
     verb = _command_string(live.menu, item_id - MIN_ID, _GCS_VERB)
     try:
-        # The window this process keeps is what any dialog the command opens
-        # is owned by, and it is put in front first. Windows can refuse that,
-        # in which case the dialog is still there and still works -- it
-        # announces itself in the taskbar instead of appearing on top.
-        _foreground(hwnd)
+        # The owner window is *not* put in front here, which 0.29.2 did and
+        # 0.29.7 undoes. It is a window with no size and nothing drawn in it:
+        # making it the foreground window takes the keyboard away from the
+        # application and gives it to something nobody can see, which is a
+        # window that has stopped answering as far as anyone using it is
+        # concerned. What the command opens is brought forward instead, in
+        # `_watch`, once it exists.
         before = _own_windows()
         live.menu.InvokeCommand((
             0,                      # fMask

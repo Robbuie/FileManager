@@ -5,6 +5,29 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.7]
+
+### Fixed
+- **The window could stop answering the keyboard after a right-click command
+  was run.** 0.29.2 put the shell host's owner window in front before running
+  a command. That window has no size and nothing in it, so the keyboard went
+  to something invisible and the application looked frozen. Only the window a
+  command actually opens is brought forward now.
+- **A dialog is placed where it can be seen.** Qt centres one on its parent,
+  which puts it off the screen when the window is half off the edge or on a
+  monitor that has since been unplugged -- and a modal dialog nobody can find
+  is a window that answers nobody, which is indistinguishable from a freeze.
+  Every dialog now stays within the screen its window is on, and comes to the
+  front.
+
+### Added
+- **A remote session that starts after the window does is noticed.** The
+  glass backdrop draws by sending a picture of the whole window, which over a
+  remote connection is slow enough at full size to read as a freeze. Whether
+  to use it is decided at startup, so connecting remotely to a machine where
+  this is already running left glass on; the status bar now says so and names
+  the way out.
+
 ## [0.29.6]
 
 ### Added

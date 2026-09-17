@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from app.core.listing import format_size
 from app.core.transfers import VERBS, shorten
 from app.io.protocol import Conflict, JobKind
+from app.ui.dialogs import Dialog
 from app.ui.rows import parse_colour
 
 #: Height of one row in the queue panel. Two lines of text, a bar, and air
@@ -292,7 +293,7 @@ def _detail(job) -> str:
     return f"{where}  ·  {shorten(job.current)}" if job.current else where
 
 
-class QueueDialog(QDialog):
+class QueueDialog(Dialog):
     """Everything the queue holds: running, waiting and finished.
 
     Not modal -- work carries on behind it, which is the point of a queue --
@@ -492,7 +493,7 @@ class QueueDialog(QDialog):
             any(self._queue.jobs[i].state == "done" for i in self._queue.order))
 
 
-class ConflictDialog(QDialog):
+class ConflictDialog(Dialog):
     """The one interruption: a name at the destination is already taken.
 
     Both files are described -- size and date, side by side -- because that is
@@ -555,7 +556,7 @@ class ConflictDialog(QDialog):
         return self._rest.isChecked()
 
 
-class TransferPrompt(QDialog):
+class TransferPrompt(Dialog):
     """Where it is going, before anything moves.
 
     The destination is filled in from the other pane and can be edited, but it

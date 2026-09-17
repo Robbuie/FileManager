@@ -275,6 +275,13 @@ class MainWindow(QMainWindow):
         self._transfer_bar.set_motion(bool(config.get("look.motion")))
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
+        #: Said once. See `_watch_for_remote`.
+        self._said_remote = False
+        self._remote_timer = QTimer(self)
+        self._remote_timer.setInterval(30000)
+        self._remote_timer.timeout.connect(self._watch_for_remote)
+        self._remote_timer.start()
+
         self._palette = CommandPalette(self)
         self._palette.apply_tokens(tokens)
         self._palette.chosen.connect(self._on_palette_chosen)
@@ -1663,6 +1670,32 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showMaximized()
+
+    def _watch_for_remote(self) -> None:
+        """Notice a remote session that started after this window did.
+
+        `core.backdrop` decides between glass and solid once, at startup, and
+        a remote session is one of the three machines where glass is the wrong
+        answer. Remoting *into* a machine where the application is already
+        running changes that answer underneath it -- and it matters more than
+        a look: a translucent window is drawn by sending a picture of the
+        whole window, which over a remote connection at full size is slow
+        enough to read as the window having stopped. The setting cannot be
+        changed without a restart, so this says so rather than pretending to
+        fix it. Once, and only while glass is actually on.
+        """
+        if self._said_remote or self._backdrop != "glass":
+            return
+        if not winframe.probe().remote:
+            return
+        self._said_remote = True
+        wanted = self._config.get("window.backdrop")
+        tail = ("it will use the solid one next time this starts"
+                if wanted not in ("glass",) else
+                "View > Backdrop > Solid, then restart, is faster here")
+        self.statusBar().showMessage(
+            f"this is a remote session and the glass backdrop is slow in one; {tail}",
+            20000)
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         """On glass, a floor that is almost but not quite transparent.

@@ -8,13 +8,26 @@ neither of them does well: naming what is about to go. A dialog that says
 "delete 6 items?" is a dialog that gets clicked through.
 
 Nothing here touches the filesystem. A dialog is handed names and shows them.
+
+Every dialog in the application derives from `Dialog` rather than `QDialog`,
+and the reason is 0.29.6. A modal dialog that cannot be seen is a window that
+answers nobody: the rest of the application ignores the keyboard and the
+mouse until it is dealt with, and from the outside that is indistinguishable
+from a freeze. Qt puts a dialog in the middle of its parent, which is the
+right answer right up until the parent is half off the screen, or on a second
+monitor that is no longer attached -- both of which happen on a laptop that
+gets docked and undocked. `place` keeps the middle of the parent as the
+intention and the screen it is on as the limit, and brings the dialog to the
+front, which Windows does not always do for a window whose owner has just
+lost the foreground.
 """
 
 from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -37,7 +50,60 @@ from app.core import commands as core_commands
 NAMES_SHOWN = 12
 
 
-class NamePrompt(QDialog):
+def fit(box: QRect, area: QRect) -> QRect:
+    """`box` moved -- never resized -- until it is inside `area`.
+
+    A pure function for `winframe.region`'s reason: the arithmetic is four
+    comparisons and the bug was in the arithmetic, while showing a real window
+    to check it needs a screen and two monitors to unplug. Moved rather than
+    resized because a dialog that is larger than the screen still has to have
+    its top left corner visible: that is where the title and the first line
+    of the question are.
+    """
+    placed = QRect(box)
+    if placed.right() > area.right():
+        placed.moveRight(area.right())
+    if placed.bottom() > area.bottom():
+        placed.moveBottom(area.bottom())
+    if placed.left() < area.left():
+        placed.moveLeft(area.left())
+    if placed.top() < area.top():
+        placed.moveTop(area.top())
+    return placed
+
+
+class Dialog(QDialog):
+    """A dialog that is on a screen somebody is looking at, and in front.
+
+    `showEvent` rather than the constructor: the size is not known until the
+    layout has run, and a dialog placed before that is centred on the wrong
+    rectangle.
+    """
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        self.place()
+        self.raise_()
+        self.activateWindow()
+
+    def place(self) -> None:
+        parent = self.parentWidget()
+        window = parent.window() if parent is not None else None
+        screen = None
+        if window is not None:
+            screen = window.screen()
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        box = QRect(self.frameGeometry())
+        box.moveCenter(window.frameGeometry().center() if window is not None
+                       else area.center())
+        self.move(fit(box, area).topLeft())
+
+
+class NamePrompt(Dialog):
     """One line of text, for a new folder, a rename or a duplicate."""
 
     def __init__(self, parent: QWidget | None, *, title: str, label: str,
@@ -102,7 +168,7 @@ class NamePrompt(QDialog):
         self._field.setSelection(0, len(stem) if dot and stem else len(text))
 
 
-class PatternPrompt(QDialog):
+class PatternPrompt(Dialog):
     """One pattern, for the two group selection commands.
 
     Separate from `NamePrompt` because the two validate opposite things: a
@@ -146,7 +212,7 @@ class PatternPrompt(QDialog):
         return self._field.text().strip()
 
 
-class DeleteConfirm(QDialog):
+class DeleteConfirm(Dialog):
     """What is about to be deleted, by name, and where it will go."""
 
     def __init__(self, parent: QWidget | None, *, names: list[str], folder: str,
@@ -197,7 +263,7 @@ class DeleteConfirm(QDialog):
         layout.addWidget(buttons)
 
 
-class StopConfirm(QDialog):
+class StopConfirm(Dialog):
     """Closing the window while jobs are running.
 
     Transfers and deletes both, since 0.14, which is why nothing here says
@@ -248,7 +314,7 @@ class StopConfirm(QDialog):
         layout.addWidget(buttons)
 
 
-class UpdateOffer(QDialog):
+class UpdateOffer(Dialog):
     """A newer version exists. Three answers, and none of them is automatic."""
 
     DOWNLOAD = "download"
@@ -294,7 +360,7 @@ class UpdateOffer(QDialog):
         self.accept()
 
 
-class UpdateReady(QDialog):
+class UpdateReady(Dialog):
     """The installer is downloaded and checked. When it runs is the question."""
 
     def __init__(self, parent: QWidget | None, *, version: str,
@@ -333,7 +399,7 @@ class UpdateReady(QDialog):
         layout.addWidget(buttons)
 
 
-class ElevateOffer(QDialog):
+class ElevateOffer(Dialog):
     """Windows refused an operation. Offer to do exactly that one, elevated."""
 
     def __init__(self, parent: QWidget | None, *, description: str) -> None:
@@ -372,7 +438,7 @@ class ElevateOffer(QDialog):
         layout.addWidget(buttons)
 
 
-class FavoritesEditor(QDialog):
+class FavoritesEditor(Dialog):
     """Rename, reorder and remove saved locations.
 
     It edits the list directly rather than collecting changes and applying
@@ -472,7 +538,7 @@ class FavoritesEditor(QDialog):
             self._reload(row)
 
 
-class CommandsEditor(QDialog):
+class CommandsEditor(Dialog):
     """The table of external programs: what runs, with what, and on what key.
 
     Unlike `FavoritesEditor` this one collects its changes and hands them back
