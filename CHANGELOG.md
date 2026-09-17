@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.6]
+
+### Added
+- **The freeze record now catches a window that answers nobody while it is
+  still running.** A dialog or a menu opened off the edge of the screen holds
+  the keyboard and the mouse, so the window ignores everything, and because
+  nothing is actually stuck the 0.29.5 record stayed empty. A watcher on its
+  own thread now writes the same stacks when Windows reports the window as
+  not responding, and on request: create a file called `dump.now` beside
+  `hangs.log` and the next second writes one. Every dump also lists the
+  windows this process owns, with their positions on screen -- which is what
+  names a dialog waiting on a monitor that is no longer attached.
+
 ## [0.29.5]
 
 ### Added
