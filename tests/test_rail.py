@@ -584,3 +584,25 @@ def test_a_failed_enumeration_is_not_reported_as_an_empty_machine() -> None:
         "connections": [], "problem": "the connection list would not open"}))
     assert network.problem == "the connection list would not open"
     assert network.locations == []
+
+
+def test_moving_the_current_mark_keeps_the_rows_that_are_there(config):
+    """A click on a row navigates, and navigating moves the mark. Rebuilding
+    the column for that destroyed the row under the pointer and left a moment
+    with nothing painted, which on glass is a hole to the window behind.
+    """
+    from PySide6.QtWidgets import QPushButton
+
+    rail, host, _bridge, _capacity = build(
+        config, [{"name": "Jobs", "path": "C:\\Jobs"},
+                 {"name": "Survey", "path": "C:\\Survey"}])
+    rows = rail.findChildren(QPushButton)
+    rail.set_current("C:\\Jobs")
+    assert rail.findChildren(QPushButton) == rows
+    marked = [row for row in rows if row.property("state") == "current"]
+    assert [row.property("target") for row in marked] == ["C:\\Jobs"]
+
+    rail.set_current("C:\\Survey\\")
+    marked = [row for row in rows if row.property("state") == "current"]
+    assert [row.property("target") for row in marked] == ["C:\\Survey"]
+    host.hide()

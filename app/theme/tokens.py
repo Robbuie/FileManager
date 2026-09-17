@@ -245,3 +245,12 @@ DEFAULTS: dict[str, str] = {
     "accent": "blue",
     "density": "normal",
 }
+
+
+#: What a glass window paints under everything else: black at one step of
+#: alpha out of 255. Invisible over Mica, and the whole reason it exists is
+#: that it is not zero. A translucent Qt window is a layered window, and
+#: Windows hands a click on a pixel with no alpha at all to whatever window is
+#: behind it -- so every gap between the rail's rows, the empty title bar and
+#: the space around the cards was a hole straight through to another program.
+GLASS_FLOOR: tuple[int, int, int, int] = (0, 0, 0, 1)

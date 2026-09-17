@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os.path
 
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -32,6 +32,7 @@ from app.theme import sheet
 from app.theme.tokens import (
     ACCENT_LABELS,
     DENSITY_LABELS,
+    GLASS_FLOOR,
     THEME_LABELS,
 )
 from app.ui import dialogs, winframe
@@ -1662,6 +1663,20 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showMaximized()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        """On glass, a floor that is almost but not quite transparent.
+
+        See `GLASS_FLOOR`: without it a click on any part of the window that
+        nothing had painted went to the program behind. Children paint on top
+        of this, so it shows only where they leave the backdrop bare.
+        """
+        if self._backdrop == "glass" and self._frame_kind == "custom":
+            painter = QPainter(self)
+            painter.setCompositionMode(QPainter.CompositionMode_Source)
+            painter.fillRect(event.rect(), QColor(*GLASS_FLOOR))
+            painter.end()
+        super().paintEvent(event)
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().showEvent(event)

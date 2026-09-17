@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.4]
+
+### Fixed
+- **Clicks went through the window to the program behind it.** With the glass
+  backdrop, anything the window left unpainted -- the gaps between the rail's
+  rows, a row before its hover highlight was drawn, the empty title bar -- was
+  fully transparent, and Windows sends a click on a fully transparent pixel to
+  whatever is underneath. The window now paints a floor that cannot be seen
+  but is not empty.
+- **The rail was slow to respond to a click.** Moving the highlight to the row
+  just chosen rebuilt the whole column, every icon included; it now only moves
+  the highlight.
+
 ## [0.29.3]
 
 ### Fixed

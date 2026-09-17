@@ -193,7 +193,39 @@ class NavigationRail(QFrame):
         if wanted == self._current:
             return
         self._current = wanted
-        self.rebuild()
+        self._mark_current()
+
+    def _mark_current(self) -> None:
+        """Move the current mark without building the column again.
+
+        This used to be `rebuild`, on every navigation -- including the one a
+        click on this rail starts. Every row was destroyed under the pointer
+        and made again with its icon drawn afresh, which is the delay between
+        the click and the highlight, and for that moment the rail was a column
+        with nothing painted in it.
+        """
+        for index in range(self._column.count()):
+            widget = self._column.itemAt(index).widget()
+            if isinstance(widget, DriveRow):
+                current = widget.letter.lower() == self._current[:2]
+            elif isinstance(widget, QPushButton) and widget.property("target"):
+                target = str(widget.property("target"))
+                current = target.rstrip("\\").lower() == self._current
+                glyph = str(widget.property("glyph") or "")
+                if glyph and self._tokens:
+                    colour = self._tokens.get("accent_text" if current else "txt_2", "")
+                    widget.setIcon(glyphs.icon(
+                        glyph, colour=colour, muted=self._tokens.get("txt_2", ""),
+                        ratio=float(self.devicePixelRatioF() or 1.0)))
+            else:
+                continue
+            state = "current" if current else ""
+            if (widget.property("state") or "") == state:
+                continue
+            widget.setProperty("state", state)
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+            widget.update()
 
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         """The colours the meters are painted from.
@@ -329,6 +361,7 @@ class NavigationRail(QFrame):
         # text or its tooltip: the text is elided and the tooltip has a
         # shortcut on the end of it, and both would be the wrong string.
         button.setProperty("target", path)
+        button.setProperty("glyph", glyph)
         button.setFocusPolicy(Qt.NoFocus)
         button.setToolTip(tip or path)
         button.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
@@ -569,6 +602,10 @@ class DriveRow(QWidget):
         self.setToolTip(self._tip())
 
     # ------------------------------------------------------------- geometry
+
+    @property
+    def letter(self) -> str:
+        return self._letter
 
     @property
     def path(self) -> str:
