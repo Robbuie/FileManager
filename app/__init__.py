@@ -5,4 +5,4 @@ and takes input, `core` holds state, `io` owns every real filesystem call and
 runs it in a separate process. See CLAUDE.md before adding to any of them.
 """
 
-__version__ = "0.29.2"
+__version__ = "0.29.3"

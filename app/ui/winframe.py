@@ -252,7 +252,16 @@ class NativeFrame:
         if kind in (WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK) and msg.wParam == HTMAXBUTTON:
             return True, 0
         if kind == WM_NCLBUTTONUP and msg.wParam == HTMAXBUTTON:
-            self._window.toggle_maximized()
+            # Deferred, never done here. Maximising sends this same window a
+            # fresh round of WM_NCCALCSIZE, WM_NCHITTEST and WM_SIZE while the
+            # button-up is still being answered, and Qt does not survive being
+            # re-entered from inside its own native event handler: on a remote
+            # desktop in 0.29 the window froze on the first click. The timer
+            # runs once this message has returned, which is the same position
+            # double click on the caption and Win+Up are in.
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, self._window.toggle_maximized)
             return True, 0
         return None
 

@@ -5,6 +5,16 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.3]
+
+### Fixed
+- **The maximise button could freeze the window.** Clicking it maximised the
+  window from inside the handler still answering that click, so Windows asked
+  the window about its new frame while it was busy, and on a remote desktop it
+  stopped responding. A frozen window cannot say where its title bar is, so
+  clicks meant for it went to the windows behind. The maximise now happens
+  once the click has been answered.
+
 ## [0.29.2]
 
 ### Fixed
