@@ -32,6 +32,7 @@ import pytest
 from app.core.config import Config
 from app.io import decode
 from app.io.protocol import (
+    FAMILY_HEIF,
     FAMILY_IMAGE,
     FAMILY_RAW,
     FAMILY_SHELL,
@@ -111,7 +112,7 @@ def test_a_folder_never_draws_a_thumbnail():
 
 def test_the_kinds_that_can_draw_are_asked_about():
     for name in ("DSC_4417.jpg", "plan.png", "frame.arw", "walkthrough.mp4",
-                 "brief.docx", "A-101.pdf"):
+                 "brief.docx", "A-101.pdf", "IMG_4417.heic"):
         assert draws_a_thumbnail(entry(name)), name
 
 
@@ -130,6 +131,12 @@ def test_the_family_decides_which_decoder_goes_first():
     # A .dxf is a drawing exchange file that Windows may well have a handler
     # for, and it is still text that somebody opens to read.
     assert preview_family("site.dxf") == FAMILY_TEXT
+    # A .heic was a shell kind until 0.29.11 and is its own family now, which
+    # is what puts libheif in front of the Windows thumbnail handler. Getting
+    # this back to FAMILY_SHELL would work on a machine with the Store's
+    # extensions installed and on no other.
+    assert preview_family("IMG_4417.heic") == FAMILY_HEIF
+    assert preview_family("clip.avif") == FAMILY_HEIF
     assert preview_family("mystery") == FAMILY_UNKNOWN
 
 
@@ -230,6 +237,104 @@ def test_a_pdf_renders_a_page_and_says_how_many_there_are(tmp_path):
     if answer.form is not PreviewForm.IMAGE:
         pytest.skip("this Qt has no PDF image plugin")
     assert answer.pages == 2
+
+
+# ------------------------------------------------------------ heic and heif
+
+
+#: A real HEIC: 4032 x 3024, HEVC-coded, the shape and the codec a phone
+#: writes, and eight kilobytes because the picture is one flat colour. Committed
+#: rather than generated, which is the only binary fixture in this suite and
+#: needs the reason saying: `pi-heif` is a *decoder*, so from 0.29.11 nothing in
+#: the pinned dependencies can write one of these, and a test that skipped
+#: unless somebody happened to have the encoder installed would be a test that
+#: never ran on the configuration that actually ships.
+HEIC = os.path.join(os.path.dirname(__file__), "data", "IMG_4417.heic")
+
+
+def heif_reader():
+    """The installed build of the reader, or a skip.
+
+    `pi-heif` is what `requirements.txt` pins and `pillow-heif` is the same
+    project with an encoder nobody here needs, so the decoder takes either and
+    so does this.
+    """
+    from importlib import import_module
+
+    for module in ("pi_heif", "pillow_heif"):
+        try:
+            return import_module(module)
+        except ImportError:
+            continue
+    pytest.skip("neither pi-heif nor pillow-heif is installed")
+
+
+def test_a_heic_decodes_here_rather_than_being_asked_about():
+    """The reason the dependency is in the installer. `allow_shell=False` is
+    what makes the assertion mean something: this is a machine with no Windows
+    thumbnail handler at all, which is also the state of a Windows machine
+    whose owner has not bought HEVC Video Extensions."""
+    heif_reader()
+    answer = decode.preview(HEIC, box=240, deadline=soon(), allow_shell=False)
+    assert answer.form is PreviewForm.IMAGE
+    assert answer.source == "heif"
+    assert (answer.width, answer.height) == (4032, 3024)
+    # Scaled before the boundary, the same as every other rung. libheif has no
+    # scale-during-decode call, so this is the resize that has to be there.
+    assert answer.shown == 240
+    assert len(answer.image) < 64 * 1024
+
+
+def test_a_portrait_picture_is_not_described_as_landscape(tmp_path):
+    """AVIF rather than HEIC only because Pillow can write one: it is the same
+    container, the same rung and the same arithmetic, and writing the picture
+    here is what lets the shape be part of the test rather than of a file."""
+    heif_reader()
+    from PIL import Image
+
+    path = str(tmp_path / "IMG_4418.avif")
+    try:
+        Image.new("RGB", (3024, 4032), (200, 90, 40)).save(path, quality=50)
+    except (KeyError, OSError, ValueError):     # pragma: no cover
+        pytest.skip("this Pillow cannot write AVIF")
+    answer = decode.preview(path, box=240, deadline=soon(), allow_shell=False)
+    assert answer.source == "heif"
+    assert (answer.width, answer.height) == (3024, 4032)
+
+
+def test_a_picture_nothing_can_draw_says_so_instead_of_hexing_it(tmp_path):
+    """The floor is off for the picture families. Four kilobytes of hex under a
+    name ending `.heic` reads as the application not knowing what a photograph
+    is, which is what it looked like before there was a rung that could read
+    one -- and the sentence names the machine, because a missing codec and a
+    damaged file are worth telling apart."""
+    broken = tmp_path / "IMG_4419.heic"
+    broken.write_bytes(bytes(range(256)) * 60)
+    answer = decode.preview(str(broken), box=240, deadline=soon(),
+                            allow_shell=False)
+    assert answer.form is PreviewForm.NONE
+    assert "picture" in answer.note
+
+
+def test_the_hex_floor_is_only_off_for_the_picture_families(tmp_path):
+    """Everything else still ends in hex, which is the floor that makes "no
+    preview available" not an outcome. An archive is a file somebody might well
+    want the first bytes of."""
+    archive = tmp_path / "drawings.zip"
+    archive.write_bytes(b"PK\x03\x04" + bytes(range(256)) * 16)
+    answer = decode.preview(str(archive), box=240, deadline=soon(),
+                            allow_shell=False)
+    assert answer.form is PreviewForm.HEX
+
+
+def test_text_still_comes_back_under_a_picture_name(tmp_path):
+    """Only the hex floor is withheld from the picture families, not the text
+    rung above it: a `.heic` that is really an error page is still readable."""
+    lying = tmp_path / "IMG_4420.heic"
+    lying.write_text("<html>404 not found</html>\n" * 20, encoding="utf-8")
+    answer = decode.preview(str(lying), box=240, deadline=soon(),
+                            allow_shell=False)
+    assert answer.form is PreviewForm.TEXT
 
 
 # -------------------------------------------------------- text and encodings

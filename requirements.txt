@@ -1,2 +1,10 @@
 PySide6>=6.7
 pywin32>=306
+# HEIC, HEIF and AVIF. libheif rather than Windows, because drawing a .heic
+# there needs two packages out of the Store and one of them costs money -- see
+# `_heif` in app/io/decode.py. `pi-heif` rather than `pillow-heif` because it
+# is the same project without the x265 encoder, which is 22 MB of an
+# application that only ever reads these. Pillow is its dependency and is what
+# reads AVIF from 11.3 on.
+pillow>=11.3
+pi-heif>=0.16

@@ -174,7 +174,9 @@ DEFAULTS: dict[str, Any] = {
     # a slider.
     "preview.thumb_size": 128,
     # Whether Windows is asked for a thumbnail of the kinds this application
-    # cannot decode itself -- video frames, Office documents, .heic, .psd.
+    # cannot decode itself -- video frames, Office documents, .psd. Not .heic
+    # since 0.29.11: libheif reads those here, above this rung, so turning this
+    # off no longer costs a folder of photographs off a phone.
     # This is the switch that turns off the one rung of the decoder that runs
     # somebody else's code, for the reason `icons.overlays` is a switch: a
     # misbehaving handler should cost the pictures and nothing else.

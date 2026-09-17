@@ -40,6 +40,7 @@ from app.io.protocol import (
     ICON_FOLDER,
     LIST_FILE,
     MAX_LIST_PATHS,
+    PICTURE_FAMILIES,
     PREVIEW_TEXT_BYTES,
     Entry,
     Op,
@@ -1032,7 +1033,7 @@ def _thumbnails(request: Request, outbox: Any) -> None:
             return
         if any(ch in name for ch in _SEPARATORS):
             continue
-        if preview_family(name) not in ("image", "raw", "shell"):
+        if preview_family(name) not in PICTURE_FAMILIES:
             # The caller's bound, restated. Text is not a thumbnail: ninety
             # cells of grey lines at 128 pixels are ninety identical squares,
             # and the icon for the kind says more in less space.

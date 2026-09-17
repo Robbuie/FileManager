@@ -19,15 +19,25 @@ The ladder, in order, with what each rung is for:
      is a scan for two byte markers and then rung 1 again. Demosaicing the
      sensor data would mean a package in the installer and several seconds a
      frame, for a picture marginally different from the one the camera made.
-  3. **Whatever Windows has a handler for**, through `IShellItemImageFactory`.
-     Video frames, Office documents, `.psd`, `.heic`, DWG with the right
-     viewer installed -- somebody else's decoder, already on the machine. This
-     is the rung that makes the feature cover the user's actual folders, and it
-     is the only rung that runs third-party code.
-  4. **Text, with the encoding worked out** rather than assumed.
-  5. **Hex**, which cannot fail and is therefore the floor. A file that reaches
-     here is still *shown*; "no preview available" is not an outcome this
-     module produces for a file it could open.
+  3. **HEIF, HEIC and AVIF, through libheif.** The one rung with a dependency
+     behind it, and the only picture format where Windows cannot be relied on:
+     drawing a `.heic` there needs two packages out of the Store, one of which
+     costs money, so what a phone writes fell all the way to rung 5 on a
+     machine that had never bought them. `pi-heif` bundles libheif, ships in
+     the installer, and answers the same on every machine, offline.
+  4. **Whatever Windows has a handler for**, through `IShellItemImageFactory`.
+     Video frames, Office documents, `.psd`, DWG with the right viewer
+     installed -- somebody else's decoder, already on the machine. This is the
+     rung that makes the feature cover the user's actual folders, and it is
+     the only rung that runs third-party code.
+  5. **Text, with the encoding worked out** rather than assumed.
+  6. **Hex**, which cannot fail and is therefore the floor for a file nobody
+     can identify. A file that reaches here is still *shown*; "no preview
+     available" is not an outcome this module produces for a file it could
+     open -- with one exception, added with rung 3 and deliberate: a name that
+     says picture. Four kilobytes of hex under `IMG_4417.heic` reads as the
+     application not knowing what a photograph is, so a picture nothing could
+     draw gets a line saying so instead.
 
 Three things about the shape of it are deliberate.
 
@@ -57,10 +67,12 @@ from __future__ import annotations
 
 import os
 import time
+from functools import partial
 from typing import Any
 
 from app.io import paths
 from app.io.protocol import (
+    FAMILY_HEIF,
     FAMILY_IMAGE,
     FAMILY_PAGES,
     FAMILY_RAW,
@@ -92,6 +104,15 @@ MAX_DECODE_BYTES = 320 * 1024 * 1024
 #: at a time: one 200 MB frame is a decision somebody made by opening it, and
 #: ninety of them is a decision somebody made by pressing a view key.
 MAX_THUMBNAIL_BYTES = 96 * 1024 * 1024
+
+#: Families whose name already promises a picture, and which therefore end in
+#: a sentence rather than in the hex view when every decoder has failed. The
+#: distinction is not tidiness: a `.zip` or a `.docx` that nothing could draw
+#: is still a file somebody might want the first bytes of, and a `.heic` that
+#: nothing could draw is a photograph the application is failing to show.
+#: Rungs 5 and 6 still run for these -- a `.png` that is really an error page
+#: is still shown as the error page -- it is only the hex floor that is off.
+DRAWS_OR_NOTHING = (FAMILY_IMAGE, FAMILY_RAW, FAMILY_HEIF)
 
 #: The byte markers around a JPEG. `\xff\xd8\xff` starts one -- the third byte
 #: is part of the first marker segment and is included because a bare two-byte
@@ -155,8 +176,7 @@ def preview(path: str, *, box: int, deadline: float,
             continue
         if answer is not None:
             return answer
-    return Preview(form=PreviewForm.NONE, size=size,
-                   note="nothing could read this file")
+    return Preview(form=PreviewForm.NONE, size=size, note=_nothing(family))
 
 
 def thumbnail(path: str, size: int, *, deadline: float,
@@ -193,10 +213,21 @@ def _ladder(family: str, *, allow_shell: bool) -> list[Any]:
     what `_bytes` does when it looks at the first kilobyte.
     """
     shell = [_shell] if allow_shell else []
+    # The same rung with its floor taken away for the families in
+    # `DRAWS_OR_NOTHING`. Written as the last entry of every ladder rather than
+    # as a branch inside the rung, so that the ladder stays a list somebody can
+    # read off and the difference is visible where the order is.
+    floor = partial(_bytes, hex_floor=False) if family in DRAWS_OR_NOTHING else _bytes
     if family == FAMILY_RAW:
-        return [_raw, _image, *shell, _bytes]
+        return [_raw, _image, *shell, floor]
     if family == FAMILY_IMAGE:
-        return [_image, *shell, _bytes]
+        return [_image, *shell, floor]
+    if family == FAMILY_HEIF:
+        # libheif before the shell, and before the image plugins as well: Qt
+        # has never read a `.heic` in a wheel this application ships, and the
+        # rung that does not depend on what somebody bought from the Store
+        # should not be the one that runs second.
+        return [_heif, _image, *shell, floor]
     if family == FAMILY_TEXT:
         return [_bytes, _image, *shell]
     if family == FAMILY_SHELL:
@@ -206,7 +237,7 @@ def _ladder(family: str, *, allow_shell: bool) -> list[Any]:
     # somebody saved as `plan.bak` still draws; then the shell, which knows
     # about kinds this list has never heard of; then the bytes, which decide
     # between text and hex by looking.
-    return [_image, *shell, _bytes]
+    return [_image, _heif, *shell, _bytes]
 
 
 def _image(path: str, size: int, box: int, deadline: float,
@@ -262,6 +293,95 @@ def _raw(path: str, size: int, box: int, deadline: float,
         return None
     return _render(head[best[1]:best[1] + best[0]], size, box, source="raw",
                    note="the camera's own preview")
+
+
+def _heif(path: str, size: int, box: int, deadline: float,
+          text_bytes: int, page: int) -> Preview | None:
+    """Rung 3: HEIC, HEIF and AVIF, read here rather than asked about.
+
+    The only rung with a dependency behind it, and the case for one is narrow.
+    A `.heic` is what every iPhone since 2017 writes by default, and Windows
+    draws one only when HEIF Image Extensions *and* HEVC Video Extensions are
+    both installed -- the second is a dollar in the Store and neither is on a
+    fresh machine. So rung 4 answered nothing, rung 1 has never heard of the
+    format in any wheel this application ships, and a folder of photographs off
+    a phone arrived as a hex dump. `pi-heif` bundles libheif and answers
+    offline, identically on every machine, without running anybody's shell
+    code.
+
+    Pillow reads `.avif` on its own, so that half of the family works with the
+    plugin missing. The import failing is not an error here: it drops the rung,
+    the shell below still answers on a machine that does have the extensions,
+    and a checkout made before this dependency existed still runs.
+
+    The cost is honest and is the one difference from rung 1. Qt's JPEG reader
+    scales *during* decompression, so `_render` never has the large version
+    anywhere; libheif has no equivalent call, so a twelve-megapixel photograph
+    is decoded whole -- about fifty megabytes and a fifth of a second -- and
+    scaled afterwards. `MAX_DECODE_BYTES` is therefore checked here, where the
+    image rungs are exempt from it. What has not changed is the rule that
+    matters: the scale still happens before the process boundary, so what
+    crosses is the picture at the size asked for.
+    """
+    del deadline, text_bytes
+    if size > MAX_DECODE_BYTES:
+        return None
+    try:
+        from PIL import Image, ImageOps                        # noqa: PLC0415
+    except ImportError:
+        return None
+    from importlib import import_module                        # noqa: PLC0415
+    from io import BytesIO                                     # noqa: PLC0415
+
+    # Either build of the same project registers the reader, and the order is
+    # the preference: `pi-heif` is pillow-heif without the x265 *encoder*,
+    # which is twenty-two of its twenty-six megabytes of libraries and is dead
+    # weight in an application that never writes a HEIC. The pin asks for the
+    # small one; a checkout that has the large one installed still works.
+    for module in ("pi_heif", "pillow_heif"):
+        try:
+            plugin = import_module(module)
+        except ImportError:
+            continue
+        plugin.register_heif_opener()
+        # Both carried AVIF themselves until 1.0 and dropped it once Pillow
+        # grew its own reader. Registering it where it still exists is what
+        # makes the lower pin in `requirements.txt` mean what it says.
+        register_avif = getattr(plugin, "register_avif_opener", None)
+        if register_avif is not None:
+            register_avif()
+        break
+
+    store = BytesIO()
+    with Image.open(paths.api(path)) as picture:
+        # A live photograph or a burst is several images in one container. The
+        # count is worth reporting for the same reason a PDF's page count is:
+        # the viewer offers keys for it.
+        frames = int(getattr(picture, "n_frames", 1) or 1)
+        if page > 0 and frames > 1:
+            picture.seek(min(page, frames - 1))
+        width, height = picture.size
+        if box > 0 and max(width, height) > box:
+            # `reducing_gap` is what keeps this affordable: Pillow reduces by
+            # an integer factor first and resamples only the last step, which
+            # on a 4032 x 3024 frame is most of the work skipped for a result
+            # nobody can tell apart.
+            picture.thumbnail((box, box), Image.LANCZOS, reducing_gap=2.0)
+        drawn = ImageOps.exif_transpose(picture) or picture
+        if drawn.mode not in ("RGB", "RGBA", "L"):
+            drawn = drawn.convert("RGBA" if "A" in drawn.getbands() else "RGB")
+        drawn.save(store, "PNG")
+        shown = max(drawn.size)
+        # The rotation belongs to the picture, so the dimensions reported have
+        # to follow it -- a portrait photograph described as landscape in the
+        # line under it is the same fault `_render` turns `setAutoTransform`
+        # off to avoid, arriving from the other direction.
+        if width != height and (drawn.width > drawn.height) != (width > height):
+            width, height = height, width
+    return Preview(form=PreviewForm.IMAGE, source="heif", size=size,
+                   image=store.getvalue(), width=width, height=height,
+                   shown=shown, pages=frames if frames > 1 else 0,
+                   note="decoded by libheif")
 
 
 def _render(source_data: Any, size: int, box: int, *, source: str,
@@ -349,14 +469,14 @@ def _render(source_data: Any, size: int, box: int, *, source: str,
 
 def _shell(path: str, size: int, box: int, deadline: float,
            text_bytes: int, page: int) -> Preview | None:
-    """Rung 3: whatever Windows already knows how to draw.
+    """Rung 4: whatever Windows already knows how to draw.
 
     `IShellItemImageFactory` is the modern shell thumbnail path: it asks
     whichever `IThumbnailProvider` is registered for the kind, falls back to the
     file's own icon if there is none, and is what Explorer's own grid uses. It
     is the rung that makes this feature cover the folders somebody actually
-    has -- a folder of `.mp4` or `.docx` or `.heic` is nothing to rungs 1 and 2
-    and a wall of real pictures to this one.
+    has -- a folder of `.mp4` or `.docx` or `.psd` is nothing to the rungs
+    above it and a wall of real pictures to this one.
 
     Two flags carry the whole of its behaviour and both matter.
     `SIIGBF_THUMBNAILONLY` refuses to be handed the icon for the kind: an icon
@@ -411,8 +531,9 @@ def _shell(path: str, size: int, box: int, deadline: float,
 
 
 def _bytes(path: str, size: int, box: int, deadline: float,
-           text_bytes: int, page: int) -> Preview | None:
-    """Rungs 4 and 5: the file as text if it is text, and as hex if it is not.
+           text_bytes: int, page: int, *,
+           hex_floor: bool = True) -> Preview | None:
+    """Rungs 5 and 6: the file as text if it is text, and as hex if it is not.
 
     One function for both because they are one read. The first bytes decide
     which it is, and the decision is made by looking rather than by the name --
@@ -420,7 +541,10 @@ def _bytes(path: str, size: int, box: int, deadline: float,
     `.bin` that is really a config file come back as readable.
 
     Never returns None on a file it could open, which is what makes it the
-    floor of the ladder: there is no file that opens and has no preview.
+    floor of the ladder: there is no file that opens and has no preview. The
+    exception is `hex_floor=False`, which the picture families pass -- see
+    `DRAWS_OR_NOTHING`. Text still comes back; only the hex view is withheld,
+    and the caller says what it could not draw instead.
     """
     del box, deadline, page
     want = max(text_bytes, PREVIEW_HEX_BYTES)
@@ -429,6 +553,8 @@ def _bytes(path: str, size: int, box: int, deadline: float,
 
     encoding = _bom(head)
     if encoding is None and not _looks_textual(head[:SNIFF_BYTES]):
+        if not hex_floor:
+            return None
         return Preview(form=PreviewForm.HEX, source="hex", size=size,
                        data=head[:PREVIEW_HEX_BYTES])
     if text_bytes <= 0:
@@ -440,6 +566,8 @@ def _bytes(path: str, size: int, box: int, deadline: float,
     text, encoding = _decode(head[:text_bytes], encoding,
                              truncated=size > text_bytes)
     if text is None:
+        if not hex_floor:
+            return None
         return Preview(form=PreviewForm.HEX, source="hex", size=size,
                        data=head[:PREVIEW_HEX_BYTES])
     return Preview(form=PreviewForm.TEXT, source="text", size=size,
@@ -610,6 +738,20 @@ def _suffix(path: str) -> str:
     name = os.path.basename(path)
     stem, dot, suffix = name.rpartition(".")
     return f".{suffix.lower()}" if dot and stem else ""
+
+
+def _nothing(family: str) -> str:
+    """What to say about a file every rung refused.
+
+    Only reached by the families in `DRAWS_OR_NOTHING`, because every other
+    ladder ends in a rung that cannot fail. The wording names the machine on
+    purpose: a `.heic` that will not draw here is a codec that is missing, not
+    a file that is broken, and the difference is what somebody would need to
+    know before going looking at the file itself.
+    """
+    if family in DRAWS_OR_NOTHING:
+        return "no decoder on this machine reads this kind of picture"
+    return "nothing could read this file"
 
 
 def _short(exc: BaseException) -> str:

@@ -42,6 +42,13 @@ icons, or drive enumeration. Everything below follows from this.
   worker processes instead.
 - `pywin32` for real shell context menus and shell icons, avoiding a
   native addon.
+- `pi-heif` (libheif, decode only) for HEIC, HEIF and AVIF. The one decoder
+  that
+  could not be borrowed: Windows draws a `.heic` only with two Store
+  packages installed, one of them paid, so what every phone writes was
+  the one common picture format the previewer could not show. The
+  decode-only build, because the encoder is 22 MB of a library this
+  application only ever reads with.
 - `multiprocessing` for the worker pool — killing and restarting workers
   is trivial.
 - GIL is not a concern: file I/O releases it, and hung shares are handled

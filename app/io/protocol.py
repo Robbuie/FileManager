@@ -687,8 +687,16 @@ FAMILY_IMAGE = "image"
 FAMILY_RAW = "raw"
 FAMILY_PAGES = "pages"
 FAMILY_TEXT = "text"
+FAMILY_HEIF = "heif"
 FAMILY_SHELL = "shell"
 FAMILY_UNKNOWN = ""
+
+#: The families that could come back as a picture. The bound on what the grid
+#: asks about, and the same question the harness and the worker ask before
+#: sending a row to the decoder -- written once here because it was written out
+#: as three bare strings in those two places, and a family added without
+#: touching both of them would have been a kind that quietly never drew.
+PICTURE_FAMILIES = (FAMILY_IMAGE, FAMILY_RAW, FAMILY_HEIF, FAMILY_SHELL)
 
 
 #: What Qt's own image plugins read. Deliberately a written-out list rather
@@ -743,6 +751,18 @@ PREVIEW_TEXT_KINDS = frozenset({
     ".step", ".igs", ".iges", ".dxf", ".plt", ".hpgl", ".ctb", ".pc3",
 })
 
+#: The HEIF container family: what every iPhone since 2017 writes, and what
+#: AV1 puts in the same box. These were in `PREVIEW_SHELL_KINDS` until 0.29.11
+#: and moving them out is the point of the rung that reads them. Windows draws
+#: a `.heic` only when two Store packages are installed -- HEIF Image
+#: Extensions, which is free, and HEVC Video Extensions, which is not -- so on
+#: a machine that has neither, a folder of photographs off a phone reached the
+#: bottom of the ladder and came back as hex. libheif ships in the installer
+#: and answers the same on every machine, without asking anybody.
+PREVIEW_HEIF_KINDS = frozenset({
+    ".heic", ".heics", ".heif", ".heifs", ".hif", ".avif", ".avifs",
+})
+
 #: Kinds worth asking Windows about, because Windows has a handler for them and
 #: this application never will. A frame from a video, the first slide of a
 #: deck, a `.psd` with no sidecar, whatever the camera vendor's codec pack
@@ -759,7 +779,7 @@ PREVIEW_SHELL_KINDS = frozenset({
     ".mpeg", ".m2ts", ".mts", ".ts", ".vob", ".3gp", ".ogv",
     ".docx", ".doc", ".dotx", ".xlsx", ".xls", ".xltx", ".pptx", ".ppt",
     ".potx", ".odt", ".ods", ".odp", ".rtf", ".pub", ".vsdx", ".msg",
-    ".psd", ".psb", ".ai", ".eps", ".indd", ".cdr", ".heic", ".heif", ".avif",
+    ".psd", ".psb", ".ai", ".eps", ".indd", ".cdr",
     ".jxr", ".hdp", ".wdp", ".dwg", ".dwf", ".rvt", ".skp", ".ifc", ".3ds",
     ".stl", ".obj", ".fbx", ".mp3", ".flac", ".m4a", ".wma", ".epub", ".mobi",
     ".xps", ".oxps", ".zip", ".7z", ".rar",
@@ -780,6 +800,10 @@ def preview_family(name: str) -> str:
     draw of it. Raw is checked before the image plugins, because a `.dng` is a
     TIFF as far as Qt is concerned and Qt would hand back the camera's
     thumbnail strip at 160 pixels wide and call it the photograph.
+
+    HEIF is checked before the shell for a third reason of the same shape: both
+    rungs can read a `.heic`, and the one that does not depend on which Store
+    packages somebody bought should go first.
     """
     kind = _suffix(name)
     if not kind:
@@ -790,6 +814,8 @@ def preview_family(name: str) -> str:
         return FAMILY_TEXT
     if kind in PREVIEW_IMAGE_KINDS:
         return FAMILY_IMAGE
+    if kind in PREVIEW_HEIF_KINDS:
+        return FAMILY_HEIF
     if kind in PREVIEW_SHELL_KINDS:
         return FAMILY_SHELL
     return FAMILY_UNKNOWN
@@ -810,7 +836,7 @@ def draws_a_thumbnail(entry: Entry) -> bool:
     """
     if entry.is_dir:
         return False
-    return preview_family(entry.name) in (FAMILY_IMAGE, FAMILY_RAW, FAMILY_SHELL)
+    return preview_family(entry.name) in PICTURE_FAMILIES
 
 
 def _suffix(name: str) -> str:

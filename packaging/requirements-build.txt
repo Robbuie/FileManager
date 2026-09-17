@@ -1,3 +1,6 @@
 # Build-time only. None of this ships inside the installer.
+#
+# Pillow is not in here and is not an oversight: it moved to
+# `requirements.txt` in 0.29.11, because pi-heif needs it at runtime.
+# `packaging/icon.py` uses it too and no longer has to say so.
 pyinstaller>=6.6
-pillow>=10.0        # packaging/icon.py, and only when the icon is regenerated

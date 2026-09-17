@@ -11,6 +11,8 @@
 import os
 import sys
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
 # `SPECPATH` is where this file lives; the application is its parent.
 ROOT = os.path.dirname(SPECPATH)
 sys.path.insert(0, ROOT)
@@ -66,12 +68,25 @@ EXCLUDE_QT = [
 
 # The test tools and the development-only dependencies. A build that quietly
 # picked up pytest would ship it.
-EXCLUDE_DEV = ["pytest", "_pytest", "PIL", "tkinter", "unittest", "pydoc"]
+#
+# PIL came off this list in 0.29.11 and that is the whole of what adding
+# libheif cost the installer: Pillow is pi-heif's dependency, so excluding
+# it would freeze a build whose HEIC rung imports something that is not there,
+# and the failure would be a folder of photographs quietly falling through to
+# the rung below rather than an error anybody would see.
+EXCLUDE_DEV = ["pytest", "_pytest", "tkinter", "unittest", "pydoc"]
 
 analysis = Analysis(
     [os.path.join(SPECPATH, "entry.py")],
     pathex=[ROOT],
-    binaries=[],
+    # libheif and its decoders, which pi-heif ships beside its extension
+    # module. Both names are asked for because `decode.py` takes either build,
+    # and a name that is not installed answers with an empty list -- which is
+    # also the answer on a wheel that links its libraries statically, the usual
+    # shape on Windows. A missing decoder here would show up only as HEIC files
+    # that stopped drawing once frozen, so both are cheap insurance.
+    binaries=(collect_dynamic_libs("pi_heif")
+              + collect_dynamic_libs("pillow_heif")),
     datas=[],
     # win32api and friends are imported through `app/io/paths.py` behind a
     # try/except so the tests can run off Windows, and an import PyInstaller
@@ -79,6 +94,9 @@ analysis = Analysis(
     hiddenimports=[
         "win32api", "win32file", "win32wnet", "win32com.shell.shell",
         "win32com.shell.shellcon", "pywintypes", "pythoncom",
+        # Imported inside `_heif` rather than at module level, for the reason
+        # every import in `decode.py` is, so PyInstaller cannot see them.
+        "pi_heif", "pillow_heif", "PIL.Image", "PIL.ImageOps",
     ],
     hookspath=[],
     runtime_hooks=[],

@@ -34,6 +34,7 @@ from app.io.pool import WorkerPool
 from app.io.protocol import (
     MENU_SEPARATOR,
     MENU_SUBMENU,
+    PICTURE_FAMILIES,
     PREVIEW_BOX,
     PREVIEW_TEXT_BYTES,
     Entry,
@@ -715,10 +716,11 @@ def cmd_preview(args: argparse.Namespace) -> int:
     and the numbers worth watching are the last three.
 
     **Which rung answered** (`source`) is the first thing to read: `qt` means
-    Qt's own plugins, `raw` the JPEG inside a camera file, `shell` a thumbnail
-    provider Windows already had, `text` and `hex` the floor. A `.heic` that
-    comes back `hex` is a missing codec pack on this machine rather than a
-    fault here, and this line is how the two are told apart.
+    Qt's own plugins, `raw` the JPEG inside a camera file, `heif` libheif,
+    `shell` a thumbnail provider Windows already had, `text` and `hex` the
+    floor. A `.heic` that comes back anything but `heif` is pi-heif missing
+    from this environment rather than a fault in the file, and this line is how
+    the two are told apart.
 
     **`decoded` against `natural`** is what the scaling is for. A 6,000 pixel
     photograph asked for at 400 must report `natural 6000x4000` and `decoded
@@ -807,7 +809,7 @@ def cmd_thumbnails(args: argparse.Namespace) -> int:
         _report_outcome(args.path, listing)
         names = listing.names[: args.rows]
         wanted = [name for name in names
-                  if preview_family(name) in ("image", "raw", "shell")]
+                  if preview_family(name) in PICTURE_FAMILIES]
         _report("rows read", len(names))
         _report("thumbnails", f"{len(wanted)} of {len(names)} rows could draw one")
         if not wanted:

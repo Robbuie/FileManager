@@ -5,6 +5,33 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.11]
+
+### Added
+- **HEIC, HEIF and AVIF are decoded here rather than asked about.** What a
+  phone writes was the one common picture format the previewer could not show:
+  Windows draws a `.heic` only when HEIF Image Extensions and HEVC Video
+  Extensions are both installed -- the second costs a dollar in the Store and
+  neither is on a fresh machine -- so the thumbnail rung answered nothing, Qt
+  has never read the format, and the file fell to the bottom of the ladder and
+  came back as a hex dump. `pi-heif` now ships in the installer and reads them
+  with libheif, offline and the same on every machine. It runs before the
+  Windows rung, so it answers whether or not those extensions are installed,
+  and it covers the viewer, the preview pane and the thumbnail grid together.
+- **A picture nothing could draw says so.** Four kilobytes of hex under a name
+  ending `.heic` or `.cr2` reads as the application not knowing what a
+  photograph is. Those now end in a line naming the reason -- no decoder on
+  this machine -- which also tells a missing codec apart from a damaged file.
+  Hex is still the floor for everything else, and a `.png` that turns out to
+  be an error page is still shown as the error page.
+
+### Changed
+- **Two new dependencies, `pi-heif` and its Pillow.** Pillow was already a
+  build-time dependency for the icon; it now ships. `pi-heif` is `pillow-heif`
+  without the x265 encoder -- 4 MB of libraries rather than 26 -- because this
+  application reads HEIC files and will never write one. Either build
+  satisfies the decoder if one is already installed.
+
 ## [0.29.10]
 
 ### Fixed
