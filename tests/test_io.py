@@ -271,7 +271,10 @@ def test_drives_answers_without_touching_a_volume(pool, tmp_path):
     assert reply.status is Status.OK
     assert isinstance(reply.payload, list)
     for drive in reply.payload:
-        assert set(drive) == {"letter", "type", "unc"}
+        # 0.27 added `ejectable`. Off Windows the list is empty, which is why
+        # this only failed on the release build's Windows runner.
+        assert set(drive) == {"letter", "type", "unc", "ejectable"}
+        assert isinstance(drive["ejectable"], bool)
 
 
 @pytest.mark.skipif(hasattr(os, "startfile"), reason="Windows opens the file for real")

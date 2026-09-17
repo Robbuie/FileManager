@@ -5,6 +5,12 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.1]
+
+### Fixed
+- The release build's test run failed on Windows: a drive-list test still
+  expected the fields from before USB eject. No change to the application.
+
 ## [0.29.0]
 
 ### Changed
