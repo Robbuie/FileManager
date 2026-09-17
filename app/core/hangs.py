@@ -59,6 +59,15 @@ STALL_SECONDS = 5.0
 #: How often the timer re-arms the dump.
 BEAT_MS = 1000
 
+#: A turn of the event loop slower than this is written down as a line, with
+#: no stacks. 0.29.8, and the reason is the freeze that produced no record at
+#: all: a window can finish every repaint and still be unusable if each one
+#: takes most of a second, which is what a translucent window at full size
+#: costs over a remote connection. Nothing stalls, so nothing was dumped, and
+#: the log's silence was itself the finding. Well above the frame budget, so
+#: an ordinary busy moment is not an entry.
+LATE_SECONDS = 0.75
+
 #: Past this size the log is started again rather than appended to. A freeze
 #: of several minutes is a few hundred kilobytes of stacks.
 MAX_BYTES = 2 * 1024 * 1024
@@ -98,6 +107,8 @@ class HangRecorder(QObject):
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
         self._hung_at = 0.0
+        self._late = LATE_SECONDS
+        self._slow = 0
 
     @property
     def active(self) -> bool:
@@ -120,7 +131,8 @@ class HangRecorder(QObject):
             self._file = open(self.path, mode, encoding="utf-8")
             self._write(f"\n---- {_now()}  File Manager {self._version} started, "
                         f"pid {os.getpid()}; stacks follow any stall over "
-                        f"{self._stall:g} s\n")
+                        f"{self._stall:g} s, and a line any turn of the event "
+                        f"loop over {self._late:g} s\n")
         except OSError:
             self._file = None
             return
@@ -135,9 +147,16 @@ class HangRecorder(QObject):
         if self._file is None:
             return
         now = time.monotonic()
-        if self._last and now - self._last > self._stall:
+        gap = now - self._last if self._last else 0.0
+        if gap > self._stall:
             self._write(f"---- {_now()}  the window answered again after "
-                        f"{now - self._last:.1f} s\n")
+                        f"{gap:.1f} s\n")
+        elif gap > self._late:
+            # Not a stall and not nothing: the loop is turning, so no stack
+            # would say anything, and the window is still too slow to use.
+            self._slow += 1
+            self._write(f"{_now()}  slow: one turn of the event loop took "
+                        f"{gap:.2f} s ({self._slow} so far)\n")
         self._last = now
         try:
             faulthandler.dump_traceback_later(self._stall, repeat=True,

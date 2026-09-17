@@ -5,6 +5,15 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.8]
+
+### Added
+- **Slow is recorded as well as stuck.** A window that finishes every repaint
+  but takes most of a second over each one is unusable and stalls nothing, so
+  the 0.29.6 record stayed empty while the window was plainly not working.
+  Any turn of the event loop over three quarters of a second is now a line in
+  `hangs.log` saying how long it took.
+
 ## [0.29.7]
 
 ### Fixed
