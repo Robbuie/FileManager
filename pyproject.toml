@@ -1,6 +1,6 @@
 [project]
 name = "filemanager"
-version = "0.29.4"
+version = "0.29.5"
 description = "Windows dual-pane file manager"
 requires-python = ">=3.11"
 dependencies = [

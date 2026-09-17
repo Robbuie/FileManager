@@ -64,6 +64,11 @@ def main() -> int:
     app.setApplicationName("File Manager")
 
     config = Config.load()
+    # First, before anything that could freeze. See `app/core/hangs.py`.
+    from app.core.hangs import HangRecorder, default_path as hangs_path
+
+    hangs = HangRecorder(hangs_path(config.path), version=__version__)
+    hangs.start()
     # Before the sheet and before the window: a translucent window has to be
     # made translucent, and the sheet has to know whether to paint the
     # backdrop at all.
@@ -171,6 +176,7 @@ def main() -> int:
     try:
         return app.exec()
     finally:
+        hangs.stop()
         transfers.shutdown()
         pool.shutdown()
         updates.install_staged()

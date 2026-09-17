@@ -327,6 +327,11 @@ class Config:
         self._values = dict(values or {})
         self._path = path or self.default_path()
 
+    @property
+    def path(self) -> str:
+        """Where this configuration is read from and saved to."""
+        return self._path
+
     @staticmethod
     def default_path() -> str:
         base = os.environ.get("APPDATA") or os.path.join(_home(), ".config")

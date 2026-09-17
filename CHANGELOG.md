@@ -5,6 +5,16 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.5]
+
+### Added
+- **A record of freezes.** When the window stops answering for more than five
+  seconds, the stack of every thread in it is written to `hangs.log` beside
+  the settings (`%APPDATA%\FileManager`),
+  and again every five seconds until it recovers or is ended. Nothing is
+  written while the window is responding. This is how the freezes reported
+  on opening a server folder and while previewing `.heic` files will be found.
+
 ## [0.29.4]
 
 ### Fixed
