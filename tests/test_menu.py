@@ -15,6 +15,8 @@ side:
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from app.io import menu as host
@@ -831,3 +833,57 @@ def test_a_grown_menu_is_sized_to_everything_in_it() -> None:
     assert geometry.bottom() < menu.height()
     assert geometry.right() < menu.width()
     menu.deleteLater()
+
+
+# ------------------------------------------------ a window the command opens
+
+
+def test_the_host_runs_its_message_loop_while_it_waits(monkeypatch):
+    """Properties is opened on a thread of the shell's own, which calls back
+    into this thread. A host asleep in a blocking `get` answers none of those
+    calls, and the sheet waits on them before it draws.
+    """
+    pumped = []
+
+    class Pythoncom:
+        @staticmethod
+        def PumpWaitingMessages():
+            pumped.append(1)
+
+    import queue as queue_module
+    inbox = queue_module.Queue()
+    monkeypatch.setattr(host, "pythoncom", Pythoncom)
+    monkeypatch.setattr(host, "PUMP_INTERVAL", 0.01)
+    monkeypatch.setattr(host, "_own_windows", lambda: set())
+
+    import threading
+    threading.Timer(0.05, lambda: inbox.put("request")).start()
+    assert host._next(inbox, {"com": True, "watch": None}) == "request"
+    assert len(pumped) >= 2
+
+
+def test_before_any_shell_work_the_host_just_waits(monkeypatch):
+    import queue as queue_module
+    inbox = queue_module.Queue()
+    inbox.put("request")
+    monkeypatch.setattr(host, "pythoncom", None)
+    assert host._next(inbox, {"com": False}) == "request"
+
+
+def test_the_window_a_command_opens_is_put_in_front(monkeypatch):
+    fronted = []
+    monkeypatch.setattr(host, "_own_windows", lambda: {7, 11, 99})
+    monkeypatch.setattr(host, "_foreground", fronted.append)
+    state = {"hwnd": 99, "watch": (time.monotonic() + 5, {7})}
+    host._watch(state)
+    assert fronted == [11]
+    assert state["watch"] is None
+
+
+def test_a_command_that_opens_nothing_stops_being_watched(monkeypatch):
+    fronted = []
+    monkeypatch.setattr(host, "_own_windows", lambda: {7})
+    monkeypatch.setattr(host, "_foreground", fronted.append)
+    state = {"hwnd": 0, "watch": (time.monotonic() - 1, {7})}
+    host._watch(state)
+    assert fronted == [] and state["watch"] is None

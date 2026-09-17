@@ -5,6 +5,16 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.2]
+
+### Fixed
+- **Properties from the right-click menu** took a long time to appear and then
+  opened behind the window. The shell host slept between requests without
+  running its message loop, and the Properties sheet waits on that loop before
+  it draws; the host now runs it while it waits. The window also hands the
+  host the right to come to the front just before a command runs, and the
+  host brings forward the first window the command opens.
+
 ## [0.29.1]
 
 ### Fixed

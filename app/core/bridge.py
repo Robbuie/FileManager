@@ -78,6 +78,10 @@ class Bridge(QObject):
         """
         self._pool.retry_host()
 
+    def host_pid(self) -> int | None:
+        """The shell host's process id, if it is running."""
+        return self._pool.host_pid()
+
     def _deliver(self, reply: Reply) -> None:
         handler = (self._handlers.pop(reply.id, None)
                    if reply.status in _SETTLED else self._handlers.get(reply.id))

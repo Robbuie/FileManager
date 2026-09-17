@@ -22,6 +22,7 @@ menu that is briefly shorter rather than a dialog that vanishes.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from PySide6.QtCore import QObject, Signal
@@ -99,6 +100,7 @@ class ShellMenu(QObject):
             else:
                 self.problem.emit(reply.message or "the command did not run")
 
+        _lend_foreground(self._bridge)
         self._bridge.submit(
             Op.MENU_INVOKE, folder,
             # Long, and deliberately: what this waits for is a person reading
@@ -146,6 +148,28 @@ class ShellMenu(QObject):
             return
         self._token = int(payload.get("token") or reply.id)
         self.ready.emit(self._token, list(payload.get("items") or ()))
+
+
+def _lend_foreground(bridge: Any) -> None:
+    """Let the shell host put the window a command opens in front of this one.
+
+    Windows only lets the foreground process choose who is in front next, and
+    the host is never the foreground process: without this, Properties and
+    every other dialog a verb opens appeared behind the application. The grant
+    has to come from here, the process that has the foreground at the moment
+    somebody clicks. A window-manager call, not a filesystem one.
+    """
+    if sys.platform != "win32":
+        return
+    pid_of = getattr(bridge, "host_pid", None)
+    pid = pid_of() if callable(pid_of) else None
+    if not pid:
+        return
+    try:
+        import ctypes
+        ctypes.windll.user32.AllowSetForegroundWindow(int(pid))
+    except Exception:  # noqa: BLE001 - a dialog behind is worse, not broken
+        pass
 
 
 def _explain(reply: Reply) -> str:

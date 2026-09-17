@@ -56,6 +56,7 @@ try:
     import win32con
     import win32gui
     import win32gui_struct
+    import win32process
     import win32ui
     from win32com.shell import shell as win32shell, shellcon
 except Exception:  # noqa: BLE001 - reported in the reply, never raised at import
@@ -64,6 +65,7 @@ except Exception:  # noqa: BLE001 - reported in the reply, never raised at impor
     win32con = None
     win32gui = None
     win32gui_struct = None
+    win32process = None
     win32ui = None
     win32shell = None
     shellcon = None
@@ -112,10 +114,10 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
     except (ValueError, OSError):
         pass
 
-    state: dict[str, Any] = {"live": None, "hwnd": 0, "com": False}
+    state: dict[str, Any] = {"live": None, "hwnd": 0, "com": False, "watch": None}
     while True:
         try:
-            request = inbox.get()
+            request = _next(inbox, state)
         except (EOFError, OSError):
             return
         except KeyboardInterrupt:
@@ -128,6 +130,43 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
             _handle(request, outbox, state)
         except Exception as exc:  # noqa: BLE001 - see the docstring
             outbox.put(Reply(request.id, Status.ERROR, message=_describe(exc)))
+
+
+#: How often the host looks up from its inbox to run its message loop, once it
+#: has done any shell work. Twenty times a second is nothing to a process that
+#: is otherwise asleep, and fast enough that a dialog waiting on it does not
+#: visibly wait.
+PUMP_INTERVAL = 0.05
+
+#: How long after an invoke the host keeps looking for a window the command
+#: opened, to bring it to the front. Properties on a file on a slow share can
+#: take a few seconds to build its pages.
+WATCH_SECONDS = 20.0
+
+
+def _next(inbox: Any, state: dict[str, Any]) -> Any:
+    """The next request, running this thread's message loop while waiting.
+
+    A blocking `get` was the original shape, and it is why Properties took so
+    long to appear. The shell opens that sheet on a thread of its own, and
+    that thread calls back into the objects this thread created -- which, in
+    a single-threaded apartment, is a message posted to this thread. A thread
+    asleep in `inbox.get()` reads no messages, so the sheet sat waiting for a
+    COM call to time out before it drew anything. Before COM has been started
+    there is nothing to pump, and the plain blocking `get` is kept.
+    """
+    if not state.get("com") or pythoncom is None:
+        return inbox.get()
+    while True:
+        try:
+            pythoncom.PumpWaitingMessages()
+        except Exception:  # noqa: BLE001 - a loop with nothing in it is fine
+            pass
+        _watch(state)
+        try:
+            return inbox.get(timeout=PUMP_INTERVAL)
+        except queue.Empty:
+            continue
 
 
 def _handle(request: Request, outbox: Any, state: dict[str, Any]) -> None:
@@ -455,6 +494,7 @@ def _invoke(request: Request, outbox: Any, state: dict[str, Any]) -> None:
         # in which case the dialog is still there and still works -- it
         # announces itself in the taskbar instead of appearing on top.
         _foreground(hwnd)
+        before = _own_windows()
         live.menu.InvokeCommand((
             0,                      # fMask
             hwnd,
@@ -472,6 +512,10 @@ def _invoke(request: Request, outbox: Any, state: dict[str, Any]) -> None:
         return
 
     _release(state)
+    # Several verbs -- Properties above all -- return at once and open their
+    # window a moment later on another thread. That window is looked for while
+    # the host waits for its next request, and put in front when it appears.
+    state["watch"] = (time.monotonic() + WATCH_SECONDS, before)
     # Whether the folder now needs re-listing is not knowable from here: the
     # shell does not say what a verb did. The window re-lists on any invoke
     # that could have changed something, which is every one of them.
@@ -556,6 +600,54 @@ def _owner_window(state: dict[str, Any]) -> int:
         hwnd = 0
     state["hwnd"] = hwnd
     return hwnd
+
+
+def _own_windows() -> set[int]:
+    """The visible top-level windows this process owns right now."""
+    if win32gui is None or win32api is None or win32process is None:
+        return set()
+    pid = win32api.GetCurrentProcessId()
+    found: set[int] = set()
+
+    def collect(hwnd: int, _extra: Any) -> bool:
+        try:
+            if win32gui.IsWindowVisible(hwnd):
+                if win32process.GetWindowThreadProcessId(hwnd)[1] == pid:
+                    found.add(hwnd)
+        except Exception:  # noqa: BLE001 - a window that went away meanwhile
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(collect, None)
+    except Exception:  # noqa: BLE001
+        pass
+    return found
+
+
+def _watch(state: dict[str, Any]) -> None:
+    """Bring forward the first window an invoked command opened, if any.
+
+    Without this a Properties sheet opened behind the application: the host
+    is not the foreground process, and Windows puts a window from a
+    background process behind the one being used. The window process grants
+    this one the right to take the foreground just before it asks for the
+    invoke (`AllowSetForegroundWindow`), and this is where it is used.
+    """
+    watch = state.get("watch")
+    if not watch:
+        return
+    deadline, before = watch
+    if time.monotonic() > deadline:
+        state["watch"] = None
+        return
+    fresh = _own_windows() - set(before) - {int(state.get("hwnd") or 0)}
+    if not fresh:
+        return
+    state["watch"] = None
+    for hwnd in fresh:
+        _foreground(hwnd)
+        break
 
 
 def _foreground(hwnd: int) -> None:

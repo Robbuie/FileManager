@@ -240,6 +240,19 @@ class WorkerPool:
         with self._lock:
             self._restarts.pop(MENU_HOST, None)
 
+    def host_pid(self) -> int | None:
+        """The shell host's process id, or None when there is not one running.
+
+        The window needs it to hand the host the right to put a dialog in
+        front; see `core.menu`.
+        """
+        with self._lock:
+            target = self._workers.get(MENU_HOST)
+            process = target.process if target is not None else None
+            if process is None or not process.is_alive():
+                return None
+            return getattr(process, "pid", None)
+
     def status(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             return {
