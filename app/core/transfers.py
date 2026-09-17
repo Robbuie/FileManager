@@ -21,7 +21,9 @@ process is still the authority: if the two ever disagree, the event wins.
 
 from __future__ import annotations
 
+import ntpath
 import os.path
+import time
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -90,6 +92,29 @@ class JobState:
     #: offer made about a file that has simply gone would be a consent prompt
     #: that could not have helped.
     denied: list[str] = field(default_factory=list)
+    #: 0.29: the file being written, as far as it has got, for the row that is
+    #: filling up in the pane. And the names already written, so a finished
+    #: row reads as finished rather than empty.
+    item_done: int = 0
+    item_total: int = 0
+    finished_names: set[str] = field(default_factory=set)
+    #: `(monotonic seconds, bytes done)`, the last few seconds of them, for the
+    #: speed; and one speed per second for the pill's sparkline.
+    samples: list[tuple[float, int]] = field(default_factory=list)
+    speeds: list[float] = field(default_factory=list)
+    spark_at: float = 0.0
+
+    @property
+    def speed(self) -> float:
+        """Bytes a second over the last few seconds, or 0 when not known."""
+        return speed(self.samples)
+
+    @property
+    def remaining_seconds(self) -> float | None:
+        rate = self.speed
+        if rate <= 0 or self.total <= 0 or self.counts_items:
+            return None
+        return max(0.0, (self.total - self.done) / rate)
 
     @property
     def percent(self) -> int:
@@ -149,6 +174,49 @@ class JobState:
         if self.state == "queued":
             return f"{verb}: waiting its turn"
         return f"{verb} {current}" if current else verb
+
+
+#: How far back the speed looks. Long enough to smooth over one slow file on a
+#: share, short enough that a copy that has stalled stops claiming a speed.
+SPEED_WINDOW = 3.0
+#: Sparkline length: one speed per second, this many seconds.
+SPARK_POINTS = 60
+
+
+def speed(samples: list[tuple[float, int]], now: float | None = None,
+          window: float = SPEED_WINDOW) -> float:
+    """Bytes per second across the samples inside the window. Pure."""
+    if len(samples) < 2:
+        return 0.0
+    end_time, end_bytes = samples[-1]
+    if now is not None and now - end_time > window:
+        return 0.0
+    start_time, start_bytes = samples[0]
+    for when, done in samples:
+        if end_time - when <= window:
+            start_time, start_bytes = when, done
+            break
+    elapsed = end_time - start_time
+    if elapsed <= 0:
+        return 0.0
+    return max(0.0, (end_bytes - start_bytes) / elapsed)
+
+
+def format_eta(seconds: float | None) -> str:
+    if seconds is None:
+        return ""
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"0:{seconds:02d} left"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}:{seconds:02d} left"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d} left"
+
+
+def _same_folder(a: str, b: str) -> bool:
+    return (a or "").rstrip("\\/").lower() == (b or "").rstrip("\\/").lower()
 
 
 class TransferQueue(QObject):
@@ -292,6 +360,49 @@ class TransferQueue(QObject):
         running = [job for job in self.active if not job.counts_items]
         return (sum(job.done for job in running), sum(job.total for job in running))
 
+    def _sample(self, job: JobState, done: int, now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        job.samples.append((now, done))
+        while len(job.samples) > 2 and now - job.samples[0][0] > SPEED_WINDOW * 2:
+            job.samples.pop(0)
+        if now - job.spark_at >= 1.0:
+            job.spark_at = now
+            job.speeds.append(job.speed)
+            del job.speeds[:-SPARK_POINTS]
+
+    def row_progress(self, folder: str, name: str) -> float | None:
+        """How far a row has got, for a row a running transfer is writing.
+
+        A row is one of the job's own top-level items: in the folder it came
+        from, or in the destination. A file that is being written fills by its
+        own bytes; one already written is full; a folder -- whose inside is
+        what is being written -- fills by the whole job. None for any other
+        row, which is almost every row.
+        """
+        wanted = name.lower()
+        for job in self.active:
+            if job.state != "running" or job.counts_items:
+                continue
+            tops = {ntpath.basename(source.rstrip("\\")).lower(): source
+                    for source in job.sources}
+            source = tops.get(wanted)
+            if source is None:
+                continue
+            here = _same_folder(folder, job.destination) or \
+                _same_folder(folder, ntpath.dirname(source.rstrip("\\")))
+            if not here:
+                continue
+            if job.current.lower() == wanted and job.item_total:
+                return min(1.0, job.item_done / job.item_total)
+            if wanted in job.finished_names:
+                return 1.0
+            if job.current and job.current.lower() not in tops and job.total:
+                # Something inside a folder is being written: the folder rows
+                # fill with the job.
+                return min(1.0, job.done / job.total)
+            return 0.0
+        return None
+
     def forget_finished(self) -> None:
         for job_id in [i for i in self.order if self.jobs[i].state == "done"]:
             self.order.remove(job_id)
@@ -405,8 +516,17 @@ class TransferQueue(QObject):
             job.interruptible = bool(event.payload.get("interruptible", True))
         elif event.kind is Progress.COPYING:
             job.state = "running"
-            job.current = str(event.payload.get("name", ""))
+            name = str(event.payload.get("name", ""))
+            if job.current and name != job.current:
+                job.finished_names.add(job.current.lower())
+            job.current = name
+            job.item_total = int(event.payload.get("item_total", 0) or 0)
+            job.item_done = int(event.payload.get("item_done", job.item_total if
+                                                  event.payload.get("instant") else 0) or 0)
+            if job.item_total and job.item_done >= job.item_total:
+                job.finished_names.add(name.lower())
             job.done = int(event.payload.get("done", job.done))
+            self._sample(job, job.done)
             if event.payload.get("total"):
                 job.total = max(job.total, int(event.payload["total"]))
         elif event.kind is Progress.CONFLICT:

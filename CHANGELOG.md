@@ -5,6 +5,24 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.0]
+
+### Changed
+- **Transfers show as a floating pill** over the bottom of the window instead
+  of a line in the status bar. It slides in when a copy, move or delete starts
+  and away when the queue is empty: a progress ring, what is being done, and
+  percent, amount, speed, time left and how many are queued, with pause and
+  cancel. Click it to open a card with the last minute of speed and the jobs
+  waiting behind, and a button to the full queue (Ctrl+J as before).
+
+### Added
+- **Rows fill as they are copied**, in the pane the files come from and the
+  one they are going to: a file fills by its own bytes, a finished one stays
+  full, and a folder fills with the whole job.
+- **A new folder fades in** when a pane arrives in it.
+- **View > Animations** turns off the fade, the glow's move and the pill's
+  slide.
+
 ## [0.28.0]
 
 ### Added

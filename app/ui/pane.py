@@ -591,6 +591,12 @@ class PaneWidget(QFrame):
         self._folder_header = FolderHeader()
         self._folder_header.setVisible(bool(pane.config.get("pane.header")))
         self._rows.badges = pane.config.get("icons.style") == "badges"
+        transfers = getattr(pane, "transfers", None)
+        if transfers is not None and hasattr(transfers, "row_progress"):
+            # 0.29: rows fill as a transfer writes them. Repainted on the
+            # queue's own ticks, and only while something is running.
+            self._rows.progress = transfers.row_progress
+            transfers.changed.connect(self._repaint_if_copying)
 
         # 0.27: the tab's history, from Back and Forward. Hold either, or
         # right-click it. Built when it opens, because the history is the
@@ -1604,6 +1610,12 @@ class PaneWidget(QFrame):
             empty = menu.addAction("Nothing " + ("back" if direction < 0 else "ahead"))
             empty.setEnabled(False)
 
+    def _repaint_if_copying(self) -> None:
+        transfers = self._pane.transfers
+        if transfers.active or getattr(self, "_was_copying", False):
+            self._view.viewport().update()
+        self._was_copying = bool(transfers.active)
+
     def set_header_shown(self, shown: bool) -> None:
         self._folder_header.setVisible(shown)
 
@@ -1611,7 +1623,34 @@ class PaneWidget(QFrame):
         self._rows.badges = on
         self._view.viewport().update()
 
+    def _arrive(self) -> None:
+        """0.29: a new folder fades in over a sixth of a second.
+
+        An opacity effect renders the listing offscreen while it is on, which
+        is exactly the cost the glow avoided -- so it is on only for the length
+        of the fade and taken off at the end, and never while a listing is
+        being scrolled. Off entirely when View > Animations is off.
+        """
+        if not bool(self._pane.config.get("look.motion")) or not self.isVisible():
+            return
+        from PySide6.QtCore import QEasingCurve, QVariantAnimation
+        from PySide6.QtWidgets import QGraphicsOpacityEffect
+
+        effect = QGraphicsOpacityEffect(self._views)
+        effect.setOpacity(0.25)
+        self._views.setGraphicsEffect(effect)
+        fade = QVariantAnimation(self)
+        fade.setDuration(170)
+        fade.setStartValue(0.25)
+        fade.setEndValue(1.0)
+        fade.setEasingCurve(QEasingCurve.OutCubic)
+        fade.valueChanged.connect(lambda value: effect.setOpacity(float(value)))
+        fade.finished.connect(lambda: self._views.setGraphicsEffect(None))
+        fade.start(QVariantAnimation.DeleteWhenStopped)
+
     def _on_path_changed(self, text: str) -> None:
+        if text != self._path.text():
+            self._arrive()
         self._path.setText(text)
         self._folder_header.set_title(self._header_title())
         self._sync_crumbs(text)

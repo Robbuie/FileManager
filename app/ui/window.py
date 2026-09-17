@@ -42,7 +42,8 @@ from app.ui.palette import CommandPalette
 from app.ui.titlebar import TitleBar
 from app.ui.pane import PaneWidget
 from app.ui.rail import NavigationRail
-from app.ui.transfers import ConflictDialog, QueueDialog, TransferBar, TransferPrompt
+from app.ui.pill import TransferPill
+from app.ui.transfers import ConflictDialog, QueueDialog, TransferPrompt
 from app.ui.viewer import Viewer
 
 TITLE = "File Manager"
@@ -258,15 +259,19 @@ class MainWindow(QMainWindow):
         else:
             self.setCentralWidget(self._splitter)
         self._splitter.set_glow_colour(tokens["accent"])
+        self._splitter.set_motion(bool(config.get("look.motion")))
 
         self.setWindowTitle(TITLE)
         self.setStatusBar(QStatusBar())
         self._hints = HintBar()
         self._hints.apply_tokens(tokens)
         self.statusBar().addWidget(self._hints, 1)
-        self._transfer_bar = TransferBar(transfers)
+        # 0.29: the transfer readout floats over the bottom of the window
+        # rather than sitting in the status bar. See `app/ui/pill.py`.
+        self._transfer_bar = TransferPill(transfers, self)
+        self._transfer_bar.apply_tokens(tokens)
         self._transfer_bar.opened.connect(self._show_queue)
-        self.statusBar().addPermanentWidget(self._transfer_bar)
+        self._transfer_bar.set_motion(bool(config.get("look.motion")))
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
         self._palette = CommandPalette(self)
@@ -587,6 +592,12 @@ class MainWindow(QMainWindow):
                           "Logix, HMI, drawings, PDF. Off shows Windows' icons.")
         badges.triggered.connect(self._set_badges)
         view.addAction(badges)
+        motion = QAction("Animations", self, checkable=True)
+        motion.setChecked(bool(self._config.get("look.motion")))
+        motion.setToolTip("Folders fade in, the active pane's glow moves across, "
+                          "and the transfer readout slides in and out.")
+        motion.triggered.connect(self._set_motion)
+        view.addAction(motion)
         header = QAction("Folder header", self, checkable=True)
         header.setChecked(bool(self._config.get("pane.header")))
         header.setToolTip("The folder's name above the listing, and a bar of "
@@ -1037,6 +1048,11 @@ class MainWindow(QMainWindow):
         for widget in self._widgets:
             widget.set_badges(bool(checked))
 
+    def _set_motion(self, checked: bool) -> None:
+        self._config.set("look.motion", bool(checked))
+        self._splitter.set_motion(bool(checked))
+        self._transfer_bar.set_motion(bool(checked))
+
     def _set_header(self, checked: bool) -> None:
         self._config.set("pane.header", bool(checked))
         for widget in self._widgets:
@@ -1265,6 +1281,7 @@ class MainWindow(QMainWindow):
             self._titlebar.apply_tokens(tokens)
         self._hints.apply_tokens(tokens)
         self._palette.apply_tokens(tokens)
+        self._transfer_bar.apply_tokens(tokens)
         self._splitter.set_glow_colour(tokens["accent"])
         if self._frame is not None:
             # Mica takes its tint from the window's dark-mode flag, so a switch

@@ -246,6 +246,8 @@ DEFAULTS: dict[str, Any] = {
     "icons.style": "badges",
     # 0.27: the folder's name and a bar of what it holds, above the listing.
     "pane.header": True,
+    # 0.29: the fades, the glow's move and the transfer pill's slide.
+    "look.motion": True,
     "icons.shell": True,
 
     # Overlay badges on those icons -- shared folders, OneDrive, source

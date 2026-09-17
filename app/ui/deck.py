@@ -46,6 +46,9 @@ class Deck(QSplitter):
         self._motion.setEasingCurve(QEasingCurve.OutCubic)
         self._motion.valueChanged.connect(self._step)
 
+    def set_motion(self, on: bool) -> None:
+        self._motion.setDuration(DURATION_MS if on else 0)
+
     def set_glow_colour(self, colour: str, strength: float = 0.3) -> None:
         self._colour = QColor(colour)
         self._strength = strength

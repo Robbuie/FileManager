@@ -535,6 +535,16 @@ QLabel[role="keycap"] {{
     padding: 0px 5px;
 }}
 
+/* 0.29: the transfer pill's two round buttons. */
+QToolButton[role="pillbutton"] {{
+    background: {bg_4};
+    border: none;
+    border-radius: 16px;
+    padding: 0px;
+}}
+QToolButton[role="pillbutton"]:hover {{ background: {accent_soft}; }}
+QToolButton[role="pillbutton"]:disabled {{ background: transparent; }}
+
 /* 0.28: the command palette, over the window. */
 QFrame[role="palette"] {{
     background: {bg_2};

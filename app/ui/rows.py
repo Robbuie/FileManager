@@ -168,6 +168,9 @@ class RowDelegate(QStyledItemDelegate):
         #: Badges in place of icons. Off keeps the shell's pictures, which is
         #: the pre-0.27 listing exactly.
         self.badges = False
+        #: 0.29: `(folder, name) -> fraction or None`, for a row a transfer is
+        #: writing. Set by the pane when there is a queue to ask.
+        self.progress = None
 
     # ------------------------------------------------------------- the state
 
@@ -245,6 +248,13 @@ class RowDelegate(QStyledItemDelegate):
         painter.save()
         if selected or hovered:
             self._band(painter, option, index, selected)
+        if self.progress is not None:
+            copying = entry if entry is not None else index.data(ListingModel.EntryRole)
+            folder = getattr(model, "folder", "")
+            fraction = (self.progress(folder, copying.name)
+                        if copying is not None and folder else None)
+            if fraction is not None:
+                self._filling(painter, option, fraction)
 
         # A cut row is faded, which is what Explorer does and therefore what
         # these eyes already read as "this is going somewhere". Opacity rather
@@ -282,6 +292,30 @@ class RowDelegate(QStyledItemDelegate):
             if index.column() == Column.SIZE:
                 self._bar(painter, option, index)
         painter.restore()
+
+    def _filling(self, painter: QPainter, option: QStyleOptionViewItem,
+                 fraction: float) -> None:
+        """The part of the row a transfer has written, as a wash across every
+        column with a line under it -- one bar that happens to be cut into
+        cells, so each cell paints only its own slice of it."""
+        view = option.widget
+        width = view.viewport().width() if view is not None and hasattr(view, "viewport") \
+            else option.rect.right()
+        start = BAND_INSET
+        end = start + (width - 2 * BAND_INSET) * max(0.0, min(1.0, fraction))
+        cell = option.rect
+        left = max(cell.left(), start)
+        right = min(cell.right() + 1, end)
+        if right <= left:
+            return
+        wash = parse_colour(self._t.get("accent_wash"))
+        line = parse_colour(self._t.get("accent"))
+        top = cell.top() + BAND_GAP
+        height = cell.height() - 2 * BAND_GAP
+        if wash.isValid():
+            painter.fillRect(QRectF(left, top, right - left, height), wash)
+        if line.isValid():
+            painter.fillRect(QRectF(left, top + height - 2, right - left, 2), line)
 
     def _badge(self, painter: QPainter, opt: QStyleOptionViewItem, style, entry) -> None:
         """The family-coloured tag where the icon would have been."""
