@@ -278,6 +278,13 @@ DEFAULTS: dict[str, Any] = {
     # an exact comparison calls half of those files newer every time.
     "compare.tolerance": 2.0,
 
+    # 0.26. "custom" is the drawn title bar with the menus under the mark;
+    # "system" is Windows' title bar and the menu bar, the way back if the
+    # custom frame misbehaves. "auto" glass means Mica where it will look like
+    # Mica -- see `core/backdrop.py`. Both are read once, at start.
+    "window.frame": "custom",
+    "window.backdrop": "auto",
+
     "window.width": 1280,
     "window.height": 760,
     "window.split": 0.5,

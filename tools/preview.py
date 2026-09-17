@@ -29,6 +29,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            width: int, height: int, settle_ms: int, tabs: int = 1,
            menu: bool = False, queue: bool = False, cut: bool = False,
            pane_preview: bool = False, grid: bool = False, flat: str = "",
+           backdrop: str = "solid",
            viewer: str = "", cell: int = 128, commands: bool = False) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
@@ -60,7 +61,8 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     config.set("density", density)
     config.set("left.path", path)
     config.set("right.path", path)
-    sheet.apply(app, theme=theme, accent=accent, density=density)
+    sheet.apply(app, theme=theme, accent=accent, density=density,
+                backdrop=backdrop)
 
     pool = WorkerPool()
     bridge = Bridge(pool)
@@ -102,7 +104,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
         Pane(bridge, config, "right", icons, overlays, None, sizes, siblings,
              clipboard=clipboard, previews=previews, thumbnails=thumbnails),
         volumes, TransferQueue(), None, Favorites(config), capacity,
-        None, _invented_network(bridge, config))
+        None, _invented_network(bridge, config), backdrop=backdrop)
     volumes.refresh()
     icons.start()
     overlays.start()
@@ -174,6 +176,11 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
         app.exec()
 
     image = window.grab()
+    if backdrop == "glass":
+        # There is no Mica offscreen, so the transparent window is laid over a
+        # stand-in: a dark wallpaper blurred to colour washes, roughly what
+        # Mica makes of one. The colours are the preview's, not the app's.
+        image = _over_wallpaper(image, theme)
     if popup is not None:
         # The menu is a window of its own, so grabbing the main one does not
         # include it. Drawn on afterwards, where it actually is, which is the
@@ -558,6 +565,33 @@ def _fill_flat(window, layout: str) -> None:
     tab.model.sort(4, Qt.DescendingOrder)
 
 
+def _over_wallpaper(image, theme: str):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QColor, QPainter, QPixmap, QRadialGradient
+
+    light = theme in ("light", "paper")
+    base = QPixmap(image.size())
+    base.setDevicePixelRatio(image.devicePixelRatio())
+    base.fill(QColor("#dfe4ec" if light else "#0d1017"))
+    painter = QPainter(base)
+    w = image.width() / image.devicePixelRatio()
+    h = image.height() / image.devicePixelRatio()
+    washes = (((0.12, 0.05), "#5b86d6" if light else "#26406e"),
+              ((0.9, 1.0), "#6fc9c0" if light else "#1d4a50"),
+              ((0.6, 0.3), "#a99be0" if light else "#2e2750"))
+    for (fx, fy), colour in washes:
+        gradient = QRadialGradient(QPointF(w * fx, h * fy), max(w, h) * 0.55)
+        tint = QColor(colour)
+        tint.setAlphaF(0.55)
+        gradient.setColorAt(0.0, tint)
+        tint.setAlphaF(0.0)
+        gradient.setColorAt(1.0, tint)
+        painter.fillRect(0, 0, int(w), int(h), gradient)
+    painter.drawPixmap(0, 0, image)
+    painter.end()
+    return base
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--path", default=os.getcwd())
@@ -566,6 +600,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--theme", default="dark")
     parser.add_argument("--accent", default="blue")
     parser.add_argument("--density", default="normal")
+    parser.add_argument("--backdrop", default="solid", choices=["solid", "glass"],
+                        help="glass lays the window over a stand-in for Mica")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=760)
     parser.add_argument("--settle-ms", type=int, default=1500)
@@ -607,7 +643,7 @@ def main(argv: list[str] | None = None) -> int:
                      queue=args.queue, cut=args.cut, grid=args.grid,
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
-                     cell=args.cell))
+                     cell=args.cell, backdrop=args.backdrop))
         return 0
 
     from app.theme.tokens import THEMES

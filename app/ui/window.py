@@ -14,8 +14,9 @@ from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
-    QSplitter,
+    QMenu,
     QStatusBar,
+    QVBoxLayout,
     QWidget,
 )
 from PySide6.QtCore import QEvent, Qt
@@ -33,7 +34,10 @@ from app.theme.tokens import (
     DENSITY_LABELS,
     THEME_LABELS,
 )
-from app.ui import dialogs
+from app.ui import dialogs, winframe
+from app.ui.deck import Deck
+from app.ui.hints import HintBar
+from app.ui.titlebar import TitleBar
 from app.ui.pane import PaneWidget
 from app.ui.rail import NavigationRail
 from app.ui.transfers import ConflictDialog, QueueDialog, TransferBar, TransferPrompt
@@ -87,9 +91,22 @@ class MainWindow(QMainWindow):
 
     def __init__(self, config, left, right, volumes, transfers, updates=None,
                  favorites=None, capacity=None, commands=None, network=None,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, *, backdrop: str = "solid",
+                 frame: str | None = None) -> None:
         super().__init__(parent)
         self._config = config
+        #: "glass" or "solid", decided before the window exists by
+        #: `core.backdrop.choose`, because a translucent window has to be
+        #: translucent from the moment it is created. Changing it takes a
+        #: restart, and the View menu says so.
+        self._backdrop = backdrop if backdrop in ("glass", "solid") else "solid"
+        #: "custom" draws the 0.26 title bar; "system" is the Windows title bar
+        #: and the menu bar, kept as the way back if the custom one misbehaves
+        #: on a machine it was not tried on.
+        chosen = frame if frame is not None else config.get("window.frame")
+        self._frame_kind = "system" if chosen == "system" else "custom"
+        self._frame: winframe.NativeFrame | None = None
+        self._titlebar: TitleBar | None = None
         #: The external command table, or None for a window built without one
         #: -- a preview render, a test. None means the Tools menu is drawn and
         #: inert rather than a menu bar that is a different shape from the real
@@ -124,7 +141,7 @@ class MainWindow(QMainWindow):
         # rendered from. Handed down rather than fetched, so a pane cannot end
         # up painted from a different render than the one it is styled by.
         tokens = sheet.tokens(config.get("theme"), config.get("accent"),
-                              config.get("density"))
+                              config.get("density"), self._backdrop)
         self._tokens = tokens
         for widget in self._widgets:
             widget.apply_tokens(tokens)
@@ -159,7 +176,7 @@ class MainWindow(QMainWindow):
             # ones -- see `core/capacity.py`. Nothing here touches a server.
             volumes.changed.connect(self._measure_local_drives)
 
-        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter = Deck()
         if self._rail is not None:
             self._splitter.addWidget(self._rail)
         for widget in self._widgets:
@@ -209,16 +226,50 @@ class MainWindow(QMainWindow):
             self._splitter.setStretchFactor(0, 0)
             self._splitter.setStretchFactor(1, 1)
             self._splitter.setStretchFactor(2, 1)
-        self.setCentralWidget(self._splitter)
+        if self._frame_kind == "custom":
+            self._titlebar = TitleBar()
+            self._titlebar.menuRequested.connect(self._show_app_menu)
+            self._titlebar.goRequested.connect(lambda: self._current_widget().focus_path())
+            self._titlebar.minimizeRequested.connect(self.showMinimized)
+            self._titlebar.maximizeRequested.connect(self.toggle_maximized)
+            self._titlebar.closeRequested.connect(self.close)
+            self._titlebar.apply_tokens(tokens)
+            root = QWidget()
+            root.setProperty("role", "root")
+            stack = QVBoxLayout(root)
+            stack.setContentsMargins(0, 0, 0, 0)
+            stack.setSpacing(0)
+            stack.addWidget(self._titlebar)
+            stack.addWidget(self._splitter, 1)
+            self.setCentralWidget(root)
+            self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+            if self._backdrop == "glass":
+                self.setAttribute(Qt.WA_TranslucentBackground, True)
+            dark = sum(sheet.qss.unhex(tokens["bg_0"])) < 382
+            self._frame = winframe.NativeFrame(self, glass=self._backdrop == "glass",
+                                               dark=dark)
+        else:
+            self.setCentralWidget(self._splitter)
+        self._splitter.set_glow_colour(tokens["accent"])
 
         self.setWindowTitle(TITLE)
         self.setStatusBar(QStatusBar())
+        self._hints = HintBar()
+        self._hints.apply_tokens(tokens)
+        self.statusBar().addWidget(self._hints, 1)
         self._transfer_bar = TransferBar(transfers)
         self._transfer_bar.opened.connect(self._show_queue)
         self.statusBar().addPermanentWidget(self._transfer_bar)
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
         self._build_menus()
+        if self._frame_kind == "custom":
+            # The menus are reached from the mark in the title bar now. A hidden
+            # menu bar also stops honouring the shortcuts of the actions in its
+            # menus -- Qt checks the bar is visible before it matches a key --
+            # so every action that carries a key is put on the window itself.
+            self.menuBar().hide()
+        self._adopt_shortcuts()
         # Which pane is active follows the *focus*, not this widget's own.
         # A `QFrame` never takes focus itself -- its listing or its path bar
         # does -- so `focusInEvent` on the pane fires for the Tab key, which
@@ -242,15 +293,10 @@ class MainWindow(QMainWindow):
             # After `resize`, so the sizes are being shared out of a window
             # that is already the width it will be.
             self._restore_rail_width()
-        # Timed, not permanent. The status bar is where a transfer reports
-        # itself, and a hint that never goes away means the two share a line
-        # and neither of them fits. The keys are in the menus, which is where
-        # somebody looks the second time.
-        self.statusBar().showMessage(
-            "F5 copies  ·  F6 moves  ·  F7 new folder  ·  F2 renames  ·  "
-            "Del recycles  ·  type a name to jump to it",
-            20000,
-        )
+        # 0.26: the hints are a widget in the status bar rather than a timed
+        # message. A message still covers them while it is showing, which is
+        # the property the old timeout was buying: a transfer's report and the
+        # hints never share the line.
 
     # ------------------------------------------------------------------- menus
 
@@ -516,6 +562,7 @@ class MainWindow(QMainWindow):
         self._axis_menu(view, "Theme", THEME_LABELS, "theme")
         self._axis_menu(view, "Accent", ACCENT_LABELS, "accent")
         self._axis_menu(view, "Density", DENSITY_LABELS, "density")
+        self._window_menu(view)
         view.addSeparator()
         unc = QAction("Show UNC paths", self, checkable=True)
         unc.setChecked(bool(self._config.get("left.show_unc")))
@@ -837,6 +884,7 @@ class MainWindow(QMainWindow):
                 menu.addAction(action)
         menu.addSeparator()
         menu.addAction(self._edit_commands_action)
+        self._adopt_shortcuts()
 
     def _share_command_keys(self) -> None:
         """Hand both panes the key map, so a keystroke finds its command.
@@ -1101,6 +1149,34 @@ class MainWindow(QMainWindow):
             group.addAction(action)
             menu.addAction(action)
 
+    def _window_menu(self, parent) -> None:
+        """The title bar and the backdrop. Both are decided when the window is
+        created, so both say that a change waits for the next start."""
+        menu = parent.addMenu("Window")
+        for key, title, choices in (
+            ("window.frame", "Title bar",
+             (("custom", "This application's"), ("system", "Windows' own, with the menu bar"))),
+            ("window.backdrop", "Backdrop",
+             (("auto", "Automatic"), ("glass", "Glass"), ("solid", "Solid"))),
+        ):
+            heading = QAction(f"{title} (after a restart)", self)
+            heading.setEnabled(False)
+            menu.addAction(heading)
+            group = QActionGroup(self)
+            group.setExclusive(True)
+            current = self._config.get(key)
+            for name, label in choices:
+                action = QAction(label, self, checkable=True)
+                action.setChecked(name == current)
+                action.triggered.connect(
+                    lambda _checked=False, k=key, n=name: self._config.set(k, n))
+                group.addAction(action)
+                menu.addAction(action)
+            menu.addSeparator()
+        now = QAction(f"Now: {self._backdrop}", self)
+        now.setEnabled(False)
+        menu.addAction(now)
+
     def _hint(self, menu, text: str, slot) -> QAction:
         """A menu entry that shows a key without claiming it.
 
@@ -1133,7 +1209,16 @@ class MainWindow(QMainWindow):
             theme=self._config.get("theme"),
             accent=self._config.get("accent"),
             density=self._config.get("density"),
+            backdrop=self._backdrop,
         )
+        if self._titlebar is not None:
+            self._titlebar.apply_tokens(tokens)
+        self._hints.apply_tokens(tokens)
+        self._splitter.set_glow_colour(tokens["accent"])
+        if self._frame is not None:
+            # Mica takes its tint from the window's dark-mode flag, so a switch
+            # to a light theme has to reach Windows as well as the sheet.
+            self._frame.set_dark(sum(sheet.qss.unhex(tokens["bg_0"])) < 382)
         metrics = sheet.metrics(self._config.get("density"))
         for widget in self._widgets:
             widget.apply_metrics(metrics)
@@ -1392,6 +1477,7 @@ class MainWindow(QMainWindow):
         self._active = index
         for position, widget in enumerate(self._widgets):
             widget.set_active(position == index)
+        self._splitter.glow_on(self._widgets[index])
         self._sync_rail_mark()
         self._sync_flat_action()
 
@@ -1406,6 +1492,70 @@ class MainWindow(QMainWindow):
         for pane in self._panes:
             pane.set_flat_layout(layout)
 
+    # ------------------------------------------------------------ the frame
+
+    def _adopt_shortcuts(self) -> None:
+        """Put every action that carries a key onto the window itself.
+
+        Needed only while the menu bar is hidden, and harmless when it is not:
+        an action added to a second widget is still one shortcut.
+        """
+        if self._frame_kind != "custom":
+            return
+        owned = set(self.actions())
+
+        def walk(menu) -> None:
+            for action in menu.actions():
+                if action.menu() is not None:
+                    walk(action.menu())
+                elif not action.shortcut().isEmpty() and action not in owned:
+                    self.addAction(action)
+                    owned.add(action)
+
+        walk(self.menuBar())
+
+    def _show_app_menu(self, at) -> None:
+        """Every menu the bar used to show, as one menu under the mark."""
+        menu = QMenu(self)
+        for action in self.menuBar().actions():
+            if action.menu() is not None:
+                menu.addMenu(action.menu())
+        menu.aboutToHide.connect(menu.deleteLater)
+        menu.popup(at)
+
+    def hit_parts(self, pos) -> tuple[bool, bool]:
+        """For `winframe`: is `pos` the maximise button, and is it caption."""
+        bar = self._titlebar
+        if bar is None:
+            return False, False
+        local = bar.mapFrom(self, pos)
+        over_max = bar.max_button.geometry().contains(local)
+        return over_max, bar.is_caption(local)
+
+    def set_max_hover(self, hot: bool) -> None:
+        if self._titlebar is not None:
+            self._titlebar.set_max_hover(hot)
+
+    def toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().showEvent(event)
+        if self._frame is not None and not self._frame.active:
+            self._frame.install()
+            if self._frame.problem:
+                self.statusBar().showMessage(self._frame.problem, 12000)
+
+    def nativeEvent(self, event_type, message):  # noqa: N802 - Qt naming
+        if self._frame is not None:
+            answer = self._frame.handle(event_type, message)
+            if answer is not None:
+                return answer
+        return super().nativeEvent(event_type, message)
+
     # ----------------------------------------------------------- live folders
 
     def changeEvent(self, event) -> None:  # noqa: N802 - Qt naming
@@ -1413,6 +1563,8 @@ class MainWindow(QMainWindow):
         it comes back, which is when a file saved from another program is most
         likely to be waiting to appear."""
         if event.type() == QEvent.WindowStateChange:
+            if self._titlebar is not None:
+                self._titlebar.set_maximized(self.isMaximized())
             minimised = bool(self.windowState() & Qt.WindowMinimized)
             for pane in self._panes:
                 pane.set_live(not minimised)

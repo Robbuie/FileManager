@@ -5,6 +5,31 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.26.0]
+
+### Changed
+- **The window draws its own title bar.** The Windows title bar and the menu
+  bar are gone; a thin row at the top holds the menu (the mark at the left),
+  a "Go to a folder" box (Ctrl+L on the active pane, and where the command
+  palette arrives), and minimise, maximise and close. Dragging, double click
+  to maximise, resizing from the edges, Aero Snap and Windows 11's snap
+  layouts on the maximise button are all meant to behave as before.
+- **Glass backdrop on Windows 11.** The window's background is Mica, and the
+  panes sit on it as cards. It switches to a solid grey by itself in a remote
+  session (which includes Hyper-V's enhanced session), with transparency off,
+  or on Windows older than 22H2.
+- **The active pane glows** with the accent around its edge, and the glow
+  moves across when the active pane changes. The idle pane keeps its fade.
+- **The key hints are keycaps along the bottom** and stay there, instead of a
+  message that went away after twenty seconds. A status message still covers
+  them while it is showing.
+- The rail sits on the backdrop rather than on its own grey band.
+
+### Added
+- **View > Window**: the title bar (this application's, or Windows' own with
+  the menu bar back) and the backdrop (automatic, glass, solid). Both apply
+  after a restart. The way back if the custom frame misbehaves.
+
 ## [0.25.0]
 
 ### Added

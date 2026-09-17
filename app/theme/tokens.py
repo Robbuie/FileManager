@@ -212,7 +212,7 @@ SHAPE: dict[str, str] = {
     # The pane and the listing. Bigger than a control's on purpose: a
     # container and the buttons inside it drawn at the same corner read as
     # one flat object, which is most of what "blocky" means.
-    "radius_lg": "10px",
+    "radius_lg": "12px",
     "font": '"Segoe UI", Inter, system-ui, sans-serif',
     "mono": '"Cascadia Mono", Consolas, monospace',
 }

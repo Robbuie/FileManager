@@ -66,8 +66,14 @@ def build(
     theme: str | None = None,
     accent: str | None = None,
     density: str | None = None,
+    backdrop: str = "solid",
 ) -> dict[str, str]:
     """Return every token for one combination, ready to substitute into QSS.
+
+    `backdrop` is not a fourth axis of the design system -- it does not change
+    a single grey. It says whether the window's own background is painted at
+    all: "glass" leaves it transparent so Windows' Mica shows through behind
+    the chrome, and the panes keep their raised grey on top of it.
 
     An unknown name falls back to the default rather than raising: a settings
     file carrying a theme from a later version should not stop the application
@@ -119,6 +125,17 @@ def build(
     # larger than the rows it is labelling.
     ui = float(DENSITIES[density_name]["ui_font"])
     out["head_font"] = f"{max(9.0, ui - 2.5):g}px"
+
+    # What sits directly on the window: the gaps around the cards, the title
+    # bar, the rail and the status line. One token so glass and solid differ
+    # in exactly one place.
+    glass = backdrop == "glass"
+    out["backdrop"] = "transparent" if glass else out["bg_0"]
+    out["backdrop_name"] = "glass" if glass else "solid"
+    # Windows' own close-button red. A semantic colour that has to agree with
+    # every other window on the screen, so it follows neither theme nor accent.
+    out["close_hover"] = "#c42b1c"
+    out["close_press"] = "#b22a1b"
 
     out["theme_name"] = theme_name
     out["accent_name"] = accent_name

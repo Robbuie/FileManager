@@ -47,6 +47,16 @@ STROKES: dict[str, tuple] = {
     "place":   (((4, 11), (12, 4), (20, 11), (20, 20), (4, 20), (4, 11)),),
     "sort_up":   (((7, 14.5), (12, 9.5), (17, 14.5)),),
     "sort_down": (((7, 9.5), (12, 14.5), (17, 9.5)),),
+    # 0.26: the title bar. The caption buttons are drawn thinner by being
+    # asked for smaller, so they sit with Windows' own rather than with the
+    # heavier pane chrome.
+    "minimize": (((6, 12), (18, 12)),),
+    "maximize": (((6.5, 6.5), (17.5, 6.5), (17.5, 17.5), (6.5, 17.5), (6.5, 6.5)),),
+    "restore":  (((6.5, 9), (15, 9), (15, 17.5), (6.5, 17.5), (6.5, 9)),
+                 ((9, 9), (9, 6.5), (17.5, 6.5), (17.5, 15), (15, 15))),
+    "mark":     (((5, 7), (12, 7)), ((5, 12), (19, 12)), ((12, 17), (19, 17))),
+    "search":   (("arc", 4, 4, 13, 13, 0, 360), ((15.2, 15.2), (20, 20))),
+    "eject":    (((5, 14), (12, 6), (19, 14), (5, 14)), ((5, 18.5), (19, 18.5))),
 }
 
 #: Stroke width on the 24-unit grid. 1.9 rather than 2 because at a 16 pixel

@@ -64,11 +64,23 @@ def main() -> int:
     app.setApplicationName("File Manager")
 
     config = Config.load()
+    # Before the sheet and before the window: a translucent window has to be
+    # made translucent, and the sheet has to know whether to paint the
+    # backdrop at all.
+    from app.core.backdrop import choose
+    from app.ui.winframe import probe
+
+    backdrop, _why = choose(config.get("window.backdrop"), probe())
+    if config.get("window.frame") == "system":
+        # Mica behind a system title bar and a menu bar is a different
+        # window from the one glass was designed for. Solid there.
+        backdrop = "solid"
     sheet.apply(
         app,
         theme=config.get("theme"),
         accent=config.get("accent"),
         density=config.get("density"),
+        backdrop=backdrop,
     )
 
     problem = paths.win32_problem()
@@ -132,7 +144,7 @@ def main() -> int:
     network = Network(bridge, config)
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
-                        favorites, capacity, commands, network)
+                        favorites, capacity, commands, network, backdrop=backdrop)
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

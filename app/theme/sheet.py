@@ -38,7 +38,7 @@ from app.theme.tokens import DENSITIES, DEFAULTS
 
 TEMPLATE = """
 QWidget {{
-    background: {bg_0};
+    background: {backdrop};
     color: {txt_0};
     font-family: {font};
     font-size: {ui_font};
@@ -46,7 +46,8 @@ QWidget {{
     selection-color: {bg_0};
 }}
 
-QMainWindow, QDialog {{ background: {bg_0}; }}
+QMainWindow {{ background: {backdrop}; }}
+QDialog {{ background: {bg_0}; }}
 QToolTip {{
     background: {bg_2};
     color: {txt_0};
@@ -81,7 +82,7 @@ QMenu::item {{ padding: 5px 22px 5px 22px; border-radius: {radius_sm}; }}
 QMenu::item:selected {{ background: {accent_soft}; color: {accent_text}; }}
 QMenu::separator {{ height: 1px; background: {line_soft}; margin: 4px 8px; }}
 QStatusBar {{
-    background: {bg_1};
+    background: {backdrop};
     border: none;
     color: {txt_2};
     min-height: {status_h};
@@ -314,12 +315,12 @@ QToolButton[role="favorite"]:pressed {{ background: {bg_4}; }}
    the splitter handle is already the line between it and the panes, and a
    second one there would be two rules doing one job. */
 QFrame[role="rail"] {{
-    background: {bg_1};
+    background: {backdrop};
     border: none;
 }}
-QWidget[role="railbody"] {{ background: {bg_1}; }}
-QFrame[role="rail"] QScrollArea {{ background: {bg_1}; border: none; }}
-QFrame[role="rail"] QScrollArea > QWidget > QWidget {{ background: {bg_1}; }}
+QWidget[role="railbody"] {{ background: {backdrop}; }}
+QFrame[role="rail"] QScrollArea {{ background: {backdrop}; border: none; }}
+QFrame[role="rail"] QScrollArea > QWidget > QWidget {{ background: {backdrop}; }}
 
 /* A heading. Small, upper case and muted -- the same treatment the listing's
    column headers get, because they are the same kind of thing: a label on a
@@ -461,12 +462,15 @@ QHeaderView::up-arrow, QHeaderView::down-arrow {{ width: 0px; height: 0px; }}
    moves. */
 QFrame[pane="true"] {{
     background: {bg_2};
-    border: none;
-    border-left: 2px solid transparent;
+    border: 1px solid {line_soft};
     border-radius: {radius_lg};
 }}
+/* 0.26: the pane is a card on the backdrop, and the active one is edged in the
+   accent. The glow around it is painted by `app/ui/deck.py`, behind the card,
+   because an effect on a widget that scrolls 50,000 rows would re-render all
+   of it on every step. Both states are one pixel so nothing moves. */
 QFrame[pane="true"][active="true"] {{
-    border-left: 2px solid {accent};
+    border: 1px solid {accent_line};
 }}
 /* And the other pane steps back: its rows are faded by the delegates (see
    IDLE_OPACITY in app/ui/rows.py) and its header labels go one grey quieter. */
@@ -475,6 +479,56 @@ QLabel[role="status"] {{ background: transparent; color: {txt_1}; padding: 2px 6
 QLabel[role="status"][state="busy"] {{ color: {accent_text}; }}
 QLabel[role="status"][state="bad"] {{ color: {warn}; }}
 QLabel[role="space"] {{ background: transparent; color: {txt_2}; padding: 2px 6px; }}
+
+/* --------------------------------------------------------------- title bar */
+
+/* 0.26: the row that replaces the system title bar and the menu bar. It sits
+   on the backdrop like the rail does, so under glass it is Mica and under
+   solid it is the darkest grey, and in both it reads as part of the window
+   rather than as a bar across it. */
+QWidget[role="titlebar"] {{ background: {backdrop}; }}
+QToolButton[role="mark"] {{
+    background: {accent};
+    border: none;
+    border-radius: {radius};
+    min-width: 24px; max-width: 24px;
+    min-height: 24px; max-height: 24px;
+    padding: 0px;
+}}
+QToolButton[role="mark"]:hover {{ background: {accent_lift}; }}
+QToolButton[role="caption"] {{
+    background: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+}}
+QToolButton[role="caption"]:hover, QToolButton[role="caption"][hot="true"] {{
+    background: {bg_3};
+}}
+QToolButton[role="caption"]:pressed {{ background: {bg_4}; }}
+QToolButton[role="caption"][kind="close"]:hover {{ background: {close_hover}; }}
+QToolButton[role="caption"][kind="close"]:pressed {{ background: {close_press}; }}
+QPushButton[role="gobox"] {{
+    background: {bg_2};
+    border: 1px solid {line};
+    border-radius: 9px;
+    min-height: 28px; max-height: 28px;
+    padding: 0px;
+    text-align: left;
+}}
+QPushButton[role="gobox"]:hover {{ border: 1px solid {accent_line}; }}
+QLabel[role="goicon"] {{ background: transparent; }}
+QLabel[role="gotext"] {{ background: transparent; color: {txt_2}; }}
+QLabel[role="keycap"] {{
+    background: transparent;
+    color: {txt_1};
+    font-family: {mono};
+    font-size: 10px;
+    border: 1px solid {line};
+    border-bottom: 2px solid {line};
+    border-radius: 4px;
+    padding: 0px 5px;
+}}
 
 /* ----------------------------------------------------------------- dialogs */
 
@@ -524,8 +578,8 @@ QProgressBar::chunk {{ background: {accent}; border-radius: 4px; }}
 
 /* ------------------------------------------------------- splitter, scrollbars */
 
-QSplitter::handle {{ background: {bg_0}; }}
-QSplitter::handle:horizontal {{ width: 8px; }}
+QSplitter::handle {{ background: transparent; }}
+QSplitter::handle:horizontal {{ width: 10px; }}
 QSplitter::handle:hover {{ background: {accent_soft}; }}
 
 /* Thin, and no trough. A scrollbar is a position readout most of the time and
@@ -563,6 +617,7 @@ def tokens(
     theme: str | None = None,
     accent: str | None = None,
     density: str | None = None,
+    backdrop: str = "solid",
 ) -> dict[str, str]:
     """The rendered token set, for a caller that paints rather than styles.
 
@@ -570,7 +625,7 @@ def tokens(
     and the alternative -- letting it read the theme dictionaries itself --
     would be a second place that knows how a tint is derived.
     """
-    return qss.build(theme, accent, density)
+    return qss.build(theme, accent, density, backdrop)
 
 
 def apply(
@@ -579,6 +634,7 @@ def apply(
     theme: str | None = None,
     accent: str | None = None,
     density: str | None = None,
+    backdrop: str = "solid",
 ) -> dict[str, str]:
     """Render the sheet for one combination and put it on the application.
 
@@ -589,7 +645,7 @@ def apply(
     """
     from PySide6.QtGui import QColor, QPalette
 
-    values = qss.build(theme, accent, density)
+    values = qss.build(theme, accent, density, backdrop)
     app.setStyleSheet(qss.render(TEMPLATE, values))
 
     palette = QPalette()
