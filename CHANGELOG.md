@@ -5,6 +5,18 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.10]
+
+### Fixed
+- **The window no longer falls behind the mouse at full screen.** Moving the
+  hover highlight repainted the whole listing, and the pointer crosses a row
+  every twenty-two pixels -- so on a large display at full size the
+  application spent all of its time redrawing the list and answered nothing
+  else, which is the lock-up reported on a host machine while the same build
+  in a VM was fine. Measured at 3840x2160 over a folder of 20,000: crossing
+  forty rows cost 4.5 seconds before this and a tenth of a second after. Only
+  the row left and the row arrived at are repainted now.
+
 ## [0.29.9]
 
 ### Fixed

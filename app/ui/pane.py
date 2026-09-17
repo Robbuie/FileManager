@@ -1057,13 +1057,43 @@ class PaneWidget(QFrame):
         super().mouseReleaseEvent(event)
 
     def _on_row_entered(self, index) -> None:
+        """Move the hover highlight, repainting the two rows it moved between.
+
+        Not the viewport. A hover changes two rows and the pointer crosses one
+        every twenty-two pixels, so repainting everything here is the whole
+        listing redrawn per row travelled -- a sixth of a second at full
+        screen on a large display, which is a window permanently behind the
+        mouse. The same reasoning as everywhere else in this file: the work
+        belongs to what is on screen, and here it is smaller than that again.
+        """
+        was = self._rows.hovered_row
         self._rows.set_hovered_row(index)
-        self._view.viewport().update()
+        self._repaint_rows(was, self._rows.hovered_row)
 
     def _clear_hover(self) -> None:
-        if self._rows.hovered_row != -1:
+        was = self._rows.hovered_row
+        if was != -1:
             self._rows.set_hovered_row(-1)
-            self._view.viewport().update()
+            self._repaint_rows(was)
+
+    def _repaint_rows(self, *rows: int) -> None:
+        """Repaint whole rows by number, and nothing else.
+
+        A row is the full width of the viewport whatever the columns are
+        doing, so the rectangle is the row's height across everything rather
+        than one cell.
+        """
+        model = self._view.model()
+        if model is None:
+            return
+        viewport = self._view.viewport()
+        width = viewport.width()
+        for row in rows:
+            if row is None or row < 0 or row >= model.rowCount():
+                continue
+            rect = self._view.visualRect(model.index(row, 0))
+            if rect.isValid():
+                viewport.update(0, rect.y(), width, rect.height())
 
     def toggle_filter(self) -> None:
         """The filter button. Shows the box, or clears and hides it again."""
