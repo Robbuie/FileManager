@@ -115,4 +115,9 @@ def test_a_stored_list_that_is_not_a_list_is_no_favorites(favorites):
 
 def test_the_suggested_name_is_the_folders_own(favorites):
     assert favorites.suggested_name("C:\\Jobs\\2026\\Drawings") == "Drawings"
-    assert favorites.suggested_name("C:\\") == "C:\\"
+    # A root has no name of its own. Offering the path itself made the name
+    # prompt refuse its own suggestion, which is how a share root came to be
+    # impossible to save.
+    assert favorites.suggested_name("C:\\") == "C:"
+    assert favorites.suggested_name("\\\\tsclient\\C") == "C on tsclient"
+    assert favorites.suggested_name("\\\\srv\\Jobs\\2026") == "2026"

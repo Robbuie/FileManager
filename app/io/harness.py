@@ -432,6 +432,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         other_path=args.other,
         name=args.name,
         names=tuple(args.mark or ()),
+        other_names=tuple(args.other_mark or ()),
     )
     why = table.refusal(command, context)
     if why:
@@ -1234,6 +1235,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="what %%N and %%F mean: the row under the cursor")
     running.add_argument("--mark", nargs="*", default=[],
                          help="what %%S means: the marked names in the folder")
+    running.add_argument("--other-mark", nargs="*", default=[],
+                         help="what is marked in the other pane, for %%C")
     running.add_argument("--dry-run", action="store_true",
                          help="print the argument vector and start nothing")
     running.set_defaults(func=cmd_run)

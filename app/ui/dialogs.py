@@ -104,13 +104,24 @@ class Dialog(QDialog):
 
 
 class NamePrompt(Dialog):
-    """One line of text, for a new folder, a rename or a duplicate."""
+    """One line of text, for a new folder, a rename or a duplicate.
+
+    Also for the names that are not file names -- a favourite, a group, a
+    network location typed as `\\\\server\\share` -- and `filename` is what tells
+    the two apart. Until 0.29.13 every caller got the file-name rule, so a
+    favourite could not be saved on a share root or a drive root (the name
+    offered was the path itself, backslashes and all) and a network location
+    could not be typed at all: the OK button was grey from the first
+    character, with no reason given.
+    """
 
     def __init__(self, parent: QWidget | None, *, title: str, label: str,
                  initial: str = "", ok_text: str = "OK",
-                 taken: Callable[[str], bool] | None = None) -> None:
+                 taken: Callable[[str], bool] | None = None,
+                 filename: bool = True) -> None:
         super().__init__(parent)
         self._taken = taken
+        self._filename = filename
         self.setWindowTitle(title)
         self.setModal(True)
         self.setMinimumWidth(420)
@@ -146,8 +157,10 @@ class NamePrompt(Dialog):
         not a place to enforce anything, because a dialog can be bypassed.
         """
         name = text.strip()
-        usable = bool(name) and not any(ch in name for ch in '\\/:*?"<>|')
-        usable = usable and name not in (".", "..")
+        usable = bool(name)
+        if self._filename:
+            usable = usable and not any(ch in name for ch in '\\/:*?"<>|')
+            usable = usable and name not in (".", "..")
         in_use = usable and self._taken is not None and self._taken(name)
         self._why.setText(f"{name} already exists here" if in_use else "")
         self._why.setVisible(bool(in_use))
@@ -768,14 +781,16 @@ def _count(value: int) -> str:
 
 def ask_name(parent: QWidget, *, title: str, label: str, initial: str = "",
              ok_text: str = "OK", stem: bool = False,
-             taken: Callable[[str], bool] | None = None) -> str | None:
+             taken: Callable[[str], bool] | None = None,
+             filename: bool = True) -> str | None:
     """A name, or None if the dialog was cancelled or nothing was typed.
 
     `taken` refuses a name already in use, in the dialog, while it can still be
-    changed.
+    changed. `filename=False` for anything that is not going to be a name on
+    disk; the only rule left then is that it is not empty.
     """
     dialog = NamePrompt(parent, title=title, label=label, initial=initial,
-                        ok_text=ok_text, taken=taken)
+                        ok_text=ok_text, taken=taken, filename=filename)
     if stem:
         dialog.select_stem()
     if dialog.exec() != QDialog.Accepted:

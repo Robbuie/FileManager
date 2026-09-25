@@ -199,3 +199,64 @@ def test_the_eject_button_is_offered_only_on_an_ejectable_drive():
     usb.mouseReleaseEvent(press)
     assert asked == ["E:"] and not chosen
     QApplication.processEvents()
+
+
+# --------------------------------------------------- eject: which node is asked
+
+class _FakeCfg:
+    """cfgmgr32 as far as `_request` uses it. Node 1 is the disk, node 2 the
+    USB device above it; `answers` is what each says, in order."""
+
+    def __init__(self, answers, parent=2):
+        self.answers = {node: list(said) for node, said in answers.items()}
+        self.parent = parent
+        self.asked = []
+
+    def CM_Get_Parent(self, out, node, flags):  # noqa: N802 - the API's name
+        if self.parent is None:
+            return 13
+        out._obj.value = self.parent
+        return 0
+
+    def CM_Request_Device_EjectW(self, node, veto, name, size, flags):  # noqa: N802
+        value = node.value
+        self.asked.append(value)
+        code, kind, who = self.answers[value].pop(0)
+        veto._obj.value = kind
+        name.value = who
+        return code
+
+
+def _ask(cfg):
+    import ctypes
+
+    from app.io import eject
+    eject._PAUSE_S = 0
+    return eject._request(cfg, ctypes, ctypes.c_ulong(1), "E:")
+
+
+def test_the_usb_device_is_asked_before_the_disk() -> None:
+    """0.29.13: the disk node answers veto 8 on most sticks, and 0.27 stopped
+    there with "Windows refused the request"."""
+    cfg = _FakeCfg({2: [(0, 0, "")], 1: [(23, 8, "")]})
+    assert _ask(cfg).ok
+    assert cfg.asked == [2]
+
+
+def test_the_disk_is_asked_when_the_device_above_it_refuses_the_request() -> None:
+    cfg = _FakeCfg({2: [(23, 8, "")], 1: [(0, 0, "")]})
+    assert _ask(cfg).ok
+    assert cfg.asked == [2, 1]
+
+
+def test_a_handle_still_closing_is_asked_again() -> None:
+    cfg = _FakeCfg({2: [(23, 5, ""), (0, 0, "")], 1: []})
+    assert _ask(cfg).ok
+    assert cfg.asked == [2, 2]
+
+
+def test_a_program_holding_a_file_is_named_and_not_asked_about_twice() -> None:
+    cfg = _FakeCfg({2: [(23, 3, "C:\\\\Office\\\\EXCEL.EXE")] * 3, 1: []})
+    outcome = _ask(cfg)
+    assert not outcome.ok and "EXCEL.EXE" in outcome.message
+    assert 1 not in cfg.asked

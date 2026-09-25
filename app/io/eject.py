@@ -216,20 +216,59 @@ def _eject(letter: str) -> Outcome:
     return Outcome(False, f"{letter} was not ejected: its disk could not be found")
 
 
+#: PNP_VetoIllegalDeviceRequest. What a USB disk's own device node answers
+#: when it is asked to eject: the disk is not the thing that can be removed,
+#: the USB storage device it hangs off is.
+_VETO_ILLEGAL_REQUEST = 8
+#: The vetoes that are a handle still closing rather than a refusal. Explorer
+#: retries these, and so does every eject tool that works.
+_VETO_TRANSIENT = (2, 3, 5)
+_ATTEMPTS = 3
+_PAUSE_S = 0.5
+
+
 def _request(cfg, ctypes, node, letter: str) -> Outcome:
-    """Eject the disk; if Windows declines without a veto, try its parent, which
-    is the USB storage device some adapters want asked instead."""
-    for attempt in range(2):
-        veto = ctypes.c_int(0)
-        name = ctypes.create_unicode_buffer(260)
-        result = cfg.CM_Request_Device_EjectW(node, ctypes.byref(veto), name, 260, 0)
-        if result == _CR_SUCCESS and veto.value == 0:
-            return Outcome(True, f"{letter} can be removed")
-        if veto.value != 0:
-            return Outcome(False, veto_sentence(letter, veto.value, name.value))
-        if attempt == 0:
-            parent = ctypes.c_ulong(0)
-            if cfg.CM_Get_Parent(ctypes.byref(parent), node, 0) != _CR_SUCCESS:
-                break
-            node = parent
+    """Eject the USB device the disk hangs off, falling back to the disk.
+
+    **The parent first**, which is what Explorer's Eject does and the order
+    0.27 had backwards. A USB stick or drive is two device nodes: the disk,
+    and the USB mass storage device above it. Asking the disk answers veto 8,
+    "illegal device request", on most of them -- and 0.27 returned on any
+    veto, so it never got as far as the parent and reported "Windows refused
+    the request" for a drive Explorer then ejected without complaint. The disk
+    itself is still tried when there is no parent to ask, for the card readers
+    and docks where the disk is the removable node.
+
+    A veto that names a handle still being closed is retried a few times
+    half a second apart, because the panes that were standing on the drive
+    were moved off it a moment ago and their last listing may still be
+    letting go.
+    """
+    import time
+
+    candidates = []
+    parent = ctypes.c_ulong(0)
+    if cfg.CM_Get_Parent(ctypes.byref(parent), node, 0) == _CR_SUCCESS:
+        candidates.append(parent)
+    candidates.append(node)
+
+    last = None
+    for target in candidates:
+        for attempt in range(_ATTEMPTS):
+            veto = ctypes.c_int(0)
+            name = ctypes.create_unicode_buffer(260)
+            result = cfg.CM_Request_Device_EjectW(target, ctypes.byref(veto), name, 260, 0)
+            if result == _CR_SUCCESS and veto.value == 0:
+                return Outcome(True, f"{letter} can be removed")
+            last = (veto.value, name.value)
+            if veto.value in _VETO_TRANSIENT and attempt + 1 < _ATTEMPTS:
+                time.sleep(_PAUSE_S)
+                continue
+            break
+        if last and last[0] not in (0, _VETO_ILLEGAL_REQUEST):
+            # A real answer -- somebody has a file open -- and asking the
+            # other node would only get the same one with less in it.
+            return Outcome(False, veto_sentence(letter, last[0], last[1]))
+    if last and last[0]:
+        return Outcome(False, veto_sentence(letter, last[0], last[1]))
     return Outcome(False, f"{letter} was not ejected: Windows refused the request")

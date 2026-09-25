@@ -5,6 +5,54 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.13]
+
+Five reports from use, four of them bugs and one a gesture that was missing.
+
+### Added
+- **Drag and drop between panes and folders.** Rows dragged onto the other
+  pane, or onto a folder in either one, copy there; hold Ctrl when letting go
+  to move instead. Onto `..` is into the folder above. The pane's status line
+  says what a drop would do while the pointer is over it -- "copy to D:\Archive
+  (Ctrl to move)" -- and a folder that would take it is lit. A drop goes
+  through the same prompt F5 and F6 use, with the destination filled in, so
+  Enter confirms it and nothing is written that no dialog has seen. Dropping
+  back onto the folder the rows came from, or a folder into itself, is refused
+  before the button is let go. Drags out of the window are unchanged and are
+  still copies only, so a drop onto Explorer can never take the files away.
+  Only this application's own rows are taken; files dragged in from Explorer
+  are not, yet.
+- **Add to favorites** on a drive's and a network location's right-click menu
+  in the rail, so a place can be saved without opening it first.
+
+### Fixed
+- **A network location could not be added, and a share root could not be
+  saved as a favorite.** Every name prompt applied the file-name rule, which
+  refuses a backslash -- so "Add a network location" greyed its OK button on
+  the `\\` it opened with, and Ctrl+D on `\\tsclient\C` offered that
+  path as the name and then refused it. Labels are checked for being
+  non-empty and nothing else now, and a share root is offered as
+  `C on tsclient`, a drive root as `C:`.
+- **Alt+F2 compares one item marked in each pane.** The file compare took the
+  marks in the active pane only, so a file picked on the left and one on the
+  right opened a single file in the compare tool. It now takes one from each
+  pane; two marked in one pane, or one marked with the same name in the other
+  pane's folder, still work as before. Folders pair the same way. The command
+  table has a new `%C` token for "the two things to compare", and a stored
+  compare row still carrying the old `%S` default is moved to it on load.
+- **Clicking anything in a pane makes it the active pane, keyboard included.**
+  A tab, the tab strip's menu, a nav button or a crumb in the inactive pane
+  switched that pane but left the keyboard -- and F5, Ctrl+D, Alt+F2 -- in the
+  other one. Any press inside a pane now moves both, and the keyboard follows
+  unless the click landed on something that takes it itself, such as the path
+  field. The rail still goes to whichever pane had the keyboard.
+- **Eject asks the USB device, not the disk.** Windows answers "illegal device
+  request" when a USB disk's own node is asked to eject, and the request
+  stopped there with "Windows refused the request". The USB storage device
+  above the disk is asked first now, as Explorer does, with the disk as the
+  fallback; a handle still closing is retried for a second and a half. A
+  program with a file open is still named.
+
 ## [0.29.12]
 
 A security and footprint pass. No feature changes: everything here is either a

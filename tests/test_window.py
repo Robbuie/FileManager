@@ -126,6 +126,34 @@ def test_the_tab_strip_counts_too(window):
     assert window._current_pane().current.path == RIGHT
 
 
+def test_a_real_click_on_a_tab_in_the_other_pane_takes_the_keyboard_there(window):
+    """0.29.13. A tab takes no focus, so a click on one in the inactive pane
+    switched the tab and left every key -- F5, Ctrl+D -- talking to the other
+    pane. The press itself is what counts now, and the keyboard follows it."""
+    from PySide6.QtTest import QTest
+
+    window._widgets[0].focus_listing()
+    QApplication.processEvents()
+    assert window._active == 0
+    tabs = window._widgets[1]._tabs
+    QTest.mouseClick(tabs, Qt.LeftButton, Qt.NoModifier, tabs.tabRect(0).center())
+    QApplication.processEvents()
+    assert window._active == 1
+    focus = QApplication.focusWidget()
+    if focus is not None:   # offscreen, an inactive window may hold no focus
+        assert window._widgets[1].isAncestorOf(focus)
+
+
+def test_a_press_on_a_nav_button_takes_the_keyboard_too(window):
+    from PySide6.QtTest import QTest
+
+    window._widgets[0].focus_listing()
+    QApplication.processEvents()
+    QTest.mouseClick(window._widgets[1]._up, Qt.LeftButton)
+    QApplication.processEvents()
+    assert window._active == 1
+
+
 def test_the_border_follows_it(window):
     """The accent on the border is the only thing on screen that says where
     the next keystroke lands, so it has to agree."""
@@ -239,3 +267,125 @@ def test_the_rail_does_not_put_a_floor_under_the_window(window):
     window.resize(820, 600)
     QApplication.processEvents()
     assert window.width() == 820
+
+
+# ---------------------------------------------------------------- drag and drop
+
+@pytest.fixture
+def declined(monkeypatch):
+    """The transfer prompt, answered No without being shown -- a modal
+    `exec` in a test is a test that waits for somebody forever."""
+    from app.ui import window as window_module
+
+    class Declined:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(window_module, "TransferPrompt", Declined)
+
+
+def _drop(target, kind, point, sources, modifiers=Qt.NoModifier):
+    """Deliver one drag event to a viewport, the way Qt would."""
+    from PySide6.QtCore import QMimeData, QPointF
+    from PySide6.QtGui import QDragMoveEvent, QDropEvent
+
+    from app.core import drops
+
+    mime = QMimeData()
+    mime.setData(drops.DRAG_FORMAT, drops.encode(sources))
+    cls = QDropEvent if kind == "drop" else QDragMoveEvent
+    from PySide6.QtCore import QEvent
+    event_type = {"enter": QEvent.DragEnter, "move": QEvent.DragMove,
+                  "drop": QEvent.Drop}[kind]
+    if kind == "enter":
+        from PySide6.QtGui import QDragEnterEvent
+        event = QDragEnterEvent(point, Qt.CopyAction, mime, Qt.LeftButton, modifiers)
+    elif kind == "move":
+        event = QDragMoveEvent(point, Qt.CopyAction, mime, Qt.LeftButton, modifiers)
+    else:
+        event = QDropEvent(QPointF(point), Qt.CopyAction, mime, Qt.LeftButton,
+                           modifiers, event_type)
+    QApplication.sendEvent(target, event)
+    return event
+
+
+def test_rows_dropped_on_the_other_pane_ask_for_a_copy_there(window, declined):
+    from PySide6.QtCore import QPoint
+
+    got = []
+    widget = window._widgets[1]
+    widget.dropRequested.connect(lambda *args: got.append(args))
+    viewport = widget._view.viewport()
+    point = QPoint(20, viewport.height() - 5)   # below the rows: this folder
+    assert _drop(viewport, "enter", point, [LEFT + "\\a.dwg"]).isAccepted()
+    _drop(viewport, "move", point, [LEFT + "\\a.dwg"])
+    assert "copy to" in widget._status.text()
+    _drop(viewport, "drop", point, [LEFT + "\\a.dwg"])
+    assert got == [([LEFT + "\\a.dwg"], RIGHT, False)]
+    assert window._active == 1
+    assert "copy to" not in widget._status.text()
+
+
+def test_ctrl_on_the_drop_makes_it_a_move(window, declined):
+    from PySide6.QtCore import QPoint
+
+    got = []
+    widget = window._widgets[1]
+    widget.dropRequested.connect(lambda *args: got.append(args))
+    viewport = widget._view.viewport()
+    point = QPoint(20, viewport.height() - 5)
+    _drop(viewport, "enter", point, [LEFT + "\\a.dwg"], Qt.ControlModifier)
+    _drop(viewport, "drop", point, [LEFT + "\\a.dwg"], Qt.ControlModifier)
+    assert got == [([LEFT + "\\a.dwg"], RIGHT, True)]
+
+
+def test_a_drop_back_onto_the_folder_it_came_from_does_nothing(window, declined):
+    from PySide6.QtCore import QPoint
+
+    got = []
+    widget = window._widgets[0]
+    widget.dropRequested.connect(lambda *args: got.append(args))
+    viewport = widget._view.viewport()
+    point = QPoint(20, viewport.height() - 5)
+    _drop(viewport, "enter", point, [LEFT + "\\a.dwg"])
+    assert not _drop(viewport, "move", point, [LEFT + "\\a.dwg"]).isAccepted()
+    _drop(viewport, "drop", point, [LEFT + "\\a.dwg"])
+    assert got == []
+
+
+def test_a_drag_from_another_program_is_not_taken(window):
+    from PySide6.QtCore import QMimeData, QPoint, QUrl
+    from PySide6.QtGui import QDragEnterEvent
+
+    viewport = window._widgets[1]._view.viewport()
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile("C:\\elsewhere\\x.txt")])
+    event = QDragEnterEvent(QPoint(5, 5), Qt.CopyAction, mime, Qt.LeftButton,
+                            Qt.NoModifier)
+    QApplication.sendEvent(viewport, event)
+    assert not event.isAccepted()
+
+
+def test_the_prompt_is_what_starts_the_transfer(window, monkeypatch):
+    from app.ui import window as window_module
+
+    started = []
+
+    class Answered:
+        def __init__(self, kind, names, destination, parent):
+            self.kind, self.shown = kind, destination
+
+        def exec(self):
+            return window_module.QueueDialog.Accepted
+
+        def destination(self):
+            return self.shown
+
+    monkeypatch.setattr(window_module, "TransferPrompt", Answered)
+    monkeypatch.setattr(window._transfers, "move",
+                        lambda sources, target: started.append(("move", sources, target)))
+    window._on_drop_requested(window._widgets[1], [LEFT + "\\a.dwg"], RIGHT, True)
+    assert started == [("move", [LEFT + "\\a.dwg"], RIGHT)]

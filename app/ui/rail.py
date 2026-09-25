@@ -113,6 +113,9 @@ class NavigationRail(QFrame):
     reconnectRequested = Signal(str)
     ejectRequested = Signal(str)
     forgetLocationRequested = Signal(str)
+    #: Save this place as a favourite. From a drive's or a network location's
+    #: own menu, so the place does not have to be opened first to be saved.
+    favoriteRequested = Signal(str)
 
     def __init__(self, favorites, volumes, capacity, config, network=None,
                  parent: QWidget | None = None) -> None:
@@ -389,6 +392,7 @@ class NavigationRail(QFrame):
         row.measureRequested.connect(self.measureRequested)
         row.reconnectRequested.connect(self.reconnectRequested)
         row.ejectRequested.connect(self.ejectRequested)
+        row.favoriteRequested.connect(self.favoriteRequested)
         self._column.insertWidget(self._column.count() - 1, row)
 
     def _network_row(self, location) -> None:
@@ -426,6 +430,8 @@ class NavigationRail(QFrame):
             lambda: self.reconnectRequested.emit(location.path))
         again.setToolTip("Attach to this share again, for one that has stopped "
                          "answering. Windows uses this session's own account.")
+        menu.addAction("Add to favorites",
+                       lambda: self.favoriteRequested.emit(location.path))
         menu.addSeparator()
         menu.addAction("Add a network location", self.addLocationRequested.emit)
         forget = menu.addAction(
@@ -579,6 +585,7 @@ class DriveRow(QWidget):
     reconnectRequested = Signal(str)
     #: 0.27: a USB drive's eject button, or Eject on its menu.
     ejectRequested = Signal(str)
+    favoriteRequested = Signal(str)
 
     def __init__(self, letter: str, unc: str, kind: str, *, usage=None,
                  tokens=None, ejectable: bool = False,
@@ -761,6 +768,7 @@ class DriveRow(QWidget):
         menu = QMenu(self)
         menu.addAction("Go here", lambda: self.chosen.emit(self.path, False))
         menu.addAction("Open in new tab", lambda: self.chosen.emit(self.path, True))
+        menu.addAction("Add to favorites", lambda: self.favoriteRequested.emit(self.path))
         menu.addSeparator()
         # The one entry that opens a volume, and the reason this is a menu
         # rather than something that happens by itself: on a mapped drive

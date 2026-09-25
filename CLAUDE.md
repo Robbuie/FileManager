@@ -330,6 +330,7 @@ External commands, which are a table rather than code (0.17)
 F9   PowerShell here       Shift+F9  Command prompt here
 Ctrl+F9  Windows Terminal  F4        Edit
 Ctrl+F2  compare the two panes with the tool  Alt+F2  compare the marked files
+-- one marked in each pane, or two in this one (`%C`, 0.29.13)
 Ctrl+Shift+F2  compare the panes here, marking what differs
 Every one of those is a row in `commands` and can be re-keyed or removed. The
 keys are the pane's, matched against the table before the built-in function
@@ -348,7 +349,8 @@ middle click  the same, in a tab behind
 click a heading  fold that section     right click a drive  measure it,
 reconnect it
 right click the Network heading  add a location, refresh the list
-right click a network location  reconnect it, or remove a saved one
+right click a network location  reconnect it, save it as a favourite, or
+remove a saved one
 click a chevron in the path bar  the folders inside the crumb on its left
 
 Tabs
@@ -359,6 +361,11 @@ Alt+1 .. Alt+9  by number  Ctrl+Shift+L  lock this one
 Ctrl+Enter  the folder under the cursor, in a new tab
 middle click  a folder in a tab behind; a tab in the strip, closed
 double click  the empty part of the strip, a new tab
+
+Dragging (0.29.13)
+drag rows onto the other pane or a folder  copy there, after the F5 prompt
+hold Ctrl when letting go  move instead -- the reverse of Explorer, on purpose
+onto `..`  into the folder above
 
 Favorites
 Ctrl+D  save this folder    Ctrl+1 .. Ctrl+9  go to the first nine
@@ -494,6 +501,20 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   state** -- laying the columns out again on every `setModel` is what used to
   throw away every drag on a tab switch, and `_sync_current` now reapplies only
   which columns are hidden, because that part `setModel` really does reset.
+- **A drop is a transfer, so it goes through the prompt.** Since 0.29.13
+  both views are `DragDrop`, and the pane's filter on each viewport answers
+  every drag event before the view sees one -- the view's own handling would
+  call `dropMimeData` on the model, which is a file write decided with nothing
+  confirmed. Only drags carrying `drops.DRAG_FORMAT` are taken, the drag still
+  offers Qt a copy and nothing else (so Explorer cannot move files out from
+  under a listing), and Ctrl is read by the pane rather than negotiated with
+  Qt. A drop that skipped `TransferPrompt` would be the first path from a
+  gesture to a written file that no dialog saw.
+- **Name prompts are file-name prompts unless told otherwise.** `ask_name`
+  refuses `\ / : * ? " < > |` by default, which is right for a folder and
+  wrong for a favourite, a group or a typed `\\server\share` -- for which
+  it made OK grey on the first keystroke until 0.29.13. Anything that is a
+  label rather than a name on disk passes `filename=False`.
 - **A control that takes no focus is invisible to the active-pane rule.**
   Every borderless control in a pane is `NoFocus` so the listing keeps the
   keyboard, and the window works out the active pane from
@@ -501,8 +522,12 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   control the window cannot see being used, and clicking it in the *inactive*
   pane walks that pane while every keystroke still goes to the other one.
   `PaneWidget._claim` is what answers it, and **every control added to a pane
-  from now on has to call it.** The navigation rail is the deliberate
-  exception and inverts the rule: it is not in a pane, so it claims nothing,
+  from now on has to call it.** Since 0.29.13 the window also watches every
+  mouse press at the application and makes the pane it lands in active, then
+  moves the keyboard there unless the press focused something in that pane
+  itself -- which is what finally covered the tab strip, where `_claim` was
+  never wired. `_claim` stays: it is what a signal-driven test exercises.
+  The navigation rail is the deliberate exception and inverts the rule: it is not in a pane, so it claims nothing,
   takes no focus anywhere, and goes to whichever pane already had the
   keyboard. A rail that took focus would leave the *next* click going wherever
   the last one left things.

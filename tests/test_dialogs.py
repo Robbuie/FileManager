@@ -48,3 +48,21 @@ def test_the_screen_is_where_it_says_it_is():
     clamped to the primary screen's numbers would land on the wrong one."""
     area = QRect(1920, 0, 1920, 1080)
     assert fit(QRect(3800, 200, 420, 200), area) == QRect(3420, 200, 420, 200)
+
+
+def test_a_label_prompt_takes_what_a_file_name_prompt_refuses() -> None:
+    """0.29.13. A favourite's name and a typed network location are labels,
+    not names on disk. With the file-name rule on every prompt, `\\\\server`
+    turned OK grey on the first keystroke and a share root's favourite
+    refused its own suggested name."""
+    from app.ui.dialogs import NamePrompt
+
+    strict = NamePrompt(None, title="Rename", label="as", initial="\\\\tsclient\\C")
+    assert not strict._ok.isEnabled()
+    loose = NamePrompt(None, title="Add", label="as", initial="\\\\tsclient\\C",
+                       filename=False)
+    assert loose._ok.isEnabled()
+    loose._field.setText("   ")
+    assert not loose._ok.isEnabled()
+    strict.deleteLater()
+    loose.deleteLater()

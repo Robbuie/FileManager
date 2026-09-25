@@ -328,9 +328,13 @@ def test_a_change_while_the_rename_dialog_is_open_renames_the_right_file(
     widget.deleteLater()
 
 
-def test_both_views_drag_out_and_neither_accepts_a_drop(tmp_path):
+def test_both_views_drag_and_take_drops_through_the_pane(tmp_path):
+    """0.29.13: both views take a drop, and both have the pane's filter on
+    the viewport -- which is what keeps the view's own drop handling, and the
+    model write it would make, from ever running."""
     widget = pane_widget(tmp_path)
     for view in (widget._view, widget._grid):
         assert view.dragEnabled()
-        assert view.dragDropMode() == QAbstractItemView.DragOnly
+        assert view.dragDropMode() == QAbstractItemView.DragDrop
+        assert view.viewport().acceptDrops()
     widget.deleteLater()

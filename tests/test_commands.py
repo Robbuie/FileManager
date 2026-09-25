@@ -194,6 +194,49 @@ def test_the_file_compare_refuses_a_single_file_with_no_other_pane() -> None:
     assert refusal(command, context(names=("a.txt", "b.txt"), other_path="")) == ""
 
 
+def test_one_marked_in_each_pane_compares_those_two() -> None:
+    """The report that started 0.29.13: a file picked on the left and one on
+    the right, and the compare opened only the left one."""
+    command = find(DEFAULTS, "compare-files")
+    here = context(names=("left.txt",), other_names=("right.txt",))
+    assert refusal(command, here) == ""
+    assert expand(command, here).arguments == (
+        HERE + "\\left.txt", THERE + "\\right.txt")
+
+
+def test_folders_pair_the_same_way() -> None:
+    command = find(DEFAULTS, "compare-files")
+    here = context(names=("2026-09-24",), other_names=("2026-09-25",))
+    assert expand(command, here).arguments == (
+        HERE + "\\2026-09-24", THERE + "\\2026-09-25")
+
+
+def test_two_marked_here_win_over_whatever_is_marked_there() -> None:
+    command = find(DEFAULTS, "compare-files")
+    here = context(names=("a.txt", "b.txt"), other_names=("c.txt",))
+    assert expand(command, here).arguments == (HERE + "\\a.txt", HERE + "\\b.txt")
+
+
+def test_one_here_and_nothing_marked_there_is_the_same_name_there() -> None:
+    command = find(DEFAULTS, "compare-files")
+    assert expand(command, context(names=("a.txt",))).arguments == (
+        HERE + "\\a.txt", THERE + "\\a.txt")
+
+
+def test_one_here_and_several_there_is_refused_rather_than_guessed() -> None:
+    command = find(DEFAULTS, "compare-files")
+    assert refusal(command, context(names=("a.txt",),
+                                    other_names=("b.txt", "c.txt"))) != ""
+
+
+def test_the_old_default_template_is_moved_to_the_pairing() -> None:
+    """A settings file written before 0.29.13 has `%S` stored for this row."""
+    stored = [dict(find(DEFAULTS, "compare-files").as_dict(), arguments="%S")]
+    assert from_config(stored)[0].arguments == "%C"
+    mine = [dict(find(DEFAULTS, "compare-files").as_dict(), arguments="/x %S")]
+    assert from_config(mine)[0].arguments == "/x %S"
+
+
 def test_a_refusal_says_what_is_missing_rather_than_naming_the_token() -> None:
     """Somebody who has never opened the editor has not heard of `%T`."""
     command = Command(id="x", name="x", program="p.exe", arguments="%T")

@@ -174,6 +174,7 @@ class MainWindow(QMainWindow):
             self._rail.groupRequested.connect(self._set_favorite_group)
             self._rail.addLocationRequested.connect(self._add_location)
             self._rail.forgetLocationRequested.connect(self._forget_location)
+            self._rail.favoriteRequested.connect(self._save_favorite)
             if network is not None:
                 self._rail.refreshNetworkRequested.connect(network.refresh)
                 network.changed.connect(self._rebuild_rail)
@@ -205,6 +206,9 @@ class MainWindow(QMainWindow):
                 lambda message: self.statusBar().showMessage(message, 8000))
         for widget in self._widgets:
             widget.transferRequested.connect(self._on_transfer_requested)
+            widget.dropRequested.connect(
+                lambda sources, destination, move, w=widget:
+                self._on_drop_requested(w, sources, destination, move))
             widget.clipboardRequested.connect(self._on_clipboard_requested)
             widget.addFavoriteRequested.connect(self._add_favorite)
             widget.manageFavoritesRequested.connect(self._manage_favorites)
@@ -301,6 +305,13 @@ class MainWindow(QMainWindow):
         # pane's folder, F5 copied the wrong way, and the accent border said
         # so the whole time.
         QApplication.instance().focusChanged.connect(self._on_focus_changed)
+        # And follows the mouse, for every press anywhere inside a pane. The
+        # focus rule above cannot see a click on something that takes no
+        # focus -- a tab, the new-tab button, a crumb -- and `_claim` on each
+        # control only made the pane *look* active while the keyboard stayed
+        # in the other one. Watching presses at the application is the one
+        # place that covers every control, including the next one added.
+        QApplication.instance().installEventFilter(self)
         if self._favorites is not None:
             # Rebuilt rather than patched. The list is a dozen entries and
             # the alternative is a diff against a menu.
@@ -725,7 +736,7 @@ class MainWindow(QMainWindow):
         if not group:
             group = dialogs.ask_name(
                 self, title="New group", label="Call the group",
-                initial="", ok_text="Create") or ""
+                initial="", ok_text="Create", filename=False) or ""
             if not group:
                 return
         self._favorites.set_group(index, group)
@@ -750,7 +761,7 @@ class MainWindow(QMainWindow):
         typed = dialogs.ask_name(
             self, title="Add a network location",
             label="The path, as \\\\server\\share",
-            initial="\\\\", ok_text="Add")
+            initial="\\\\", ok_text="Add", filename=False)
         if not typed:
             return
         added = self._network.add(typed)
@@ -972,6 +983,8 @@ class MainWindow(QMainWindow):
             other_path=other.current.path,
             name=entry.name if entry is not None else "",
             names=tuple(widget.selected_names()),
+            # Marks only, not the cursor: see `Context.other_names`.
+            other_names=tuple(self._widgets[1 - self._active].marked_names()),
         )
 
     def _on_command(self, identity: str) -> None:
@@ -1025,15 +1038,27 @@ class MainWindow(QMainWindow):
         called `2026` in four job trees do not do that.
         """
         pane = self._current_pane()
-        path = pane.current.path
+        self._save_favorite(pane.current.path, pane.display(pane.current.path))
+
+    def _save_favorite(self, path: str, shown: str = "") -> None:
+        """Ask for a name and save `path`. The rail's network rows come in
+        here directly, with the location's own path rather than the pane's.
+
+        `filename=False`: a favourite's name is a label, not a name on disk.
+        With the file-name rule a share root could not be saved at all, since
+        the name offered for `\\\\tsclient\\C` was that path, backslashes
+        included, and the OK button stayed grey.
+        """
+        if self._favorites is None or not path:
+            return
         known = self._favorites.index_of(path)
         name = dialogs.ask_name(
             self, title="Add favorite",
             label=("Rename this favorite" if known >= 0
-                   else f"Save {pane.display(path)} as"),
+                   else f"Save {shown or path} as"),
             initial=(self._favorites.entries[known].name if known >= 0
                      else self._favorites.suggested_name(path)),
-            ok_text="Save",
+            ok_text="Save", filename=False,
         )
         if not name:
             return
@@ -1357,6 +1382,32 @@ class MainWindow(QMainWindow):
         else:
             self._transfers.move(sources, destination)
 
+    def _on_drop_requested(self, widget: PaneWidget, sources: list,
+                           destination: str, move: bool) -> None:
+        """Rows dropped onto a pane: the same prompt F5 and F6 put up, with
+        the destination filled in from where the drop landed.
+
+        The prompt is the rule rather than a courtesy -- nothing in this
+        application writes a file that no dialog has confirmed, and a drag is
+        the gesture most likely to be let go a folder early. Enter accepts it,
+        so a deliberate drop costs one key.
+        """
+        if not sources or not destination or self._transfers is None:
+            return
+        pane = self._panes[self._widgets.index(widget)]
+        transfer = JobKind.MOVE if move else JobKind.COPY
+        names = [paths.leaf(source) for source in sources]
+        prompt = TransferPrompt(transfer, names, pane.display(destination), self)
+        if prompt.exec() != QueueDialog.Accepted:
+            return
+        target = pane.as_path(prompt.destination())
+        if not target:
+            return
+        if transfer is JobKind.COPY:
+            self._transfers.copy(list(sources), target)
+        else:
+            self._transfers.move(list(sources), target)
+
     def _on_clipboard_requested(self, what: str) -> None:
         """Ctrl+C, Ctrl+X and Ctrl+V, in the pane that has the keyboard.
 
@@ -1533,6 +1584,48 @@ class MainWindow(QMainWindow):
 
     def _on_pane_activated(self, widget: PaneWidget) -> None:
         self._set_active(self._widgets.index(widget))
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
+        if event.type() == QEvent.MouseButtonPress and isinstance(watched, QWidget):
+            self._follow_press(watched)
+        return super().eventFilter(watched, event)
+
+    def _follow_press(self, target: QWidget) -> None:
+        """A press inside a pane makes it the active pane, keyboard and all.
+
+        The pane becomes active at once, so a tab clicked in the inactive pane
+        is the tab F5 then copies from. The keyboard follows a moment later
+        and only if it is still somewhere else: a press on the listing or the
+        path field focuses that widget itself, and taking the focus from it
+        would put the caret somewhere the user did not click.
+
+        `isAncestorOf` stops at a window boundary, so a menu or a dialog a
+        pane opened is not "inside" it, and the rail is not in a pane at all
+        -- it still goes to whichever pane already had the keyboard.
+        """
+        for index, widget in enumerate(self._widgets):
+            if widget is target or widget.isAncestorOf(target):
+                if index != self._active:
+                    self._set_active(index)
+                QTimer.singleShot(0, self, lambda w=widget: self._keyboard_into(w))
+                return
+
+    def _keyboard_into(self, widget: PaneWidget) -> None:
+        app = QApplication.instance()
+        if app.activeModalWidget() is not None:
+            return
+        if app.activePopupWidget() is not None:
+            # A right click on the tab strip opens its menu on the press, and
+            # "New tab" from it should land the keyboard in the new tab. Look
+            # again once the menu has gone; a press elsewhere in the meantime
+            # makes the other pane active and the check below then declines.
+            QTimer.singleShot(150, self, lambda: self._keyboard_into(widget))
+            return
+        focus = app.focusWidget()
+        if focus is not None and (focus is widget or widget.isAncestorOf(focus)):
+            return
+        if self._widgets[self._active] is widget:
+            widget.focus_listing()
 
     def _on_focus_changed(self, old, new) -> None:
         """Follow the keyboard into whichever pane now holds it.

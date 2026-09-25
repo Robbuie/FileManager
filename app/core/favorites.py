@@ -88,8 +88,22 @@ class Favorites(QObject):
         return self.index_of(path) >= 0
 
     def suggested_name(self, path: str) -> str:
-        """What to fill the name field in with. The folder's own name."""
-        return paths.leaf(paths.normalize(path))
+        """What to fill the name field in with. The folder's own name.
+
+        A root has no name of its own, and `leaf` answers with the whole path.
+        A drive root is offered as its letter, and a share root the way the
+        rail's network section names one -- `C on tsclient` -- because the
+        bare share name is often a single letter that reads as a drive.
+        """
+        text = paths.normalize(path)
+        pieces = paths.split_unc(text)
+        if pieces is not None and not pieces[2]:
+            server, share, _ = pieces
+            return f"{share} on {server}"
+        name = paths.leaf(text)
+        if name.endswith(":\\"):
+            return name[:-1]
+        return name
 
     # --------------------------------------------------------------- editing
 

@@ -30,7 +30,14 @@ mean something else by a folder name.
   ``%S``  every marked file, as full paths
   ``%s``  every marked file, as bare names
   ``%L``  a file holding the marked paths, one per line
+  ``%C``  the two things to compare, as two full paths (0.29.13)
   ``%%``  a literal per cent
+
+`%C` is `pair_for_compare`, and it exists because `%S` could not say it. The
+gesture a dual pane invites is one file marked on the left and one on the
+right; `%S` is this pane's marks only, so the file compare opened a single file
+and the other pane's pick was never asked about. `%C` looks at both panes, and
+always becomes exactly two arguments or the command is refused.
 
 `%S` and `%s` are the two that can be more than one thing. A token that is
 *exactly* `%S` becomes one argument per file; `%S` inside a larger token joins
@@ -156,6 +163,10 @@ class Context:
     other_path: str = ""
     name: str = ""
     names: tuple[str, ...] = ()
+    #: What is *marked* in the other pane -- never its cursor. A cursor sits
+    #: on some row in every pane all the time, so falling back to it here
+    #: would turn "compare with the same name over there" into "compare with
+    #: whatever the other cursor happened to be left on".
     other_names: tuple[str, ...] = ()
 
     def full(self, name: str) -> str:
@@ -244,7 +255,7 @@ DEFAULTS: tuple[Command, ...] = (
         name="Compare the marked files",
         program="BCompare.exe",
         alternatives=("WinMergeU.exe",),
-        arguments="%S",
+        arguments="%C",
         shortcut="Alt+F2",
     ),
     Command(
@@ -258,7 +269,7 @@ DEFAULTS: tuple[Command, ...] = (
 
 # ------------------------------------------------------------ the expansion
 
-_TOKEN = re.compile(r"%[PTNFSsL%]")
+_TOKEN = re.compile(r"%[PTNFSsLC%]")
 
 
 def split(template: str) -> list[str]:
@@ -331,6 +342,9 @@ def expand(command: Command, context: Context) -> Launch:
             arguments.append(LIST_FILE)
             wants_list = True
             continue
+        if token == "%C":
+            arguments.extend(pair_for_compare(context) or ())
+            continue
         if not found:
             arguments.append(token)
             continue
@@ -341,6 +355,8 @@ def expand(command: Command, context: Context) -> Launch:
                 return " ".join(context.full(name) for name in selection)
             if marker == "%s":
                 return " ".join(selection)
+            if marker == "%C":
+                return " ".join(pair_for_compare(context) or ())
             if marker == "%L":
                 # Inside a larger token there is nowhere to put a sentinel that
                 # survives, so this is the one shape of `%L` that is not
@@ -390,27 +406,37 @@ def refusal(command: Command, context: Context) -> str:
         return "nothing is under the cursor"
     if wanted & {"%S", "%s", "%L"} and not context.selection:
         return "nothing is marked"
-    if command.id == "compare-files" and len(context.selection) < 2 \
-            and not context.other_path:
-        # The one command with a rule of its own, because comparing one file
-        # with nothing is the mistake this key invites and a diff tool opening
-        # on a single file says nothing about why.
-        return "mark two files, or open the other pane on the one to compare with"
+    if "%C" in wanted and pair_for_compare(context) is None:
+        # Comparing one file with nothing is the mistake this key invites,
+        # and a diff tool opening on a single file says nothing about why.
+        return ("mark one item in each pane, or two in this one, "
+                "or open the other pane on the one to compare with")
     return ""
 
 
 def pair_for_compare(context: Context) -> tuple[str, str] | None:
     """The two things a file compare should open, or None.
 
-    Two marked files are the two. One marked file is that one and the file of
-    the same name in the other pane, which is the gesture that makes a dual
-    pane worth having -- and it is the reason `compare-files` is allowed to run
-    with one file marked when the other pane has a folder.
+    In the order they are tried:
+
+    - one here and one marked in the other pane: those two. The gesture a dual
+      pane exists for, and the one that did nothing useful before 0.29.13;
+    - two or more here: the first two;
+    - one here and nothing marked there: that one and the item of the same
+      name in the other pane's folder.
+
+    Files or folders alike. A compare tool given two folders compares folders,
+    and which it is is the tool's business -- asking would be a filesystem
+    call, and this is decided in the window's process.
     """
     selection = context.selection
+    others = tuple(context.other_names)
+    if len(selection) == 1 and len(others) == 1 and context.other_path:
+        return (context.full(selection[0]),
+                paths.join(context.other_path, others[0]))
     if len(selection) >= 2:
         return context.full(selection[0]), context.full(selection[1])
-    if len(selection) == 1 and context.other_path:
+    if len(selection) == 1 and context.other_path and not others:
         name = selection[0]
         return (context.full(name), paths.join(context.other_path, name))
     return None
@@ -520,6 +546,14 @@ def from_config(value: Any) -> tuple[Command, ...]:
         if not identity or not name or identity in seen:
             continue
         seen.add(identity)
+        arguments = str(entry.get("arguments", "") or "")
+        if identity == "compare-files" and arguments.strip() == "%S":
+            # The shipped template before 0.29.13, saved into every settings
+            # file that has ever had its table written. Left as it was, the
+            # new pairing would reach nobody who has opened the editor once.
+            # Only the untouched default is moved: a template somebody wrote
+            # themselves is theirs.
+            arguments = "%C"
         alternatives = entry.get("alternatives") or ()
         if isinstance(alternatives, str):
             alternatives = (alternatives,)
@@ -527,7 +561,7 @@ def from_config(value: Any) -> tuple[Command, ...]:
             id=identity,
             name=name,
             program=str(entry.get("program", "") or ""),
-            arguments=str(entry.get("arguments", "") or ""),
+            arguments=arguments,
             working=str(entry.get("working", "") or ""),
             shortcut=normalise_shortcut(str(entry.get("shortcut", "") or "")),
             alternatives=tuple(str(item) for item in alternatives if str(item)),

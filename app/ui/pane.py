@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QPixmap,
 )
 
+from app.core import drops
 from app.core.commands import normalise_shortcut
 from app.core.icons import ROW_ICON
 from app.core.listing import (
@@ -202,20 +203,30 @@ ICON_GAP = 8
 #: anything with them by default.
 HISTORY_BUTTONS = {Qt.BackButton: -1, Qt.ForwardButton: 1}
 
+#: The events a drag over a view arrives as. `DragEnter` is a `DragMove` with
+#: a different type, and both carry the position and the modifiers.
+_DRAG_EVENTS = (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop)
+
 
 def _drag_out(view: QAbstractItemView) -> None:
-    """Let rows be dragged out of the window -- into an email, onto the
-    desktop, into another program -- and never dropped in.
+    """Let rows be dragged -- out of the window into an email, onto the
+    desktop, into another program, and since 0.29.13 onto a pane.
 
-    `DragOnly` rather than `DragDrop`, because a drop here would be a copy or a
-    move this application did not confirm, which `CLAUDE.md` rules out; copy as
-    the only action for the reason `ListingModel.supportedDragActions` gives.
-    Both views get it, because a second view that inherits the commands and
-    not the gestures is the mistake 0.16 made with keys.
+    `DragDrop`, but the view never handles a drop itself: `PaneWidget`
+    intercepts every drag event on the viewport and turns a drop into a
+    request that goes through the transfer prompt, the way F5 does. Letting
+    the view handle it would mean `dropMimeData` on the model -- a file write
+    decided inside a model with nothing confirmed. Copy is still the only
+    action the drag offers, for the reason `ListingModel.supportedDragActions`
+    gives; a move is the pane's decision from Ctrl, not Qt's. Both views get
+    it, because a second view that inherits the commands and not the gestures
+    is the mistake 0.16 made with keys.
     """
     view.setDragEnabled(True)
-    view.setDragDropMode(QAbstractItemView.DragOnly)
+    view.setDragDropMode(QAbstractItemView.DragDrop)
     view.setDefaultDropAction(Qt.CopyAction)
+    view.setAcceptDrops(True)
+    view.viewport().setAcceptDrops(True)
 
 
 def refit_popup(menu: QWidget, anchor: QPoint, area: QRect) -> None:
@@ -360,6 +371,10 @@ class PaneWidget(QFrame):
     #: keystroke because the pane is where a key is safe to act on; what to do
     #: with the id is the window's business.
     commandRequested = Signal(str)
+    #: Rows dropped onto this pane: their full paths, the folder they were
+    #: dropped into, and whether Ctrl made it a move. The window confirms it
+    #: with the transfer prompt; nothing is written from here.
+    dropRequested = Signal(list, str, bool)
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
                  favorites=None, parent: QWidget | None = None):
@@ -368,6 +383,9 @@ class PaneWidget(QFrame):
         self._volumes = volumes
         self._favorites = favorites
         self._summary = ("", "idle")
+        #: What a drag hovering over this pane would do, shown in front of the
+        #: status line until the drag leaves or lands.
+        self._drop_note = ""
         self.setProperty("pane", "true")
         self.setProperty("active", "false")
         self.setFrameShape(QFrame.NoFrame)
@@ -1161,6 +1179,14 @@ class PaneWidget(QFrame):
                 return []
             rows = {row}
         return self._pane.names_for(rows)
+
+    def marked_names(self) -> list[str]:
+        """The marked rows and nothing else -- no fallback to the cursor.
+
+        For a question asked of the pane that does *not* have the keyboard,
+        where the cursor is only wherever it was last left.
+        """
+        return self._pane.names_for(self._selected_rows())
 
     # ------------------------------------------------------------ operations
 
@@ -2220,6 +2246,8 @@ class PaneWidget(QFrame):
         user works; the folder totals sit behind it and stay put.
         """
         text, state = self._summary
+        if self._drop_note:
+            text = f"{self._drop_note}  ·  {text}"
         sizes = self._pane.sizes
         if sizes is not None and sizes.busy:
             outstanding = sizes.busy
@@ -2692,6 +2720,10 @@ class PaneWidget(QFrame):
                 and not self._pane.columns:
             self._apply_columns()
 
+        if event.type() in _DRAG_EVENTS and \
+                watched in (self._view.viewport(), self._grid.viewport()):
+            return self._on_drag_event(watched, event)
+
         # The side buttons, first and for every widget this filter watches.
         # First because the two views answer a mouse button before this widget
         # ever sees it -- the same rule the keys below sit under -- and for
@@ -2743,6 +2775,65 @@ class PaneWidget(QFrame):
                     self._open_row_in_tab(index.row(), background=True)
                     return True
         return super().eventFilter(watched, event)
+
+    def _on_drag_event(self, viewport, event) -> bool:
+        """A drag over one of the two views: say where it would land, refuse
+        where it cannot, and on a drop hand it to the window.
+
+        Only drags of this application's own rows are taken -- see
+        `core/drops.py` for why. Everything is answered here and nothing
+        reaches the view, whose own drop handling would ask the model to write.
+        """
+        kind = event.type()
+        if kind == QEvent.DragLeave:
+            self._show_drop(-1, "")
+            return True
+        mime = event.mimeData()
+        sources = drops.decode(mime.data(drops.DRAG_FORMAT).data()
+                               if mime is not None and mime.hasFormat(drops.DRAG_FORMAT)
+                               else None)
+        if not sources:
+            event.ignore()
+            return True
+        view = self._view if viewport is self._view.viewport() else self._grid
+        index = view.indexAt(event.position().toPoint())
+        row = index.row() if index.isValid() else -1
+        destination = self._pane.drop_target(row)
+        move = drops.is_move(bool(event.modifiers() & Qt.ControlModifier))
+        why = drops.refusal(sources, destination)
+        if kind == QEvent.DragEnter:
+            # Accepted whatever the spot, or Qt sends no moves at all and the
+            # drag could not travel on to a folder that would take it.
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+        if why:
+            if kind != QEvent.DragEnter:
+                event.ignore()
+            self._show_drop(-1, why if kind != QEvent.Drop else "")
+            return True
+        event.setDropAction(Qt.CopyAction)
+        event.accept()
+        if kind == QEvent.Drop:
+            self._show_drop(-1, "")
+            self._claim()
+            self.dropRequested.emit(list(sources), destination, move)
+            return True
+        into = row if destination != self._pane.current.path else -1
+        verb = "move" if move else "copy"
+        other = "" if move else "  (Ctrl to move)"
+        self._show_drop(into, f"{verb} to {self._pane.display(destination)}{other}")
+        return True
+
+    def _show_drop(self, row: int, note: str) -> None:
+        """The row a drop would go into, lit the way a hovered row is, and the
+        sentence in front of the status line."""
+        if row >= 0 and self._views.currentWidget() is self._view:
+            self._on_row_entered(row)
+        else:
+            self._clear_hover()
+        if note != self._drop_note:
+            self._drop_note = note
+            self._render_status()
 
     def _button(self, text: str, tip: str, slot) -> QToolButton:
         button = QToolButton()

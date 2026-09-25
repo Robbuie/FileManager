@@ -669,6 +669,24 @@ class Pane(QObject):
         """Full paths for names in this folder, for handing to a transfer."""
         return [paths.join(self.current.path, name) for name in names]
 
+    def drop_target(self, row: int) -> str:
+        """Where a drop on `row` goes. Pure arithmetic on the listing.
+
+        Onto a folder is into it, and onto `..` is into the folder above --
+        Double Commander's gesture, and the only way to drop upwards without
+        opening a second tab. Onto a file or the empty space below the rows is
+        into the folder on screen.
+        """
+        folder = self.current.path
+        model = self.current.model
+        if row >= 0:
+            if model.is_parent_row(row):
+                return paths.parent(folder) or folder
+            entry = model.entry(row)
+            if entry is not None and entry.is_dir:
+                return paths.join(folder, entry.name)
+        return folder
+
     def as_path(self, text: str) -> str:
         """Normalise something the user typed into a path this app can use.
 

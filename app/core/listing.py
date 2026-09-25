@@ -27,6 +27,7 @@ from typing import Sequence
 
 from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, QUrl
 
+from app.core import drops
 from app.io import paths
 from app.io.protocol import Entry
 
@@ -688,12 +689,14 @@ class ListingModel(QAbstractTableModel):
         Offering a move would let Explorer take the files away on a drop within
         one disk, and on a move `QAbstractItemView` then asks the model to
         remove the dragged rows itself. A drag out of a file manager into an
-        email is a copy in every sense that matters, and a move stays F6.
+        email is a copy in every sense that matters, and a move stays F6 -- or
+        Ctrl on a drop inside this window, which is performed by the transfer
+        queue after the prompt, never by Qt removing rows (`core/drops.py`).
         """
         return Qt.CopyAction
 
     def mimeTypes(self) -> list[str]:
-        return ["text/uri-list"]
+        return ["text/uri-list", drops.DRAG_FORMAT]
 
     def mimeData(self, indexes) -> QMimeData:
         """The dragged rows as the file list Windows programs read.
@@ -705,7 +708,7 @@ class ListingModel(QAbstractTableModel):
         """
         data = QMimeData()
         seen: set[int] = set()
-        urls = []
+        full: list[str] = []
         for index in sorted(indexes, key=lambda i: i.row()):
             row = index.row()
             if row in seen:
@@ -714,8 +717,11 @@ class ListingModel(QAbstractTableModel):
             entry = self.entry(row)
             if entry is None or not self._folder:
                 continue
-            urls.append(QUrl.fromLocalFile(paths.join(self._folder, entry.name)))
-        data.setUrls(urls)
+            full.append(paths.join(self._folder, entry.name))
+        data.setUrls([QUrl.fromLocalFile(path) for path in full])
+        # The same paths again in this application's own format, which is the
+        # only thing a drop onto a pane accepts. See `core/drops.py`.
+        data.setData(drops.DRAG_FORMAT, drops.encode(full))
         return data
 
     def rowCount(self, parent=QModelIndex()) -> int:
