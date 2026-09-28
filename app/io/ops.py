@@ -682,16 +682,22 @@ class Runner:
         with scanner:
             for entry in scanner:
                 self._checkpoint(job)
+                # Joined here rather than taken from `entry.path`. The scan was
+                # of `paths.api(source)`, so on Windows `entry.path` comes back
+                # wearing the `\\?\` prefix -- and an item's source travels on
+                # into failure reports, retries and erase's refusal offer, which
+                # are exactly the places the prefix must never reach.
+                child = os.path.join(source, entry.name)
                 child_target = os.path.join(target, entry.name) if target else ""
                 try:
                     if entry.is_dir(follow_symlinks=False):
-                        items.append(Item(entry.path, child_target, is_dir=True))
-                        self._walk(job, entry.path, child_target, items, unreadable)
+                        items.append(Item(child, child_target, is_dir=True))
+                        self._walk(job, child, child_target, items, unreadable)
                     else:
-                        items.append(Item(entry.path, child_target,
+                        items.append(Item(child, child_target,
                                           size=entry.stat(follow_symlinks=False).st_size))
                 except OSError as exc:
-                    unreadable.append((entry.path, _describe(exc), target))
+                    unreadable.append((child, _describe(exc), target))
 
     def _transfer(self, job: Job, items: list[Item], totals: Totals,
                   total_bytes: int) -> None:

@@ -5,6 +5,17 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.32.1]
+
+### Fixed
+- **Files inside a copied folder were reported under their long-path form.**
+  The copy and erase walks took each file's path from the scan, and on
+  Windows a scan of a `\\?\` path hands paths back with that prefix on. So a
+  file that failed three folders down a copy was named `\\?\C:\...` in its
+  failure report and in what Retry queued -- a form meant only for file calls,
+  which the shell refuses. Paths are now built from the folder and the name,
+  which carry no prefix. Caught by the release build's tests on Windows.
+
 ## [0.32.0]
 
 ### Added

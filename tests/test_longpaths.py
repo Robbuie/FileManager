@@ -168,3 +168,68 @@ def test_the_prefix_never_reaches_the_window(extended):
                              prefer_letter=False).startswith("\\\\?")
     assert not paths.resolve(r"\\dc01\projects\Jobs").startswith("\\\\?")
     assert not paths.volume_key(r"\\dc01\projects\Jobs").startswith("\\\\?")
+
+
+# --------------------------------------------------------------------------
+# What comes back from a scan of a prefixed path.
+# --------------------------------------------------------------------------
+
+
+def test_a_walked_item_does_not_carry_the_prefix_the_scan_returned(tmp_path,
+                                                                   monkeypatch):
+    r"""On Windows `os.scandir(r"\\?\C:\x")` hands back entries whose `.path`
+    starts with the prefix. The copy engine used to take that as the item's
+    source, so a file failing inside a copied folder was reported -- and
+    offered for retry -- under its long-path form. Found by CI on Windows in
+    0.30; reproduced here by a scandir that answers the way Windows does."""
+    import queue
+
+    from app.io import ops
+    from app.io.protocol import Conflict, Job, JobKind, Progress
+
+    prefix = "//?/"
+    real = os.scandir
+
+    class Entry:
+        def __init__(self, entry):
+            self._entry = entry
+            self.name = entry.name
+            self.path = prefix + entry.path
+
+        def __getattr__(self, name):
+            return getattr(self._entry, name)
+
+    class Scan:
+        def __init__(self, path):
+            self._scan = real(path[len(prefix):] if path.startswith(prefix) else path)
+
+        def __enter__(self):
+            return self
+
+        def __iter__(self):
+            return (Entry(entry) for entry in self._scan)
+
+        def __exit__(self, *exc):
+            self._scan.close()
+
+    monkeypatch.setattr(ops.os, "scandir", Scan)
+    (tmp_path / "job" / "a").mkdir(parents=True)
+    (tmp_path / "job" / "a" / "deep.txt").write_text("deep")
+    runner = ops.Runner(Inbox(), queue.Queue())
+    items, unreadable = runner._scan(  # noqa: SLF001
+        Job(id=1, kind=JobKind.COPY, sources=(str(tmp_path / "job"),),
+            destination=str(tmp_path / "out"), conflict=Conflict.SKIP),
+        [str(tmp_path / "job")])
+    assert not unreadable
+    assert items and not [item.source for item in items
+                          if item.source.startswith(prefix)]
+    assert str(tmp_path / "job" / "a" / "deep.txt") in [item.source for item in items]
+
+
+class Inbox:
+    def get_nowait(self):
+        from queue import Empty as _Empty
+        raise _Empty
+
+    def get(self, timeout=None):
+        return None
