@@ -27,7 +27,7 @@ from typing import Sequence
 
 from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, QUrl
 
-from app.core import drops
+from app.core import drops, when
 from app.io import paths
 from app.io.protocol import Entry
 
@@ -560,6 +560,16 @@ class ListingModel(QAbstractTableModel):
         wanted = (suffix or "").lower()
         return [index + self._offset for index, entry in enumerate(self._rows)
                 if not entry.is_dir and self.split(entry)[1].lower() == wanted]
+
+    def rows_modified(self, span: tuple[float | None, float | None]) -> list[int]:
+        """Every row modified inside a window from `app.core.when`.
+
+        Folders as well as files: a folder's date is when something in it last
+        came or went, which is exactly what "the folders I worked in today"
+        is asking.
+        """
+        return [index + self._offset for index, entry in enumerate(self._rows)
+                if when.inside(entry.mtime, span)]
 
     def all_rows(self) -> list[int]:
         """Every row a selection may hold, the parent row excluded."""

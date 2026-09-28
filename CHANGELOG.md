@@ -5,6 +5,40 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.30.0]
+
+The queue after a job has ended: what failed can be run again, a long job
+says when it is done, and every job is kept in a history. And a way to mark
+files by when they changed.
+
+### Added
+- **Retry failed** in the queue (Ctrl+J). A finished job that failed at some
+  items queues only those again, each into the folder it was going to -- a
+  file that failed three folders down a copied tree lands three folders down.
+  A folder that could not be read is retried whole. A recycle the shell
+  refused, and a copy refused for lack of room, retry the whole job. The
+  status bar's end-of-job line says when there is something to retry. A move
+  whose copy landed but whose original would not delete is left out: retrying
+  it would copy onto the file that is already there.
+- **A notification when a long job ends** while another window is in front:
+  the taskbar button flashes and Windows shows a notification saying how it
+  went; clicking it brings the window back. Only for jobs of 20 seconds or
+  more, never for a cancel, and never while you are looking at the window.
+  `notify.after` in the settings file sets the threshold; 0 turns it off. The
+  notification needs an icon in the notification area, which appears with it
+  and goes away again afterwards.
+- **Job history.** Every finished job -- when, what, where, how it went, how
+  long it took, and its first 50 failures -- is kept in `history.jsonl` beside
+  the settings file and survives a restart. File > Job history, or History in
+  the queue, lists them newest first; double-clicking one opens where it went.
+  The file keeps the newest 500 jobs.
+- **Select by date**, in the Select menu and the command palette: modified
+  today, yesterday, in the last 7 or 30 days, or not for 30 days, and "same
+  day as this one" for the row under the cursor. Days run from midnight, so
+  "today" at nine in the morning does not include last night. Folders are
+  included, by the date of their last change. These add to the selection
+  rather than replacing it.
+
 ## [0.29.14]
 
 Copying to and from a share, which was slower than it needed to be.

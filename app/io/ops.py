@@ -107,7 +107,7 @@ except ImportError:  # pragma: no cover - everywhere but Windows
 if os.environ.get(COPY_LOOP_ENV):  # pragma: no cover - the harness's switch
     win32file = None
 
-from app.io import paths
+from app.io import history, paths
 from app.io.protocol import (
     CHUNK,
     PROGRESS_INTERVAL,
@@ -117,6 +117,7 @@ from app.io.protocol import (
     Job,
     JobKind,
     Progress,
+    destination_of,
 )
 
 #: Waits between attempts on a file something else has open. Bounded, and
@@ -179,21 +180,28 @@ class _Stopped(Exception):
 # --------------------------------------------------------------------------
 
 
-def run(inbox: Any, outbox: Any) -> None:
+def run(inbox: Any, outbox: Any, history_path: str = "") -> None:
     """Process entry point."""
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except (ValueError, OSError):
         pass
-    Runner(inbox, outbox).loop()
+    Runner(inbox, outbox, history_path=history_path).loop()
 
 
 class Runner:
     """The queue, and the copy loop under it."""
 
-    def __init__(self, inbox: Any, outbox: Any) -> None:
+    def __init__(self, inbox: Any, outbox: Any, *, history_path: str = "") -> None:
         self.inbox = inbox
         self.outbox = outbox
+        #: Where finished jobs are recorded, or empty for nowhere -- which is
+        #: what every test gets, so no test writes into somebody's profile.
+        self.history_path = history_path
+        #: The jobs that have started: the job, when (wall clock and
+        #: monotonic), and the first failures, for the history entry its DONE
+        #: completes. A job cancelled before it starts never ran and is not here.
+        self._running: dict[int, tuple[Job, float, float, list[str]]] = {}
         self.jobs: list[Job] = []
         self.cancelled: set[int] = set()
         #: Jobs the user has held. A held job that has not started is skipped
@@ -357,8 +365,26 @@ class Runner:
 
     def _emit(self, job: int, kind: Progress, payload: dict | None = None,
               message: str = "") -> None:
+        payload = payload or {}
+        running = self._running.get(job)
+        if running is not None and kind is Progress.FAILED_ITEM:
+            failures = running[3]
+            if len(failures) < history.PROBLEMS:
+                name = payload.get("name", "")
+                failures.append(f"{name}: {message}" if name else message)
+        if running is not None and kind is Progress.DONE:
+            # Carried on the DONE itself as well as written, so the window's
+            # list of this session's jobs is the same entry the file holds
+            # rather than a second account of the job built on the other side.
+            done_job, started, began, failures = self._running.pop(job)
+            payload = {**payload, "history": history.entry(
+                done_job.kind.value, done_job.sources, done_job.destination,
+                started=started, seconds=time.monotonic() - began,
+                payload=payload, message=message, problems=failures)}
+            if self.history_path:
+                history.record(self.history_path, payload["history"])
         try:
-            self.outbox.put(Event(job=job, kind=kind, payload=payload or {},
+            self.outbox.put(Event(job=job, kind=kind, payload=payload,
                                   message=message))
         except (OSError, ValueError):  # the parent closed the queue
             self.stopping = True
@@ -366,6 +392,7 @@ class Runner:
     # ------------------------------------------------------------- one job
 
     def _run(self, job: Job) -> None:
+        self._running[job.id] = (job, time.time(), time.monotonic(), [])
         self._emit(job.id, Progress.STARTED, {
             "kind": job.kind.value, "destination": job.destination,
             "sources": len(job.sources),
@@ -401,9 +428,9 @@ class Runner:
                 self._emit(job.id, Progress.SCANNING)
                 items, unreadable = self._scan(job, sources)
                 totals.failed += len(unreadable)
-                for source, problem in unreadable:
+                for source, problem, folder in unreadable:
                     self._emit(job.id, Progress.FAILED_ITEM,
-                               {"name": os.path.basename(source)}, message=problem)
+                               _retryable(source, folder), message=problem)
                 total_bytes = sum(item.size for item in items if not item.is_dir)
                 files = sum(1 for item in items if not item.is_dir)
                 self._emit(job.id, Progress.SCANNED,
@@ -486,9 +513,9 @@ class Runner:
         try:
             items, unreadable = self._scan(job, job.sources, destination="")
             totals.failed += len(unreadable)
-            for source, problem in unreadable:
+            for source, problem, _folder in unreadable:
                 self._emit(job.id, Progress.FAILED_ITEM,
-                           {"name": os.path.basename(source)}, message=problem)
+                           _retryable(source, ""), message=problem)
             files = [item for item in items if not item.is_dir]
             self._emit(job.id, Progress.SCANNED,
                        {"files": len(files), "bytes": sum(i.size for i in files)})
@@ -505,7 +532,7 @@ class Runner:
                     # tells the difference between "you may not" and "it is
                     # gone", and only one of those is worth a consent prompt.
                     self._emit(job.id, Progress.FAILED_ITEM,
-                               {"name": os.path.basename(item.source),
+                               {**_retryable(item.source, ""),
                                 "path": item.source, "denied": _is_denied(exc)},
                                message=_describe(exc))
                     continue
@@ -587,7 +614,8 @@ class Runner:
         remaining: list[str] = []
         for source in sources:
             self._checkpoint(job)
-            target = os.path.join(job.destination, _target_name(job, source))
+            target = os.path.join(destination_of(job, source),
+                                  _target_name(job, source))
             if os.path.exists(paths.api(target)):
                 remaining.append(source)   # a conflict is decided in the copy path
                 continue
@@ -622,14 +650,16 @@ class Runner:
         followed, a folder that cannot be opened -- and those are worth having
         in one place whatever is going to be done with the result.
         """
-        if destination is None:
-            destination = job.destination
         items: list[Item] = []
-        unreadable: list[tuple[str, str]] = []
+        # (the path, what went wrong, the folder it was going into), the last
+        # so a retry can put it where the first run would have.
+        unreadable: list[tuple[str, str, str]] = []
         for source in sources:
             self._checkpoint(job)
-            target = (os.path.join(destination, _target_name(job, source))
-                      if destination else "")
+            folder = (destination_of(job, source) if destination is None
+                      else destination)
+            target = (os.path.join(folder, _target_name(job, source))
+                      if folder else "")
             try:
                 if (os.path.isdir(paths.api(source))
                         and not os.path.islink(paths.api(source))):
@@ -639,15 +669,15 @@ class Runner:
                     items.append(Item(source, target,
                                       size=os.path.getsize(paths.api(source))))
             except OSError as exc:
-                unreadable.append((source, _describe(exc)))
+                unreadable.append((source, _describe(exc), folder))
         return items, unreadable
 
     def _walk(self, job: Job, source: str, target: str, items: list[Item],
-              unreadable: list[tuple[str, str]]) -> None:
+              unreadable: list[tuple[str, str, str]]) -> None:
         try:
             scanner = os.scandir(paths.api(source))
         except OSError as exc:
-            unreadable.append((source, _describe(exc)))
+            unreadable.append((source, _describe(exc), os.path.dirname(target)))
             return
         with scanner:
             for entry in scanner:
@@ -661,7 +691,7 @@ class Runner:
                         items.append(Item(entry.path, child_target,
                                           size=entry.stat(follow_symlinks=False).st_size))
                 except OSError as exc:
-                    unreadable.append((entry.path, _describe(exc)))
+                    unreadable.append((entry.path, _describe(exc), target))
 
     def _transfer(self, job: Job, items: list[Item], totals: Totals,
                   total_bytes: int) -> None:
@@ -674,7 +704,7 @@ class Runner:
                 except OSError as exc:
                     totals.failed += 1
                     self._emit(job.id, Progress.FAILED_ITEM,
-                               {"name": os.path.basename(item.source)},
+                               _retryable(item.source, os.path.dirname(item.target)),
                                message=_describe(exc))
                 continue
 
@@ -694,7 +724,7 @@ class Runner:
             except OSError as exc:
                 totals.failed += 1
                 self._emit(job.id, Progress.FAILED_ITEM,
-                           {"name": os.path.basename(item.source)},
+                           _retryable(item.source, os.path.dirname(item.target)),
                            message=_describe(exc))
                 continue
             totals.copied += 1
@@ -952,7 +982,9 @@ class Transfers:
     never copies anything never pays for a second process.
     """
 
-    def __init__(self, on_event: Callable[[Event], None], *, context: Any = None) -> None:
+    def __init__(self, on_event: Callable[[Event], None], *, context: Any = None,
+                 history_path: str = "") -> None:
+        self._history_path = history_path
         self._ctx = context or mp.get_context("spawn")
         self._on_event = on_event
         self._lock = threading.RLock()
@@ -966,9 +998,11 @@ class Transfers:
     # ------------------------------------------------------------- commands
 
     def submit(self, kind: JobKind, sources: Iterable[str], destination: str = "", *,
-               conflict: Conflict = Conflict.ASK, rename: str = "") -> int:
+               conflict: Conflict = Conflict.ASK, rename: str = "",
+               into: Iterable[str] = ()) -> int:
         job = Job(id=next(self._ids), kind=kind, sources=tuple(sources),
-                  destination=destination, conflict=conflict, rename=rename)
+                  destination=destination, conflict=conflict, rename=rename,
+                  into=tuple(into))
         with self._lock:
             self._ensure()
             self._inbox.put(("enqueue", job))
@@ -1043,7 +1077,7 @@ class Transfers:
         self._inbox = self._ctx.Queue()
         self._outbox = self._ctx.Queue()
         self._process = self._ctx.Process(
-            target=run, args=(self._inbox, self._outbox),
+            target=run, args=(self._inbox, self._outbox, self._history_path),
             name="fm-ops", daemon=True,
         )
         self._process.start()
@@ -1120,6 +1154,18 @@ class _Destination:
             except OSError:
                 self._names[folder] = None
         return self._names[folder]
+
+
+def _retryable(source: str, into: str) -> dict:
+    """A failure payload that says what to run again, and where it was going.
+
+    Only failures where running the same item again is the whole remedy carry
+    `source`. A move whose copy landed but whose original would not go is the
+    case left out on purpose: retrying it would copy a second time onto the
+    file that is already there, and the question it would raise is not the one
+    anybody pressed Retry to be asked.
+    """
+    return {"name": os.path.basename(source), "source": source, "into": into}
 
 
 def _target_name(job: Job, source: str) -> str:

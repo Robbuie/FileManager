@@ -449,6 +449,20 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   `harness copy --loop`. Anything that goes back to reading and writing in
   Python on Windows gives up the pipelining, and on a share that is most of
   the speed.
+- **A failure the queue can retry says where it was going.** Since 0.30 a
+  `FAILED_ITEM` from a copy or move carries `source` and `into` -- the full
+  path and the folder it would have landed in -- and `Job.into` lets one job
+  send each source to its own folder, which is how a retry puts a file back
+  three folders down rather than at the top of the destination. Only failures
+  where running the same item again is the whole remedy carry `source`
+  (`ops._retryable`); anything added that reports a failure decides that
+  first.
+- **The job history is written by the ops process, not the window.** Each
+  DONE carries its `history` entry and the runner appends it to
+  `history.jsonl` beside the settings; the window reads the file once at
+  startup, the settings file's exception for the settings file's reason. A
+  `Runner` built without `history_path` writes nothing, which is what keeps
+  the tests out of the user's profile.
 - **Destructive operations need a confirmed target before anything moves.** The
   app never picks a destination on its own and never reports what it did after
   the fact.

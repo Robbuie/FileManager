@@ -112,7 +112,11 @@ def main() -> int:
     siblings = Siblings(bridge, config)
     # Before the panes, because a pane holds it: there is one queue in the
     # application and a delete goes into it the same way a copy does.
-    transfers = TransferQueue()
+    from app.io import history
+
+    history_path = history.default_path(config.path)
+    transfers = TransferQueue(history_path=history_path,
+                              past=history.load(history_path))
     # Before the panes for the queue's reason and one of its own: there is one
     # system clipboard, so a file cut in one pane has to be greyed in the
     # other, and both panes paste from the same place.

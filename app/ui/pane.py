@@ -31,7 +31,7 @@ from PySide6.QtGui import (
     QPixmap,
 )
 
-from app.core import drops
+from app.core import drops, when
 from app.core.commands import normalise_shortcut
 from app.core.icons import ROW_ICON
 from app.core.listing import (
@@ -2374,6 +2374,23 @@ class PaneWidget(QFrame):
         if not suffix:
             return
         self._apply_selection(model.rows_with_extension(suffix), on=on)
+
+    def select_modified(self, key: str, *, on: bool = True) -> None:
+        """Mark, or unmark, every row modified inside a named window.
+
+        Additive like the group keys, not a replacement for the selection:
+        "today's, and yesterday's" is two commands in a row.
+        """
+        rows = self._pane.current.model.rows_modified(when.window(key))
+        self._apply_selection(rows, on=on)
+
+    def select_same_day(self, *, on: bool = True) -> None:
+        """Every row modified on the same day as the one under the cursor."""
+        model = self._pane.current.model
+        entry = model.entry(self.current_row())
+        if entry is None or not entry.mtime:
+            return
+        self._apply_selection(model.rows_modified(when.same_day(entry.mtime)), on=on)
 
     def select_names(self, names, *, on: bool = True) -> None:
         """Mark, or unmark, a set of rows by name.

@@ -236,6 +236,12 @@ DEFAULTS: dict[str, Any] = {
     # The one network call the application makes, and the two things worth
     # remembering about it: whether to make it at all, and which version the
     # user has already said no to.
+    # A job that ran at least this many seconds says so when it ends, if the
+    # window is not the one in front: the taskbar button flashes and Windows
+    # shows a notification. 0 turns both off. Twenty seconds is about where
+    # somebody has gone to do something else rather than waited.
+    "notify.after": 20.0,
+
     "updates.check_on_launch": True,
     "updates.skip_version": "",
 

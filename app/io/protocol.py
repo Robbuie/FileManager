@@ -572,6 +572,22 @@ class Job:
     #: of exactly one source may carry it, and a duplicate never merges into
     #: something already there -- `ops` refuses both rather than guessing.
     rename: str = ""
+    #: 0.30: the folder each source goes into, one per source and in the same
+    #: order, for a job whose sources do not share one -- a retry of the
+    #: files that failed deep inside a copied tree, each of which has to land
+    #: where it would have landed the first time. Empty for every other job,
+    #: which puts everything in `destination`. The folders are ones the first
+    #: run created, so the rule above still holds: nothing here invents one.
+    into: tuple[str, ...] = ()
+
+
+def destination_of(job: Job, source: str) -> str:
+    """The folder a source of this job is copied or moved into."""
+    if job.into:
+        for candidate, folder in zip(job.sources, job.into):
+            if candidate == source:
+                return folder
+    return job.destination
 
 
 class Progress(str, Enum):

@@ -30,7 +30,7 @@ from typing import Any, Iterable
 from PySide6.QtCore import QObject, Signal
 
 from app.core.listing import format_size
-from app.io import ops
+from app.io import history, ops
 from app.io.protocol import Conflict, Event, JobKind, Progress
 
 
@@ -92,6 +92,13 @@ class JobState:
     #: offer made about a file that has simply gone would be a consent prompt
     #: that could not have helped.
     denied: list[str] = field(default_factory=list)
+    #: 0.30: what failed, as (full path, folder it was going into), for Retry.
+    #: Only failures the engine marked as worth running again are here; see
+    #: `ops._retryable` for the one it leaves out and why.
+    retry: list[tuple[str, str]] = field(default_factory=list)
+    #: The recycle's shell call refuses as a whole, and a refusal for room
+    #: refuses the whole job, so for those Retry is the job again.
+    retry_all: bool = False
     #: 0.29: the file being written, as far as it has got, for the row that is
     #: filling up in the pane. And the names already written, so a finished
     #: row reads as finished rather than empty.
@@ -103,11 +110,22 @@ class JobState:
     samples: list[tuple[float, int]] = field(default_factory=list)
     speeds: list[float] = field(default_factory=list)
     spark_at: float = 0.0
+    #: Monotonic seconds when the process started this job, and when it
+    #: ended; 0 until each happens. What decides whether it was long enough
+    #: to be worth a notification.
+    started_at: float = 0.0
+    ended_at: float = 0.0
 
     @property
     def speed(self) -> float:
         """Bytes a second over the last few seconds, or 0 when not known."""
         return speed(self.samples)
+
+    @property
+    def retryable(self) -> bool:
+        """Whether a finished job has anything Retry would run again."""
+        return (self.state == "done" and not self.cancelled
+                and bool(self.retry or self.retry_all))
 
     @property
     def remaining_seconds(self) -> float | None:
@@ -183,6 +201,72 @@ SPEED_WINDOW = 3.0
 SPARK_POINTS = 60
 
 
+def _duration(seconds: float) -> str:
+    """How long a job took: `45s`, `3:07`, `1:02:30`."""
+    seconds = int(round(seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}:{seconds:02d}"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}:{minutes:02d}:{seconds:02d}"
+
+
+def describe_entry(item: dict) -> tuple[str, str, str, str]:
+    """A history entry as the four columns the history list shows.
+
+    When, what, where, and how it went -- written here rather than in the
+    dialog because "how it went" is the same sentence the status bar says at
+    the end of a job, and the two should not drift into different words.
+    """
+    try:
+        kind = JobKind(item.get("kind", ""))
+    except ValueError:
+        kind = None
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(item.get("at", 0) or 0)))
+    count = int(item.get("count", 0) or 0)
+    noun = "item" if count == 1 else "items"
+    sources = item.get("sources") or []
+    first = ntpath.basename(sources[0]) if sources else ""
+    what = f"{VERBS[kind][1] if kind else '?'} {first}" if count == 1 and first \
+        else f"{VERBS[kind][1] if kind else '?'} {count:,} {noun}"
+    where = item.get("destination") or (ntpath.dirname(sources[0]) if sources else "")
+    verb = "removed" if kind is not None and kind.removes else "copied"
+    if item.get("cancelled"):
+        outcome = f"cancelled after {int(item.get('copied', 0)):,}"
+    elif item.get("failed"):
+        outcome = (f"{int(item['failed']):,} failed, "
+                   f"{int(item.get('copied', 0)):,} {verb}")
+    else:
+        outcome = f"{int(item.get('copied', 0)):,} {verb}"
+        if item.get("skipped"):
+            outcome += f", {int(item['skipped']):,} skipped"
+    if item.get("bytes") and not (kind is not None and kind.removes):
+        outcome += f", {format_size(int(item['bytes']))}"
+    seconds = float(item.get("seconds", 0) or 0)
+    if seconds >= 1:
+        outcome += f" in {_duration(seconds)}"
+    return when, what, where, outcome
+
+
+def worth_notifying(job: "JobState", *, window_active: bool,
+                    threshold: float) -> bool:
+    """Whether a finished job should flash the taskbar and raise a notification.
+
+    Only when somebody is likely to have looked away: the job ran for a while,
+    and this window is not the one in front. A notification about a copy the
+    person is watching finish is noise, and one for every two-second job would
+    train them to dismiss the lot. A cancel is something they did themselves,
+    so it says nothing.
+    """
+    if threshold <= 0 or window_active or job.cancelled:
+        return False
+    if not job.started_at or not job.ended_at:
+        return False
+    return job.ended_at - job.started_at >= threshold
+
+
 def speed(samples: list[tuple[float, int]], now: float | None = None,
           window: float = SPEED_WINDOW) -> float:
     """Bytes per second across the samples inside the window. Pure."""
@@ -227,13 +311,20 @@ class TransferQueue(QObject):
     changed = Signal()                  # any state moved; redraw the readouts
     conflict = Signal(int, dict)        # job id, what collided
     finished = Signal(object)           # JobState, when a job ends
+    history_changed = Signal()          # an entry was added to `history`
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, *, history_path: str = "",
+                 past: list[dict] | None = None) -> None:
         super().__init__(parent)
         self.jobs: dict[int, JobState] = {}
         self.order: list[int] = []
         self.paused = False
-        self._transfers = ops.Transfers(self._arrived.emit)
+        #: 0.30: every finished job, oldest first -- those read from the file
+        #: at startup and then this session's as they end. The same entries
+        #: the ops process writes, carried on each DONE.
+        self.history: list[dict] = list(past or [])
+        extra = {"history_path": history_path} if history_path else {}
+        self._transfers = ops.Transfers(self._arrived.emit, **extra)
         # Auto-connection across threads means queued, which is the point: the
         # emit happens on the ops reader thread and `_deliver` on this one.
         self._arrived.connect(self._deliver)
@@ -265,6 +356,30 @@ class TransferQueue(QObject):
     def erase(self, sources: Iterable[str]) -> int:
         """Permanently, item by item."""
         return self._start(JobKind.ERASE, sources, "")
+
+    def retry(self, job_id: int) -> int | None:
+        """Run again what a finished job failed at, as a new job. None if nothing.
+
+        A new job rather than the old one restarted: the old one's numbers are
+        an account of what happened, and a retry that rewrote them would leave
+        no record that the first attempt failed at all. The conflict rule goes
+        back to asking -- the files that failed never reached their names, so
+        a collision now is something that changed in between, and that is worth
+        a question.
+        """
+        job = self.jobs.get(job_id)
+        if job is None or not job.retryable:
+            return None
+        if job.retry_all:
+            return self._start(job.kind, job.sources, job.destination)
+        pairs = list(dict.fromkeys(job.retry))
+        sources = [source for source, _ in pairs]
+        if job.kind.removes:
+            return self._start(job.kind, sources, "")
+        folders = [folder for _, folder in pairs]
+        if len(set(folders)) == 1:
+            return self._start(job.kind, sources, folders[0])
+        return self._start(job.kind, sources, folders[0], into=folders)
 
     def hold(self, job_id: int) -> None:
         """Keep a job where it is in the queue but do not let it run.
@@ -453,7 +568,8 @@ class TransferQueue(QObject):
         self.order.insert(target, self.order.pop(index))
 
     def _start(self, kind: JobKind, sources: Iterable[str], destination: str, *,
-               conflict: Conflict = Conflict.ASK, rename: str = "") -> int:
+               conflict: Conflict = Conflict.ASK, rename: str = "",
+               into: Iterable[str] = ()) -> int:
         """Start a job. `conflict` is the rule the process applies without
         asking; `ASK` is the default and the only one that stops.
 
@@ -466,6 +582,8 @@ class TransferQueue(QObject):
         # `rename` only when there is one, so everything that is not a
         # duplicate is submitted exactly as it was before duplicates existed.
         extra = {"rename": rename} if rename else {}
+        if into:
+            extra["into"] = tuple(into)
         job_id = self._transfers.submit(kind, sources, destination,
                                         conflict=conflict, **extra)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
@@ -497,6 +615,7 @@ class TransferQueue(QObject):
         elif event.kind is Progress.RELEASED:
             job.held = False
         elif event.kind is Progress.STARTED:
+            job.started_at = job.started_at or time.monotonic()
             job.state = "running"
             job.held = False
         elif event.kind is Progress.SCANNING:
@@ -538,6 +657,11 @@ class TransferQueue(QObject):
             job.failed += 1
             name = event.payload.get("name", "")
             job.problems.append(f"{name}: {event.message}" if name else event.message)
+            if event.payload.get("source"):
+                job.retry.append((str(event.payload["source"]),
+                                  str(event.payload.get("into", ""))))
+            elif not name and job.kind is JobKind.RECYCLE:
+                job.retry_all = True
             if event.payload.get("denied"):
                 # A recycle refuses as a whole and names nothing, so the job's
                 # own sources are what an elevated retry would be about.
@@ -554,14 +678,22 @@ class TransferQueue(QObject):
                            f"{format_size(needed)} to write, "
                            f"{format_size(free)} free")
             job.problems.append(job.refused)
+            job.retry_all = True
         elif event.kind is Progress.DONE:
             job.state = "done"
+            job.ended_at = time.monotonic()
             job.held = False
             job.interruptible = True
             job.copied = int(event.payload.get("copied", 0))
             job.skipped = int(event.payload.get("skipped", 0))
             job.failed = max(job.failed, int(event.payload.get("failed", 0)))
             job.cancelled = bool(event.payload.get("cancelled"))
+            if isinstance(event.payload.get("history"), dict):
+                self.history.append(event.payload["history"])
+                del self.history[:-history.KEEP]
+                self.history_changed.emit()
+            if job.failed and not job.retry and job.kind is JobKind.RECYCLE:
+                job.retry_all = True   # the shell call itself did not run
             job.current = ""
             self.changed.emit()
             self.finished.emit(job)

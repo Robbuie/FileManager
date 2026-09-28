@@ -28,13 +28,16 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QProgressBar,
     QPushButton,
+    QPlainTextEdit,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from app.core.listing import format_size
-from app.core.transfers import VERBS, shorten
+from app.core.transfers import VERBS, describe_entry, shorten
 from app.io.protocol import Conflict, JobKind
 from app.ui.dialogs import Dialog
 from app.ui.rows import parse_colour
@@ -309,6 +312,8 @@ class QueueDialog(Dialog):
     neither would do anything.
     """
 
+    history_requested = Signal()
+
     def __init__(self, queue, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._queue = queue
@@ -332,20 +337,28 @@ class QueueDialog(Dialog):
         self._down.clicked.connect(lambda: self._move(1))
         self._cancel = QPushButton("Cancel")
         self._cancel.clicked.connect(self._cancel_selected)
+        self._retry = QPushButton("Retry failed")
+        self._retry.setToolTip("Queue again only the items a finished job "
+                               "failed at, each into the folder it was going to.")
+        self._retry.clicked.connect(self._retry_selected)
         self._pause = QPushButton("Pause all")
         self._pause.clicked.connect(self._toggle_pause)
         self._clear = QPushButton("Clear finished")
         self._clear.clicked.connect(queue.forget_finished)
+        self._history = QPushButton("History")
+        self._history.setToolTip("Every job this application has finished, "
+                                 "kept across restarts.")
+        self._history.clicked.connect(self.history_requested)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
 
         buttons = QHBoxLayout()
         buttons.setSpacing(6)
-        for button in (self._hold, self._up, self._down, self._cancel):
+        for button in (self._hold, self._up, self._down, self._cancel, self._retry):
             button.setFocusPolicy(Qt.NoFocus)
             buttons.addWidget(button)
         buttons.addSpacing(12)
-        for button in (self._pause, self._clear):
+        for button in (self._pause, self._clear, self._history):
             button.setFocusPolicy(Qt.NoFocus)
             buttons.addWidget(button)
         buttons.addStretch(1)
@@ -412,6 +425,10 @@ class QueueDialog(Dialog):
     def _cancel_selected(self) -> None:
         for job in self._selected():
             self._queue.cancel(job.id)
+
+    def _retry_selected(self) -> None:
+        for job in self._selected():
+            self._queue.retry(job.id)
 
     # ---------------------------------------------------------------- state
 
@@ -489,6 +506,7 @@ class QueueDialog(Dialog):
         self._up.setEnabled(bool(waiting))
         self._down.setEnabled(bool(waiting))
         self._cancel.setEnabled(bool([j for j in live if j.interruptible]))
+        self._retry.setEnabled(any(job.retryable for job in jobs))
         self._clear.setEnabled(
             any(self._queue.jobs[i].state == "done" for i in self._queue.order))
 
@@ -605,3 +623,92 @@ class TransferPrompt(Dialog):
 
     def destination(self) -> str:
         return self._field.text().strip()
+
+
+class HistoryDialog(Dialog):
+    """Every job the queue has finished, newest first, across restarts.
+
+    A list and, under it, what went wrong with the one selected -- the first
+    failures, as the job reported them. Double-clicking a job opens where it
+    went in the pane that has the keyboard, because the usual reason for
+    looking something up here is to go and see it.
+    """
+
+    opened = Signal(str)   # a folder to show
+
+    def __init__(self, queue, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._queue = queue
+        self.setWindowTitle("Job history")
+        self.setModal(False)
+        self.resize(820, 460)
+
+        self._list = QTreeWidget()
+        self._list.setRootIsDecorated(False)
+        self._list.setUniformRowHeights(True)
+        self._list.setHeaderLabels(["When", "What", "Where", "How it went"])
+        self._list.itemSelectionChanged.connect(self._show_detail)
+        self._list.itemDoubleClicked.connect(self._open)
+
+        self._detail = QPlainTextEdit()
+        self._detail.setReadOnly(True)
+        self._detail.setMaximumHeight(120)
+        self._detail.setPlaceholderText("Nothing went wrong with this one.")
+
+        close = QPushButton("Close")
+        close.clicked.connect(self.close)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        layout.addWidget(self._list, 1)
+        layout.addWidget(self._detail)
+        layout.addLayout(buttons)
+
+        queue.history_changed.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self) -> None:
+        self._list.clear()
+        for position, item in enumerate(reversed(self._queue.history)):
+            row = QTreeWidgetItem(list(describe_entry(item)))
+            row.setData(0, Qt.UserRole, len(self._queue.history) - 1 - position)
+            self._list.addTopLevelItem(row)
+        for column in range(3):
+            self._list.resizeColumnToContents(column)
+        self._detail.clear()
+
+    def _entry(self, row) -> dict | None:
+        if row is None:
+            return None
+        index = row.data(0, Qt.UserRole)
+        if index is None or not 0 <= index < len(self._queue.history):
+            return None
+        return self._queue.history[index]
+
+    def _show_detail(self) -> None:
+        item = self._entry(self._list.currentItem())
+        if item is None:
+            self._detail.clear()
+            return
+        lines = list(item.get("problems") or [])
+        if item.get("message"):
+            lines.insert(0, str(item["message"]))
+        if item.get("count", 0) > len(item.get("sources") or []):
+            lines.append(f"({item['count']:,} were chosen; only the first "
+                         f"{len(item.get('sources') or [])} are listed)")
+        sources = item.get("sources") or []
+        self._detail.setPlainText("\n".join(lines + ([""] if lines else [])
+                                            + ["From:"] + sources))
+
+    def _open(self, row, _column: int = 0) -> None:
+        item = self._entry(row)
+        if item is None:
+            return
+        sources = item.get("sources") or []
+        folder = item.get("destination") or (
+            sources[0].rsplit("\\", 1)[0] if sources else "")
+        if folder:
+            self.opened.emit(folder)

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QStatusBar,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
@@ -24,6 +25,8 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from app import __version__
 from app.core import commands as core_commands
 from app.core import compare as core_compare
+from app.core import when
+from app.core.transfers import worth_notifying
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
 from app.io import elevate, paths
@@ -44,7 +47,7 @@ from app.ui.titlebar import TitleBar
 from app.ui.pane import PaneWidget
 from app.ui.rail import NavigationRail
 from app.ui.pill import TransferPill
-from app.ui.transfers import ConflictDialog, QueueDialog, TransferPrompt
+from app.ui.transfers import ConflictDialog, HistoryDialog, QueueDialog, TransferPrompt
 from app.ui.viewer import Viewer
 
 TITLE = "File Manager"
@@ -69,6 +72,8 @@ def _outcome(job) -> str:
     elif job.failed:
         summary = (f"finished with {job.failed:,} failed, "
                    f"{job.copied:,} {verb}, {job.skipped:,} skipped")
+        if getattr(job, "retryable", False):
+            summary += " -- Ctrl+J to retry the failed ones"
     elif job.kind.removes:
         summary = f"{job.copied:,} removed"
     else:
@@ -99,6 +104,11 @@ class MainWindow(QMainWindow):
                  frame: str | None = None, ejector=None) -> None:
         super().__init__(parent)
         self._config = config
+        #: 0.30: the icon a finished-job notification is shown through. Made on
+        #: the first one and hidden again once it has been read, so the
+        #: notification area gains nothing permanent.
+        self._tray: QSystemTrayIcon | None = None
+        self._tray_timer: QTimer | None = None
         #: 0.27: USB eject, or None for a window built without io.
         self._ejector = ejector
         #: "glass" or "solid", decided before the window exists by
@@ -131,6 +141,7 @@ class MainWindow(QMainWindow):
         self._volumes = volumes
         self._transfers = transfers
         self._queue_dialog: QueueDialog | None = None
+        self._history_dialog: HistoryDialog | None = None
         self._previews = left.previews
         self._thumbnails = left.thumbnails
         #: The viewer, built the first time F3 is pressed and kept afterwards.
@@ -362,6 +373,7 @@ class MainWindow(QMainWindow):
                    lambda: self._on_clipboard_requested("paste"))
         files.addSeparator()
         self._action(files, "Queue", "Ctrl+J", self._show_queue)
+        self._hint(files, "Job history", self._show_history)
         files.addSeparator()
         self._action(files, "Quit", "Ctrl+Q", self.close)
 
@@ -435,6 +447,20 @@ class MainWindow(QMainWindow):
                         "the cursor.")
         self._hint(select, "Unselect all of this kind\tAlt+Num -",
                    lambda: widget().select_same_extension(on=False))
+        select.addSeparator()
+        # By date, with no keys: the keypad is spent, and a date window is
+        # picked often enough to want a menu and rarely enough not to want a
+        # key taken from the command table for it. The palette finds these.
+        dated = select.addMenu("Select by date")
+        for key, label in when.WINDOWS:
+            self._hint(dated, label,
+                       lambda _=False, key=key: widget().select_modified(key))
+        dated.addSeparator()
+        day = self._hint(dated, "Same day as this one",
+                         lambda: widget().select_same_day())
+        day.setToolTip("Every row modified on the day the one under the "
+                       "cursor was.")
+        dated.setToolTipsVisible(True)
         select.setToolTipsVisible(True)
 
         self._favorites_menu = self.menuBar().addMenu("F&avorites")
@@ -1459,6 +1485,49 @@ class MainWindow(QMainWindow):
             self._transfer_bar.refresh()
         if job.denied:
             self._offer_elevated_delete(job)
+        self._notify(job)
+
+    def _notify(self, job) -> None:
+        """Say a long job has ended, when this window is not the one in front.
+
+        Two signals, because either alone misses a case: the flashing taskbar
+        button is there when somebody comes back to the desk, and the
+        notification reaches them while they are working in something else.
+        The tray icon exists only to carry the notification -- Windows shows
+        one through an icon or not at all -- and is hidden again after it.
+        """
+        if not worth_notifying(job, window_active=self.isActiveWindow(),
+                               threshold=float(self._config.get("notify.after"))):
+            return
+        QApplication.alert(self)
+        if not (QSystemTrayIcon.isSystemTrayAvailable()
+                and QSystemTrayIcon.supportsMessages()):
+            return
+        if self._tray is None:
+            self._tray = QSystemTrayIcon(self.windowIcon(), self)
+            self._tray.setToolTip("File Manager")
+            self._tray.messageClicked.connect(self._come_forward)
+            self._tray.activated.connect(lambda _reason: self._come_forward())
+            self._tray_timer = QTimer(self)
+            self._tray_timer.setSingleShot(True)
+            self._tray_timer.setInterval(20000)
+            self._tray_timer.timeout.connect(self._tray.hide)
+        what = {JobKind.COPY: "Copy", JobKind.MOVE: "Move",
+                JobKind.RECYCLE: "Recycle", JobKind.ERASE: "Erase"}.get(job.kind, "Job")
+        failed = bool(job.failed or job.refused)
+        title = f"{what} finished" + (" with problems" if failed else "")
+        icon = QSystemTrayIcon.Warning if failed else QSystemTrayIcon.Information
+        self._tray.show()
+        self._tray.showMessage(title, _outcome(job), icon, 10000)
+        self._tray_timer.start()
+
+    def _come_forward(self) -> None:
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        if self._tray is not None:
+            self._tray.hide()
 
     def _offer_elevated_delete(self, job) -> None:
         """Windows refused a delete. Offer the same consent prompt the worker
@@ -1490,10 +1559,20 @@ class MainWindow(QMainWindow):
         if dialogs.confirm_elevate(self, description):
             self._current_pane().elevate(plan)
 
+    def _show_history(self) -> None:
+        if self._history_dialog is None:
+            self._history_dialog = HistoryDialog(self._transfers, self)
+            self._history_dialog.opened.connect(
+                lambda folder: self._current_pane().navigate(folder))
+        self._history_dialog.show()
+        self._history_dialog.raise_()
+        self._history_dialog.activateWindow()
+
     def _show_queue(self) -> None:
         if self._queue_dialog is None:
             self._queue_dialog = QueueDialog(self._transfers, self)
             self._queue_dialog.apply_tokens(self._tokens)
+            self._queue_dialog.history_requested.connect(self._show_history)
         self._queue_dialog.show()
         self._queue_dialog.raise_()
         self._queue_dialog.activateWindow()
