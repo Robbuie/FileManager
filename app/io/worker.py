@@ -267,6 +267,7 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
     folder. See `Op.WALK` for the contract.
     """
     limit = max(1, int(request.args.get("limit", 50_000)))
+    with_folders = bool(request.args.get("folders"))
     batch: list[Entry] = []
     seq = 0
     seen = 0
@@ -318,6 +319,14 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                     continue
                 name = entry.name if not relative else relative + "\\" + entry.name
                 if row.is_dir:
+                    if with_folders:
+                        if not row.is_link and _is_junction(entry):
+                            row = replace(row, is_link=True)
+                        batch.append(replace(row, name=name))
+                        files += 1
+                        if files >= limit:
+                            send(Status.OK, f"limit skipped={skipped}")
+                            return
                     if not row.is_link:
                         # The real path for the next scandir; `name` is the one the
                         # UI sees. `entry.path` is already joined by the OS.
@@ -402,6 +411,16 @@ def _folders(request: Request, outbox: Any, control: Any, cancelled: set[int]) -
     outbox.put(Reply(request.id, Status.OK, payload={
         "names": sorted(names, key=str.lower), "more": more,
     }))
+
+
+def _is_junction(entry: os.DirEntry) -> bool:
+    """A junction, which `is_symlink` does not report. 3.12 can say so; before
+    that, `False` -- the walk then treats it as it always has."""
+    check = getattr(entry, "is_junction", None)
+    try:
+        return bool(check()) if check is not None else False
+    except OSError:
+        return False
 
 
 def _row(entry: os.DirEntry) -> Entry | None:

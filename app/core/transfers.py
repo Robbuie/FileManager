@@ -339,6 +339,16 @@ class TransferQueue(QObject):
              conflict: Conflict = Conflict.ASK) -> int:
         return self._start(JobKind.MOVE, sources, destination, conflict=conflict)
 
+    def copy_into(self, sources: Iterable[str], destination: str,
+                  into: Iterable[str], *, conflict: Conflict = Conflict.ASK) -> int:
+        """A copy whose sources each go into their own folder (0.32, sync).
+
+        `destination` is the root they all sit under, which is what the room
+        check measures; `into` names the folder for each source, in order.
+        """
+        return self._start(JobKind.COPY, sources, destination,
+                           conflict=conflict, into=tuple(into))
+
     def duplicate(self, source: str, folder: str, name: str) -> int:
         """A copy of one item beside itself, under a new name.
 

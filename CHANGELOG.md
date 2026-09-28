@@ -5,6 +5,32 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.32.0]
+
+### Added
+- **Synchronize folders** (Tools menu, and the command palette): make the
+  other pane's folder match this one, subfolders included. Both folders are
+  read first and everything the sync would do is listed before any of it
+  happens -- new folders (copied whole), new files, files newer here, and in
+  mirror mode what only the target has. Each kind can be left out with its
+  checkbox, the direction can be swapped without reading the folders again,
+  and the button says how many items it will remove.
+- **Update** copies what is new or newer and never removes anything.
+  **Mirror** also removes what the source does not have, through the Recycle
+  Bin -- except on a network folder, where Windows deletes instead, and the
+  preview says so.
+- Left alone, and listed so you can see them: files newer on the target,
+  files with the same time and a different size, a folder on one side against
+  a file on the other, and links and junctions, which are never followed.
+- The copy runs as an ordinary job in the queue with the "newer only" rule,
+  checked again as each file is written, so a file that changed on the target
+  after the preview is still not overwritten by an older one. Pause, cancel,
+  retry and the history all apply.
+- Mirror is only offered when both folders were read completely. A walk that
+  stopped at its limit (`sync.limit`, 200,000 rows a side) or could not read a
+  folder offers update only and says why. Two folders where one is inside the
+  other are refused before anything is read.
+
 ## [0.31.0]
 
 A share that stops answering no longer leaves a blank pane.

@@ -73,6 +73,13 @@ class Op(str, Enum):
     #: walk ended early -- `"limit"` -- and how many folders were skipped, as
     #: `"skipped=N"`, separated by a space.
     #:
+    #: `args["folders"]` (0.32, for sync) sends the folders as rows too, with
+    #: `is_dir` set, so an empty folder is visible and a folder missing on one
+    #: side can be copied or removed whole. It also stops at junctions as well
+    #: as symbolic links, and sends those as rows with `is_link` set: a sync
+    #: that walked through a junction could copy or delete through it into a
+    #: tree that is somewhere else entirely. Folders count towards the limit.
+    #:
     #: A walk through thousands of folders with no files in them sends no rows
     #: for a long time, and the pool's watchdog reads a quiet worker as a stuck
     #: one. So a PARTIAL goes out at least every `WALK_HEARTBEAT` seconds, even

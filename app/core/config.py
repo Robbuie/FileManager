@@ -296,6 +296,11 @@ DEFAULTS: dict[str, Any] = {
     # an exact comparison calls half of those files newer every time.
     "compare.tolerance": 2.0,
 
+    # 0.32: the most rows (files and folders) a sync walks on each side. A
+    # walk that stops here has not seen everything, so it offers update only
+    # and never mirror.
+    "sync.limit": 200000,
+
     # 0.26. "custom" is the drawn title bar with the menus under the mark;
     # "system" is Windows' title bar and the menu bar, the way back if the
     # custom frame misbehaves. "auto" glass means Mica where it will look like

@@ -101,7 +101,7 @@ class MainWindow(QMainWindow):
     def __init__(self, config, left, right, volumes, transfers, updates=None,
                  favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None, *, backdrop: str = "solid",
-                 frame: str | None = None, ejector=None) -> None:
+                 frame: str | None = None, ejector=None, sync=None) -> None:
         super().__init__(parent)
         self._config = config
         #: 0.30: the icon a finished-job notification is shown through. Made on
@@ -109,6 +109,9 @@ class MainWindow(QMainWindow):
         #: notification area gains nothing permanent.
         self._tray: QSystemTrayIcon | None = None
         self._tray_timer: QTimer | None = None
+        #: 0.32: the walk behind a sync, or None for a window built without io.
+        self._sync = sync
+        self._sync_dialog = None
         #: 0.27: USB eject, or None for a window built without io.
         self._ejector = ejector
         #: "glass" or "solid", decided before the window exists by
@@ -707,6 +710,13 @@ class MainWindow(QMainWindow):
             "or the same age and a different size. Reads no files, so it costs "
             "nothing on a share.")
         self._compare_action.triggered.connect(self._compare_panes)
+        self._sync_action = QAction("Synchronize folders...", self)
+        self._sync_action.setToolTip(
+            "Make the other pane's folder match this one, subfolders included "
+            "-- new and newer files copied, and in mirror mode what is not here "
+            "removed. Shows everything it would do before doing any of it.")
+        self._sync_action.triggered.connect(self._synchronize)
+        self._sync_action.setEnabled(self._sync is not None)
         self._edit_commands_action = QAction("Commands", self)
         self._edit_commands_action.setToolTip(
             "The programs on the Tools menu and the keys that reach them.")
@@ -959,6 +969,7 @@ class MainWindow(QMainWindow):
         menu = self._tools_menu
         menu.clear()
         menu.addAction(self._compare_action)
+        menu.addAction(self._sync_action)
         menu.addSeparator()
         if self._commands is None:
             empty = QAction("No commands", menu)
@@ -1049,6 +1060,32 @@ class MainWindow(QMainWindow):
             widget.select_all(on=False)
             widget.select_names(core_compare.marks(verdicts))
         self.statusBar().showMessage(core_compare.summary(result), 12000)
+
+    def _synchronize(self) -> None:
+        """Preview, then queue, a one-way sync from this pane to the other.
+
+        From the pane with the keyboard to the other one, which is the
+        direction F5 copies in; the dialog can swap it. Refused before
+        anything is read when the two folders are the same place or one is
+        inside the other.
+        """
+        if self._sync is None:
+            return
+        from app.core import sync as core_sync
+        from app.ui.sync import SyncDialog
+
+        if self._sync_dialog is not None and self._sync_dialog.isVisible():
+            self._sync_dialog.raise_()
+            self._sync_dialog.activateWindow()
+            return
+        left, right = (pane.current.path for pane in self._panes)
+        problem = core_sync.refusal(left, right)
+        if problem:
+            self.statusBar().showMessage(f"Cannot synchronize: {problem}", 8000)
+            return
+        self._sync_dialog = SyncDialog(self._sync, self._transfers, left, right,
+                                       from_left=self._active == 0, parent=self)
+        self._sync_dialog.show()
 
     def _go_to_favorite(self, path: str) -> None:
         """Into the pane that has focus, and into a new tab if it is locked --

@@ -163,9 +163,11 @@ def main() -> int:
 
     ejector = Ejector(bridge, config)
 
+    from app.core.sync import SyncScan
+
     window = MainWindow(config, left, right, volumes, transfers, updates,
                         favorites, capacity, commands, network, backdrop=backdrop,
-                        ejector=ejector)
+                        ejector=ejector, sync=SyncScan(bridge, config))
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

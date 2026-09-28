@@ -731,6 +731,14 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   and local disks never do. The memory is in-process only on purpose: a copy
   of a server's folder structure written to this machine is a decision about
   data, not a cache.
+- **A sync is a plan somebody saw, then ordinary jobs.** `core/sync.py`
+  walks both trees (`Op.WALK` with `folders`), plans in pure Python, and hands
+  the queue one copy job with `Conflict.NEWER` and `Job.into`, and for a
+  mirror one recycle job. It never writes anything itself, and there is no
+  second copy engine. Two rules in the planner are the reason it can be trusted
+  with a mirror: **a walk that did not see everything never removes anything**
+  (`Scan.complete`), and **links and junctions are never walked, copied or
+  removed**. Anything added to the planner keeps both.
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.
