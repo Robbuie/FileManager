@@ -61,11 +61,22 @@ only falls back to copy-then-delete when the rename is refused because the
 destination is elsewhere. Moving 40GB between two folders on one disk has to be
 instant, because it is.
 
+**The bytes move by `CopyFileEx`, not by a Python loop.** Until 0.29.14 each
+file was read and written a megabyte at a time, one request in flight, and on
+an SMB link every one of those was a round trip waited out in full -- plus the
+separate stat, utime and chmod calls that `copystat` makes afterwards. Windows'
+own copy keeps several requests in flight, carries the timestamps and
+attributes on the handle it already has open, and hands a copy within one
+server to the server itself, so the bytes never cross the wire twice. The
+progress routine it calls between chunks is where the checkpoint now lives, so
+pause and cancel behave as before. The loop is kept for where pywin32 is not,
+which is the tests.
+
 The process is killable at any point. What that costs is bounded on purpose: a
-file is copied to its final name, so a kill mid-file leaves a short file that
-the next run treats as a conflict, and a move deletes its source only after the
-copy of that item has been verified by size. Nothing is deleted that was not
-first written somewhere else.
+file is written beside its target and renamed onto it, so a kill mid-file
+leaves a stray partial rather than a short file under the real name, and a move
+deletes its source only after the copy of that item has been verified by size.
+Nothing is deleted that was not first written somewhere else.
 """
 
 from __future__ import annotations
@@ -78,8 +89,23 @@ import shutil
 import signal
 import threading
 import time
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
+
+#: Set by `harness copy --loop` to copy with the Python loop on Windows too,
+#: so the two can be timed against each other on the same share. Not a
+#: setting: nothing in the window reads or writes it.
+COPY_LOOP_ENV = "FILEMANAGER_COPY_LOOP"
+
+try:
+    import pywintypes
+    import win32file
+except ImportError:  # pragma: no cover - everywhere but Windows
+    pywintypes = None
+    win32file = None
+if os.environ.get(COPY_LOOP_ENV):  # pragma: no cover - the harness's switch
+    win32file = None
 
 from app.io import paths
 from app.io.protocol import (
@@ -98,6 +124,22 @@ from app.io.protocol import (
 #: application is running, and retrying for a minute only delays telling the
 #: user something they need to act on.
 RETRY_DELAYS = (0.5, 1.5, 3.0)
+
+#: Files at least this big are copied past the system cache. A multi-gigabyte
+#: file pushed through the cache evicts everything else in it and then gets
+#: written twice, which is what Microsoft's own guidance on `CopyFileEx` says
+#: to avoid; below this the cache is a help rather than a cost.
+UNBUFFERED_FROM = 256 * 1024 * 1024
+
+#: A destination folder receiving at least this many files is listed once,
+#: rather than asked about each name in turn. Below it the listing costs more
+#: than the questions: a folder of 50,000 files listed to copy three into it
+#: is the wrong trade.
+LIST_DESTINATION_FROM = 16
+
+_COPY_FILE_FAIL_IF_EXISTS = 0x1
+_COPY_FILE_NO_BUFFERING = 0x1000
+_ERROR_FILE_EXISTS = (80, 183)
 
 #: Windows sharing violation. A file that is open elsewhere, which is the case
 #: worth retrying -- as opposed to access denied, which is a permission and
@@ -623,6 +665,7 @@ class Runner:
 
     def _transfer(self, job: Job, items: list[Item], totals: Totals,
                   total_bytes: int) -> None:
+        present = _Destination(items)
         for item in items:
             self._checkpoint(job)
             if item.is_dir:
@@ -636,7 +679,7 @@ class Runner:
                 continue
 
             target = item.target
-            if os.path.exists(paths.api(target)):
+            if present.has(target):
                 action = self._decide(job, item)
                 if action is Conflict.SKIP:
                     totals.skipped += 1
@@ -655,6 +698,7 @@ class Runner:
                            message=_describe(exc))
                 continue
             totals.copied += 1
+            present.add(target)
             if job.kind is JobKind.MOVE:
                 self._remove_source(job, item, totals, target)
 
@@ -702,26 +746,106 @@ class Runner:
         """
         name = os.path.basename(item.source)
         done_before = totals.bytes
-        partial = _partial_name(target)
+
+        def progress(done: int) -> None:
+            totals.bytes = done_before + done
+            self._tick(job, name, done, item.size, totals.bytes, total_bytes)
+
+        # Set only once a partial of ours exists, so a failure never removes
+        # somebody else's file that happened to have the partial's name.
+        partial: str | None = None
         try:
-            with (open(paths.api(item.source), "rb") as source,
-                  open(paths.api(partial), "wb") as sink):
-                while True:
-                    self._checkpoint(job)
-                    chunk = source.read(CHUNK)
-                    if not chunk:
-                        break
-                    sink.write(chunk)
-                    totals.bytes += len(chunk)
-                    self._tick(job, name, totals.bytes - done_before, item.size,
-                               totals.bytes, total_bytes)
-            shutil.copystat(paths.api(item.source), paths.api(partial))
+            if win32file is not None:
+                partial = self._copy_native(job, item, target, progress)
+            else:
+                partial = _partial_name(target)
+                self._copy_portable(job, item, partial, progress)
             os.replace(paths.api(partial), paths.api(target))
         except BaseException:
-            _discard(partial)
+            if partial is not None:
+                _discard(partial)
             raise
         self._tick(job, name, item.size, item.size, totals.bytes, total_bytes,
                    force=True)
+
+    def _copy_native(self, job: Job, item: Item, target: str,
+                     progress: Callable[[int], None]) -> str:
+        """`CopyFileEx` onto a partial name, which is returned once written.
+
+        The partial is created with fail-if-exists rather than looked for
+        first: the look is one more round trip per file, and a stale partial
+        is rare enough that paying for it only when one is there is the right
+        way round.
+        """
+        flags = _COPY_FILE_FAIL_IF_EXISTS
+        if item.size >= UNBUFFERED_FROM:
+            flags |= _COPY_FILE_NO_BUFFERING
+        partial = target + PARTIAL_SUFFIX
+        try:
+            self._copy_file_ex(job, item.source, partial, flags, progress)
+        except FileExistsError:
+            partial = _partial_name(target)
+            self._copy_file_ex(job, item.source, partial, flags, progress)
+        return partial
+
+    def _copy_file_ex(self, job: Job, source: str, partial: str, flags: int,
+                      progress: Callable[[int], None]) -> None:
+        """One `CopyFileEx`, with the checkpoint in its progress routine.
+
+        The routine cannot raise into Windows, so a cancel is carried out of it
+        by hand: it answers PROGRESS_CANCEL, Windows stops and removes what it
+        wrote, and the exception that asked for the stop is raised here. A
+        pause simply does not return from the routine until it is over, which
+        holds the two handles open for the length of the pause.
+
+        A copy the server does itself -- both ends on one server -- may call
+        the routine only at the start and the end. It is also over in a
+        fraction of the time, which is the trade.
+        """
+        stopped: list[BaseException] = []
+
+        def routine(total: int, transferred: int, *_rest: Any) -> int:
+            try:
+                self._checkpoint(job)
+                progress(transferred)
+            except BaseException as exc:  # noqa: BLE001 - carried out below
+                stopped.append(exc)
+                return win32file.PROGRESS_CANCEL
+            return win32file.PROGRESS_CONTINUE
+
+        try:
+            win32file.CopyFileEx(paths.api(source), paths.api(partial), routine,
+                                 None, False, flags)
+        except pywintypes.error as exc:
+            if stopped:
+                _discard(partial)
+                raise stopped[0] from None
+            if exc.winerror in _ERROR_FILE_EXISTS:
+                # Not ours: nothing was written, so nothing is discarded.
+                raise FileExistsError(0, exc.strerror, partial, exc.winerror) from None
+            _discard(partial)
+            # An OSError carrying the Win32 code, so the retry rule and the
+            # elevation offer read it exactly as they read one from `open`.
+            raise OSError(0, exc.strerror, source, exc.winerror) from None
+        if stopped:  # pragma: no cover - a cancel always fails the call
+            _discard(partial)
+            raise stopped[0]
+
+    def _copy_portable(self, job: Job, item: Item, partial: str,
+                       progress: Callable[[int], None]) -> None:
+        """The loop that ran everywhere until 0.29.14, kept for off Windows."""
+        with (open(paths.api(item.source), "rb") as source,
+              open(paths.api(partial), "wb") as sink):
+            done = 0
+            while True:
+                self._checkpoint(job)
+                chunk = source.read(CHUNK)
+                if not chunk:
+                    break
+                sink.write(chunk)
+                done += len(chunk)
+                progress(done)
+        shutil.copystat(paths.api(item.source), paths.api(partial))
 
     def _remove_source(self, job: Job, item: Item, totals: Totals,
                        written: str) -> None:
@@ -947,6 +1071,55 @@ class Transfers:
 # --------------------------------------------------------------------------
 # Helpers.
 # --------------------------------------------------------------------------
+
+
+class _Destination:
+    """Whether a target exists, asked once per busy folder rather than per file.
+
+    A copy of 5,000 small files into a folder used to ask the share about each
+    name before writing it -- 5,000 round trips spent on a question that one
+    listing answers. Folders receiving only a few files are still asked name by
+    name; see `LIST_DESTINATION_FROM`.
+
+    Two cases go back to asking the file system even in a listed folder,
+    because a name comparison would answer them wrongly: a listing that failed,
+    and a name with a `~` in it, which Windows may resolve to another file's
+    short 8.3 alias -- and replacing that would overwrite a file no conflict
+    prompt ever named.
+    """
+
+    def __init__(self, items: Iterable[Item]) -> None:
+        self._counts = Counter(os.path.dirname(i.target) for i in items
+                               if not i.is_dir)
+        self._names: dict[str, set[str] | None] = {}
+
+    def has(self, target: str) -> bool:
+        folder, name = os.path.split(target)
+        names = self._listed(folder) if "~" not in name else None
+        if names is None:
+            return os.path.exists(paths.api(target))
+        return name.casefold() in names
+
+    def add(self, target: str) -> None:
+        """A file this job wrote. Two source names differing only in case --
+        a share a POSIX client wrote to -- land on one Windows name, and the
+        second must be asked about rather than silently written over the first.
+        """
+        folder, name = os.path.split(target)
+        names = self._names.get(folder)
+        if names is not None:
+            names.add(name.casefold())
+
+    def _listed(self, folder: str) -> set[str] | None:
+        if self._counts.get(folder, 0) < LIST_DESTINATION_FROM:
+            return None
+        if folder not in self._names:
+            try:
+                with os.scandir(paths.api(folder)) as entries:
+                    self._names[folder] = {e.name.casefold() for e in entries}
+            except OSError:
+                self._names[folder] = None
+        return self._names[folder]
 
 
 def _target_name(job: Job, source: str) -> str:

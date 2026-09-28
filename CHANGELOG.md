@@ -5,6 +5,33 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.29.14]
+
+Copying to and from a share, which was slower than it needed to be.
+
+### Fixed
+- **Copies over the network run at the speed Windows copies at.** Each file
+  was read and written by a Python loop a megabyte at a time, with only one
+  request on the wire at once, so on a share every megabyte waited out a full
+  round trip -- and every file then paid three more for its timestamps and
+  attributes. Files are now copied by `CopyFileEx`, Windows' own copy, which
+  keeps several requests in flight, sets the timestamps on the handle it
+  already has, and lets the server do the work itself when both ends are on
+  the same server. Pause, cancel, progress, the partial-then-rename rule and
+  the size check before a move deletes anything are all unchanged. Files of
+  256 MB and up skip the system cache, which stops a large copy from pushing
+  everything else out of memory.
+- **Many small files into one folder no longer ask about each name.** A
+  folder receiving sixteen files or more is listed once for conflicts rather
+  than checked file by file -- one round trip where there were thousands.
+  Names with a `~` are still checked individually, because Windows can match
+  one to another file's short name.
+
+### Added
+- `harness copy` and `harness move` report a rate in MB/s and files/s, and
+  take `--loop` to copy with the old loop, so the two can be timed on the same
+  files.
+
 ## [0.29.13]
 
 Five reports from use, four of them bugs and one a gesture that was missing.

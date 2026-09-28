@@ -444,7 +444,11 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   **every file is written beside its target and renamed onto it**, so nothing
   half-written ever wears the real name; and **a move deletes its source only
   after the copy is verified by size**. Anything added to that module keeps
-  both.
+  both. Since 0.29.14 the bytes move by `CopyFileEx`, with the checkpoint in
+  its progress routine; the Python loop is what runs off Windows and under
+  `harness copy --loop`. Anything that goes back to reading and writing in
+  Python on Windows gives up the pipelining, and on a share that is most of
+  the speed.
 - **Destructive operations need a confirmed target before anything moves.** The
   app never picks a destination on its own and never reports what it did after
   the fact.

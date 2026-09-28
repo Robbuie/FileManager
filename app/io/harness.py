@@ -22,6 +22,7 @@ settle OK, so any of it can go in a script.
 from __future__ import annotations
 
 import argparse
+import os
 import queue
 import shutil
 import sys
@@ -940,10 +941,15 @@ def cmd_transfer(args: argparse.Namespace) -> int:
     """
     import queue as _queue
 
-    from app.io.ops import Transfers
+    from app.io.ops import COPY_LOOP_ENV, Transfers
     from app.io.protocol import Conflict, Event, Progress, JobKind
 
     events: "_queue.Queue[Event]" = _queue.Queue()
+    if getattr(args, "loop", False):
+        # Read by the ops process at import, which is after this: the process
+        # is started on the first job and inherits the environment.
+        os.environ[COPY_LOOP_ENV] = "1"
+        print("copying with the Python loop")
     transfers = Transfers(events.put)
     kind = JobKind(args.kind)
     conflict = Conflict(args.conflict)
@@ -1012,6 +1018,10 @@ def cmd_transfer(args: argparse.Namespace) -> int:
                 _report("bytes", f"{event.payload.get('bytes', 0):,}")
                 _report("cancelled", "yes" if event.payload.get("cancelled") else "no")
                 _report("elapsed", f"{elapsed:.3f}s")
+                moved = event.payload.get("bytes", 0)
+                if moved and elapsed > 0:
+                    _report("rate", f"{moved / elapsed / 1e6:,.1f} MB/s, "
+                            f"{event.payload.get('copied', 0) / elapsed:,.1f} files/s")
                 if event.message:
                     _report("message", event.message)
                 code = 1 if event.payload.get("failed") else 0
@@ -1350,6 +1360,11 @@ def build_parser() -> argparse.ArgumentParser:
             help="cancel once this much has been done")
         transfer.add_argument("--timeout", type=float, default=120.0,
                               help="seconds to wait for the next event")
+        if name in ("copy", "move"):
+            transfer.add_argument(
+                "--loop", action="store_true",
+                help="copy with the Python loop rather than CopyFileEx, "
+                     "to compare the two on the same files")
         transfer.set_defaults(func=cmd_transfer, kind=name)
 
     with_path("stat", "one entry").set_defaults(func=cmd_stat)
