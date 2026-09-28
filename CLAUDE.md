@@ -63,6 +63,7 @@ python tools/preview.py --preview-pane --out pane.png # the preview panel, both 
 python tools/preview.py --grid --cell 128 --out grid.png
 python tools/preview.py --viewer image --out viewer.png   # also text, hex
 python tools/preview.py --commands --out commands.png    # the commands editor
+python tools/preview.py --stale --out stale.png          # a share that stopped answering
 python tools/diagnose_network.py        # where Windows keeps a network location
 
 python packaging/build.py               # dist/: the folder, the setup exe, latest.json
@@ -722,6 +723,14 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   across a dialog, a menu or any other event loop has to find it again by
   name afterwards** -- a check can land while the dialog is open and put a
   different file on that row, and renaming that file is the bug.
+- **Old rows are allowed on screen only when they say they are old.** Since
+  0.31 a listing of a share folder that fails with GONE or TIMEOUT keeps, or
+  brings back from `core/remembered.py`, the rows of the last good listing,
+  and sets `Tab.stale` -- which is what draws the line over them. Nothing
+  shows remembered rows without that flag, a refusal (DENIED) never does,
+  and local disks never do. The memory is in-process only on purpose: a copy
+  of a server's folder structure written to this machine is a decision about
+  data, not a cache.
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.

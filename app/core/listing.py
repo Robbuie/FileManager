@@ -431,6 +431,10 @@ class ListingModel(QAbstractTableModel):
         self._scale = None
         self.endInsertRows()
 
+    def everything(self) -> list[Entry]:
+        """Every row that arrived, filtered out or not, in arrival order."""
+        return list(self._all)
+
     def reconcile(self, entries: Sequence[Entry]) -> bool:
         """Take a fresh listing of the same folder without starting over.
 

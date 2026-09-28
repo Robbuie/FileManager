@@ -5,6 +5,25 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.31.0]
+
+A share that stops answering no longer leaves a blank pane.
+
+### Added
+- **The last listing stays on screen, marked as old, while a share is not
+  answering.** Going back to a folder on a share that has gone away shows the
+  files that were there when it was last listed, with a line above them --
+  "Not answering · as listed at 14:02" -- and a Retry button beside it. The
+  same line appears when the background check finds that the folder on
+  screen has stopped answering, so a listing that looks current and is not
+  says so before anything is done to it. Retry lists the folder for real; the
+  marks made meanwhile survive for the files that are still there.
+- Only network folders are remembered, in memory only, and nothing is written
+  to disk: up to 40 folders or 150,000 rows across both panes, the least
+  recently listed going first. A folder refused for permissions shows the
+  refusal, not old rows. Local disks behave as before.
+- `tools/preview.py --stale` renders the pane in this state.
+
 ## [0.30.0]
 
 The queue after a job has ended: what failed can be run again, a long job

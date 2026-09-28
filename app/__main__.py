@@ -129,12 +129,20 @@ def main() -> int:
     # One picture cache for the window, for the icons' reason: what a photograph
     # looks like at 128 pixels does not depend on which pane is looking at it.
     thumbnails = Thumbnails(bridge, config)
+    # One memory of what share folders held, for both panes: going back to a
+    # folder on a share that has stopped answering shows what was there
+    # whichever side of the window goes back to it.
+    from app.core.remembered import Remembered
+
+    remembered = Remembered()
     left = Pane(bridge, config, "left", icons, overlays, shell_menu, sizes,
                 siblings, file_icons=file_icons, transfers=transfers,
-                clipboard=clipboard, previews=previews, thumbnails=thumbnails)
+                clipboard=clipboard, previews=previews, thumbnails=thumbnails,
+                remembered=remembered)
     right = Pane(bridge, config, "right", icons, overlays, shell_menu, sizes,
                  siblings, file_icons=file_icons, transfers=transfers,
-                 clipboard=clipboard, previews=previews, thumbnails=thumbnails)
+                 clipboard=clipboard, previews=previews, thumbnails=thumbnails,
+                 remembered=remembered)
     volumes = Volumes(bridge, config)
     # The drive meters in the rail. It measures local fixed disks only unless
     # somebody asks for more, which is what keeps a rail from probing a server.

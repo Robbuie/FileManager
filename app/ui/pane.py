@@ -11,6 +11,8 @@ keyboard, knowing where the next keystroke lands is not decoration.
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
@@ -66,6 +68,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTabBar,
@@ -616,6 +619,29 @@ class PaneWidget(QFrame):
         # and the listing. See `app/ui/header.py`.
         self._folder_header = FolderHeader()
         self._folder_header.setVisible(bool(pane.config.get("pane.header")))
+        # 0.31: a line over rows that are out of date because the share has
+        # stopped answering. The status line says so too, but the status line
+        # is at the bottom and the rows being read are not.
+        self._stale_bar = QWidget()
+        self._stale_bar.setProperty("role", "stalebar")
+        self._stale_text = QLabel()
+        self._stale_text.setProperty("role", "warn")
+        stale_retry = QToolButton()
+        stale_retry.setText("Retry")
+        stale_retry.setProperty("role", "staleretry")
+        stale_retry.setFocusPolicy(Qt.NoFocus)
+        # The sentence gives way before the button does: a narrow pane still
+        # has to offer the one thing that can be done about it.
+        self._stale_text.setMinimumWidth(0)
+        self._stale_text.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        stale_retry.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        stale_retry.clicked.connect(self._claim)
+        stale_retry.clicked.connect(pane.retry)
+        stale_row = QHBoxLayout(self._stale_bar)
+        stale_row.setContentsMargins(10, 3, 6, 3)
+        stale_row.addWidget(self._stale_text, 1)
+        stale_row.addWidget(stale_retry)
+        self._stale_bar.setVisible(False)
         self._rows.badges = pane.config.get("icons.style") == "badges"
         transfers = getattr(pane, "transfers", None)
         if transfers is not None and hasattr(transfers, "row_progress"):
@@ -679,6 +705,7 @@ class PaneWidget(QFrame):
             layout.addWidget(self._bar)
         layout.addLayout(controls)
         layout.addWidget(self._folder_header)
+        layout.addWidget(self._stale_bar)
         layout.addWidget(self._filter)
         layout.addWidget(self._body, 1)
         layout.addLayout(footer)
@@ -690,6 +717,9 @@ class PaneWidget(QFrame):
         # through `_sync_current`, so the header is pointed at it here.
         self._folder_header.follow(self._pane.current.model, self._header_title())
         self._pane.statusChanged.connect(self._sync_status)
+        if hasattr(self._pane, "staleChanged"):
+            self._pane.staleChanged.connect(self._sync_stale)
+            self._pane.currentChanged.connect(self._sync_stale)
         self._pane.pathChanged.connect(self._on_path_changed)
         self._pane.spaceChanged.connect(self._space.setText)
         self._pane.revealRequested.connect(self._reveal)
@@ -2232,6 +2262,18 @@ class PaneWidget(QFrame):
         index = model.index(row, 0)
         picker.setCurrentIndex(index, QItemSelectionModel.NoUpdate)
         self.listing.scrollTo(index)
+
+    def _sync_stale(self) -> None:
+        tab = self._pane.current
+        stale = bool(getattr(tab, "stale", False))
+        if stale:
+            when = time.strftime("%H:%M", time.localtime(tab.listed_at))
+            self._stale_text.setText(f"Not answering  ·  as listed at {when}")
+            self._stale_text.setToolTip(
+                "The share stopped answering. These rows are what was here "
+                f"when the folder was last listed, at {when}; anything done "
+                "to them may fail until it is back.")
+        self._stale_bar.setVisible(stale)
 
     def _sync_status(self, text: str, state: str) -> None:
         self._summary = (text, state)

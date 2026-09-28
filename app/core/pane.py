@@ -23,6 +23,7 @@ from PySide6.QtCore import QObject, QTimer, Signal
 from app.core import naming
 from app.core.clipboard import refusal
 from app.core.listing import ListingModel, format_size
+from app.core.remembered import Remembered
 from app.io import elevate, paths
 from app.io.protocol import Conflict, Op, Reply, Status
 
@@ -106,6 +107,11 @@ class Tab:
         #: Flat view (0.25): this tab lists every file under `path` rather
         #: than what is in it. Ends when the tab goes to another folder.
         self.flat = False
+        #: 0.31: when the rows on screen were listed, on the wall clock, and
+        #: whether a later listing has failed to reach the folder -- so those
+        #: rows are what was there then rather than what is there now.
+        self.listed_at = 0.0
+        self.stale = False
 
     @property
     def label(self) -> str:
@@ -136,12 +142,19 @@ class Pane(QObject):
     elevationOffered = Signal(object, str)
     #: A tab went into or out of flat view, or the flat layout changed.
     flatChanged = Signal()
+    #: 0.31: the tab in front started or stopped showing rows that are out of
+    #: date because its share stopped answering. `current.stale` says which.
+    staleChanged = Signal()
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
                  menu=None, sizes=None, siblings=None, parent=None,
                  file_icons=None, transfers=None, clipboard=None,
-                 previews=None, thumbnails=None) -> None:
+                 previews=None, thumbnails=None, remembered=None) -> None:
         super().__init__(parent)
+        # Shared with the other pane, for the reason the name gives: what a
+        # folder on a share held ten minutes ago is the same answer whichever
+        # side of the window goes back to it.
+        self.remembered = remembered if remembered is not None else Remembered()
         self._bridge = bridge
         self._config = config
         self._side = side
@@ -394,6 +407,7 @@ class Pane(QObject):
         else:
             tab.buffer = None
             tab.listed = False
+            self._set_stale(tab, False)
             tab.model.begin(has_parent=not tab.flat
                             and paths.parent(tab.path) is not None)
         tab.quiet = quiet
@@ -1140,6 +1154,10 @@ class Pane(QObject):
                 tab.model.finish()
                 changed = True
             tab.listed = True
+            tab.listed_at = time.time()
+            if not tab.flat and _on_a_share(tab.path):
+                self.remembered.keep(tab.path, tab.model.everything(), tab.listed_at)
+            self._set_stale(tab, False)
             self._schedule(tab, elapsed, ok=True)
             if not quiet or changed or tab.status_state == BAD:
                 self._set_status(tab, tab.model.summary() + _walk_note(tab, reply),
@@ -1153,14 +1171,49 @@ class Pane(QObject):
 
         kept, tab.buffer = tab.buffer is not None, None
         self._schedule(tab, elapsed, ok=False)
+        # A share that has stopped answering, as opposed to a folder that said
+        # no. Local disks keep the old behaviour: a local disk that times out
+        # has not gone anywhere, and its rows are not "what was there then".
+        unreachable = (reply.status in (Status.GONE, Status.TIMEOUT)
+                       and not tab.flat and _on_a_share(tab.path))
         if quiet:
-            # Nobody asked, so nobody is told. The rows on screen stay, and the
-            # next check is further off; a person who navigates or presses
-            # Ctrl+R gets the real error.
+            # Nobody asked, so nobody is told about an ordinary failure. The
+            # one exception since 0.31 is the share going away: the rows stay,
+            # but a listing that looks current and is not is worse than one
+            # that says it is old, and the check is the only thing that can
+            # notice before somebody acts on it.
+            if unreachable and tab.listed and not tab.stale:
+                self._set_stale(tab, True)
+                self._set_status(tab, _stale_note(tab), BAD)
             return
+        if not kept and unreachable:
+            found = self.remembered.recall(tab.path)
+            if found is not None:
+                # A folder this pane has seen before, on a share that has
+                # stopped answering. What was there, marked as such, rather
+                # than nothing; Retry lists it for real and reconciles, so a
+                # mark made meanwhile survives if the file is still there.
+                tab.listed_at, rows = found
+                tab.model.add(rows)
+                tab.model.finish()
+                tab.listed = True
+                self._set_stale(tab, True)
+                self._set_status(tab, _stale_note(tab), BAD)
+                return
         if not kept:
             tab.model.finish()
+        if kept and unreachable and tab.listed_at:
+            self._set_stale(tab, True)
+            self._set_status(tab, _stale_note(tab), BAD)
+            return
         self._set_status(tab, _explain(reply), BAD)
+
+    def _set_stale(self, tab: Tab, stale: bool) -> None:
+        if tab.stale == stale:
+            return
+        tab.stale = stale
+        if tab is self.current:
+            self.staleChanged.emit()
 
     def _request_space(self, tab: Tab) -> None:
         """How full the volume is, asked for after the listing rather than with it.
@@ -1237,6 +1290,21 @@ def _walk_note(tab: "Tab", reply: Reply) -> str:
             if count:
                 notes.append(f"{count:,} folder{'s' if count != 1 else ''} could not be read")
     return "".join(f"  ·  {note}" for note in notes)
+
+
+def _on_a_share(path: str) -> bool:
+    """Whether a folder is on a network volume, which is what gets remembered."""
+    return paths.volume_key(path) != paths.LOCAL_VOLUME_KEY
+
+
+def _stale_note(tab: "Tab", now: float | None = None) -> str:
+    """The status line over rows that are out of date: how out of date."""
+    listed = time.localtime(tab.listed_at)
+    today = time.localtime(time.time() if now is None else now)
+    same_day = listed[:3] == today[:3]
+    when = time.strftime("%H:%M" if same_day else "%Y-%m-%d %H:%M", listed)
+    return (f"not answering — showing the listing from {when}. "
+            "Retry to reconnect.")
 
 
 def _explain(reply: Reply) -> str:

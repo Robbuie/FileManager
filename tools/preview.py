@@ -30,7 +30,8 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            menu: bool = False, queue: bool = False, cut: bool = False,
            pane_preview: bool = False, grid: bool = False, flat: str = "",
            backdrop: str = "solid",
-           viewer: str = "", cell: int = 128, commands: bool = False) -> str:
+           viewer: str = "", cell: int = 128, commands: bool = False,
+           stale: bool = False) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -140,6 +141,11 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     if pane_preview:
         _fill_preview(window)
         QTimer.singleShot(300, app.quit)
+        app.exec()
+
+    if stale:
+        _mark_stale(window)
+        QTimer.singleShot(200, app.quit)
         app.exec()
 
     if viewer:
@@ -530,6 +536,20 @@ def _show_menu(window) -> None:
     return menu
 
 
+def _mark_stale(window) -> None:
+    """The left pane as it looks when its share has stopped answering and the
+    rows are the ones listed before it did."""
+    import time as _time
+
+    from app.core.pane import BAD, _stale_note
+
+    pane = window._panes[0]  # noqa: SLF001 - a development tool, not the app
+    tab = pane.current
+    tab.listed_at = _time.time() - 11 * 60
+    pane._set_stale(tab, True)  # noqa: SLF001
+    pane._set_status(tab, _stale_note(tab), BAD)  # noqa: SLF001
+
+
 def _fill_flat(window, layout: str) -> None:
     """The left pane in flat view over an invented job folder.
 
@@ -632,6 +652,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--flat", default="", choices=["", "column", "groups"],
                         help="put the left pane in flat view, laid out this way, "
                              "with an invented tree of PLC files")
+    parser.add_argument("--stale", action="store_true",
+                        help="show the left pane as it looks when its share "
+                             "has stopped answering")
     parser.add_argument("--all-themes", action="store_true",
                         help="one image per theme, to check the greys together")
     args = parser.parse_args(argv)
@@ -643,7 +666,7 @@ def main(argv: list[str] | None = None) -> int:
                      queue=args.queue, cut=args.cut, grid=args.grid,
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
-                     cell=args.cell, backdrop=args.backdrop))
+                     cell=args.cell, backdrop=args.backdrop, stale=args.stale))
         return 0
 
     from app.theme.tokens import THEMES

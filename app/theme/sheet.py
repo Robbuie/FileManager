@@ -143,6 +143,24 @@ QLineEdit {{
 }}
 QLineEdit:focus {{ border: 1px solid {accent_line}; background: {bg_1}; }}
 QLineEdit[state="stale"] {{ color: {txt_2}; }}
+/* 0.31: over rows that are out of date because the share stopped answering.
+   The warn colour carries the meaning; the box only separates it from the
+   listing it is about. */
+QWidget[role="stalebar"] {{
+    background: {bg_1};
+    border: 1px solid {line};
+    border-radius: {radius_sm};
+}}
+QWidget[role="stalebar"] QLabel {{ background: transparent; }}
+QToolButton[role="staleretry"] {{
+    background: transparent;
+    border: 1px solid {line};
+    border-radius: {radius_sm};
+    color: {txt_0};
+    padding: 2px 10px;
+}}
+QToolButton[role="staleretry"]:hover {{ background: {bg_3}; }}
+QToolButton[role="staleretry"]:pressed {{ background: {bg_4}; }}
 
 QWidget[role="crumbbar"] {{
     background: {bg_1};
