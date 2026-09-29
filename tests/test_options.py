@@ -194,3 +194,25 @@ def test_turning_hidden_files_off_reaches_every_tab(window):
     for pane in window._panes:
         for tab in pane.tabs:
             assert tab.model._show_hidden is False
+
+
+def test_a_found_accent_replaces_the_named_one(window):
+    window._on_accent_found((10, 200, 100), "")
+    assert window._tokens["accent"] == "#0ac864"
+    window.apply_setting("accent.source", "named")
+    assert window._tokens["accent_name"] == window._config.get("accent")
+
+
+def test_the_grid_follows_the_theme_and_its_switch(window):
+    window.apply_setting("theme", "blueprint")
+    assert window._splitter._grid is not None
+    window.apply_setting("look.blueprint_grid", False)
+    assert window._splitter._grid is None
+    window.apply_setting("look.blueprint_grid", True)
+    window.apply_setting("theme", "dark")
+    assert window._splitter._grid is None
+
+
+def test_the_glow_can_be_turned_off(window):
+    window.apply_setting("look.pane_glow", False)
+    assert window._splitter._glow_on is False

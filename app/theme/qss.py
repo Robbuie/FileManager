@@ -68,8 +68,13 @@ def build(
     accent: str | None = None,
     density: str | None = None,
     backdrop: str = "solid",
+    accent_rgb: RGB | None = None,
 ) -> dict[str, str]:
     """Return every token for one combination, ready to substitute into QSS.
+
+    `accent_rgb` (0.35) is a triple that stands in for the named accent when
+    it comes from Windows or the wallpaper. Every tint is derived from it the
+    same way, so a custom accent is still one colour and nothing else.
 
     `backdrop` is not a fourth axis of the design system -- it does not change
     a single grey. It says whether the window's own background is painted at
@@ -89,6 +94,9 @@ def build(
     out.update(SHAPE)
 
     a = ACCENTS[accent_name]
+    if accent_rgb is not None and len(accent_rgb) == 3:
+        a = tuple(_clamp(c) for c in accent_rgb)  # type: ignore[assignment]
+        accent_name = "custom"
     out["accent"] = rgb(a)
     out["accent_dim"] = mix(a, _BLACK, 0.70)
     out["accent_text"] = mix(a, _WHITE, 0.74)
@@ -121,6 +129,12 @@ def build(
     # round its lit edge. Same green, same reason.
     out["age_row"] = rgba(good, 0.07)
     out["age_glow"] = rgba(good, 0.30)
+    # 0.35: the drafting grid behind the Blueprint theme, in the theme's own
+    # info blue. Two weights, a line every cell and a heavier one every fifth,
+    # which is what makes it read as graph paper rather than as a texture.
+    info = unhex(out["info"])
+    out["grid_minor"] = rgba(info, 0.06)
+    out["grid_major"] = rgba(info, 0.13)
 
     for key, value in DENSITIES[density_name].items():
         out[key] = f"{value:g}px" if key == "ui_font" else f"{int(value)}px"

@@ -101,9 +101,14 @@ class MainWindow(QMainWindow):
     def __init__(self, config, left, right, volumes, transfers, updates=None,
                  favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None, *, backdrop: str = "solid",
-                 frame: str | None = None, ejector=None, sync=None) -> None:
+                 frame: str | None = None, ejector=None, sync=None,
+                 accent_source=None) -> None:
         super().__init__(parent)
         self._config = config
+        #: 0.35: where a Windows or wallpaper accent comes from, and the
+        #: triple it gave, or None to use the named accent.
+        self._accent_source = accent_source
+        self._accent_rgb = None
         #: 0.30: the icon a finished-job notification is shown through. Made on
         #: the first one and hidden again once it has been read, so the
         #: notification area gains nothing permanent.
@@ -161,7 +166,8 @@ class MainWindow(QMainWindow):
         # rendered from. Handed down rather than fetched, so a pane cannot end
         # up painted from a different render than the one it is styled by.
         tokens = sheet.tokens(config.get("theme"), config.get("accent"),
-                              config.get("density"), self._backdrop)
+                              config.get("density"), self._backdrop,
+                              self._accent_rgb)
         self._tokens = tokens
         for widget in self._widgets:
             widget.apply_tokens(tokens)
@@ -279,6 +285,8 @@ class MainWindow(QMainWindow):
             self.setCentralWidget(self._splitter)
         self._splitter.set_glow_colour(tokens["accent"])
         self._splitter.set_motion(bool(config.get("look.motion")))
+        self._splitter.set_glow_enabled(bool(config.get("look.pane_glow")))
+        self._apply_grid(tokens)
 
         self.setWindowTitle(TITLE)
         self.setStatusBar(QStatusBar())
@@ -344,6 +352,9 @@ class MainWindow(QMainWindow):
         self._share_command_keys()
         self._active = 0
         self._set_active(0)
+        if self._accent_source is not None:
+            self._accent_source.found.connect(self._on_accent_found)
+            self._resolve_accent()
         if self._rail is not None:
             # After `resize`, so the sizes are being shared out of a window
             # that is already the width it will be.
@@ -1435,7 +1446,10 @@ class MainWindow(QMainWindow):
         panes = self._panes
         widgets = self._widgets
         return {
-            "theme": lambda _v: self.apply_theme(),
+            "theme": lambda _v: self._resolve_accent(),
+            "accent.source": lambda _v: self._resolve_accent(),
+            "look.pane_glow": lambda v: self._splitter.set_glow_enabled(bool(v)),
+            "look.blueprint_grid": lambda _v: self._apply_grid(self._tokens),
             "accent": lambda _v: self.apply_theme(),
             "density": lambda _v: self.apply_theme(),
             "look.motion": self._set_motion,
@@ -1460,6 +1474,44 @@ class MainWindow(QMainWindow):
             "listing.scrollmap": lambda v: [w.set_scrollmap(v) for w in widgets],
             "rail.capacity": lambda _v: self._rebuild_rail(),
         }
+
+    def _apply_grid(self, tokens: dict) -> None:
+        """The drafting grid, drawn only for Blueprint and only if wanted."""
+        from app.ui.rows import parse_colour
+
+        if tokens.get("theme_name") == "blueprint" \
+                and bool(self._config.get("look.blueprint_grid")):
+            self._splitter.set_grid(parse_colour(tokens.get("grid_minor")),
+                                    parse_colour(tokens.get("grid_major")))
+        else:
+            self._splitter.set_grid(None)
+
+    def _resolve_accent(self) -> None:
+        """Work the accent out again from its source, then re-render.
+
+        On a theme change too, because a colour made readable against a dark
+        backdrop may not be against a light one. A named source is immediate;
+        Windows' accent is a registry read and answers at once; the wallpaper
+        is a picture read by a worker and answers when it arrives, until when
+        the named accent stands in.
+        """
+        source = str(self._config.get("accent.source"))
+        if source == "named" or self._accent_source is None:
+            self._accent_rgb = None
+            self.apply_theme()
+            return
+        # Now, with whatever accent is in hand, so a theme change shows at
+        # once rather than when a wallpaper arrives.
+        self.apply_theme()
+        backdrop = sheet.qss.unhex(
+            sheet.tokens(self._config.get("theme"))["bg_0"])
+        self._accent_source.resolve(backdrop)
+
+    def _on_accent_found(self, colour, why: str) -> None:
+        self._accent_rgb = tuple(colour) if colour is not None else None
+        if why:
+            self.statusBar().showMessage(f"accent: {why}; using the named one", 8000)
+        self.apply_theme()
 
     def _refilter(self) -> None:
         for pane in self._panes:
@@ -1497,6 +1549,7 @@ class MainWindow(QMainWindow):
             accent=self._config.get("accent"),
             density=self._config.get("density"),
             backdrop=self._backdrop,
+            accent_rgb=self._accent_rgb,
         )
         if self._titlebar is not None:
             self._titlebar.apply_tokens(tokens)
@@ -1504,6 +1557,7 @@ class MainWindow(QMainWindow):
         self._palette.apply_tokens(tokens)
         self._transfer_bar.apply_tokens(tokens)
         self._splitter.set_glow_colour(tokens["accent"])
+        self._apply_grid(tokens)
         if self._frame is not None:
             # Mica takes its tint from the window's dark-mode flag, so a switch
             # to a light theme has to reach Windows as well as the sheet.

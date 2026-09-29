@@ -5,6 +5,23 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.35.0]
+
+### Added
+- **Accent comes from** (Options, Look): a colour picked here, as before;
+  *Windows' accent*, the colour Windows itself is using; or *The wallpaper*,
+  the most colourful part of the desktop picture. Either of the last two is
+  made lighter or darker -- never a different hue -- until it reads well on
+  the theme, and is worked out again when the theme changes. If Windows does
+  not say, or the wallpaper cannot be read or has no colour in it, the named
+  accent is used and the status line says why. The wallpaper is read by a
+  worker at 64 pixels, never by the window.
+- **Drafting grid behind Blueprint** (on): graph-paper lines on the window's
+  backdrop in the Blueprint theme, a heavier one every fifth. Only drawn in
+  the gaps around the panes and the rail.
+- **Glow around the active pane** can be turned off (Options, Look); the
+  accent border stays.
+
 ## [0.34.0]
 
 Four things the listing and the rail can now show, each with its own switch

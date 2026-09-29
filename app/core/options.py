@@ -88,11 +88,19 @@ OPTIONS: tuple[Option, ...] = (
     _choice("theme", "look", "Theme", tuple(THEME_LABELS.items()),
             "The greys. Accent and density are separate on purpose.",
             heading="Theme"),
-    _choice("accent", "look", "Accent", tuple(ACCENT_LABELS.items()),
-            "Selection, focus, the active pane and everything else that "
-            "says where you are."),
+    Option("look.blueprint_grid", "look", "Drafting grid behind Blueprint",
+           "A faint grid on the window's backdrop, only in the Blueprint "
+           "theme.", needs=("theme", "blueprint"), new=True),
     _choice("density", "look", "Density", tuple(DENSITY_LABELS.items()),
             "Row height and the size of the chrome."),
+    _choice("accent.source", "look", "Accent comes from",
+            (("named", "A colour picked here"), ("windows", "Windows' accent"),
+             ("wallpaper", "The wallpaper")),
+            "Windows' and the wallpaper's are made lighter or darker until "
+            "they read well; the hue stays.", heading="Accent", new=True),
+    _choice("accent", "look", "Accent", tuple(ACCENT_LABELS.items()),
+            "Selection, focus, the active pane and everything else that "
+            "says where you are.", needs=("accent.source", "named")),
     _choice("window.backdrop", "look", "Glass backdrop",
             (("auto", "Automatic"), ("glass", "Glass"), ("solid", "Solid")),
             "Automatic is glass where Windows can draw it and solid over "
@@ -103,9 +111,12 @@ OPTIONS: tuple[Option, ...] = (
             "Windows' own brings the menu bar back. The way out if the drawn "
             "one misbehaves on a machine it was not tried on.",
             restart=True),
+    Option("look.pane_glow", "look", "Glow around the active pane",
+           "Off leaves the accent border on its own.", heading="Motion",
+           new=True),
     Option("look.motion", "look", "Animations",
            "Folders fade in, the active pane's glow moves across, and the "
-           "transfer readout slides in and out.", heading="Motion"),
+           "transfer readout slides in and out."),
 
     # ------------------------------------------------------------- listing
     Option("listing.hidden", "listing", "Hidden files",

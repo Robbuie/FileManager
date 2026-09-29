@@ -30,6 +30,15 @@ def _home() -> str:
 DEFAULTS: dict[str, Any] = {
     "theme": "dark",
     "accent": "blue",
+    # 0.35: where the accent comes from. "named" is `accent` above; "windows"
+    # is the colour Windows is using; "wallpaper" is picked out of the desktop
+    # picture. Either of the last two falls back to `accent` when it cannot be
+    # found, and says why in the status line.
+    "accent.source": "named",
+    # 0.35: the light around the pane that has the keyboard (0.26).
+    "look.pane_glow": True,
+    # 0.35: a drafting grid on the backdrop, drawn only in the Blueprint theme.
+    "look.blueprint_grid": True,
     "density": "normal",
 
     # Where the panes open, and how paths are shown. Display is a preference
