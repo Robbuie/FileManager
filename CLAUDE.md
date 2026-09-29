@@ -570,6 +570,13 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   re-asked on every redraw, and no place in the rail is ever checked for
   existence -- five `isdir` calls at startup is the startup probe with a
   different name.
+- **Share health pings only what a pane has been to.** Since 0.37
+  `core/health.py` stats the root of each share a pane has shown this
+  session, one request per share at a time, under a five-second deadline,
+  on an interval that is a setting. It learns which shares exist *only*
+  from `Pane.pathChanged` -- never from the rail, the saved locations or the
+  drive list -- and that is what keeps it on the right side of the rule
+  above. Anything added to it keeps both halves.
 - **A breadcrumb chevron is a scan, not chrome.** `Op.FOLDERS` is capped in
   the worker rather than sliced by the caller, so a chevron on a 50,000-row
   folder costs two hundred names -- which also means past the cap the names

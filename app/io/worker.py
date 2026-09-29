@@ -32,7 +32,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
-from app.io import decode, elevate, paths
+from app.io import decode, elevate, holders, paths
 from app.io.protocol import (
     BATCH_SIZE,
     WALK_HEARTBEAT,
@@ -1735,4 +1735,5 @@ def _status_for(exc: OSError) -> Status:
 def _describe(exc: BaseException) -> str:
     winerror = getattr(exc, "winerror", None)
     detail = f" (winerror {winerror})" if winerror else ""
-    return f"{type(exc).__name__}: {exc}{detail}"
+    # 0.37: a locked file says who has it. Asked only now, after the failure.
+    return f"{type(exc).__name__}: {exc}{detail}{holders.describe(exc)}"

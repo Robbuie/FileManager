@@ -128,6 +128,8 @@ class NavigationRail(QFrame):
         #: which draws no network section at all rather than an empty one that
         #: is a different shape from the real thing.
         self._network = network
+        #: 0.37: share health, or None for a rail without it.
+        self._health = None
         self._places: list[tuple[str, str]] = []
         self._tokens: dict[str, str] = {}
         self._current = ""
@@ -229,6 +231,39 @@ class NavigationRail(QFrame):
             widget.style().unpolish(widget)
             widget.style().polish(widget)
             widget.update()
+
+    def set_health(self, health) -> None:
+        """Where the dots beside the shares come from (0.37)."""
+        self._health = health
+        health.changed.connect(self.rebuild)
+        self.rebuild()
+
+    def health_for(self, key: str | None):
+        """`(state, "12 ms", tooltip line)` for a share, or None to draw none.
+
+        None while pings are off, for a local place, and for a share no pane
+        has been to this session -- which is never pinged at all.
+        """
+        from app.core import health as core_health
+        from app.core.listing import format_time
+
+        if self._health is None or not self._health.enabled or not key:
+            return None
+        reading = self._health.reading(key)
+        if reading is None or not reading.history:
+            return None
+        state = reading.state(self._health.amber_ms())
+        latest = reading.latest
+        text = "no reply" if latest is None else f"{latest:,.0f} ms"
+        tip = [f"{text} now" if latest is not None else "not answering"]
+        usual = reading.usual()
+        if usual is not None:
+            tip.append(f"usually {usual:,.0f} ms")
+        if reading.last_down:
+            tip.append(f"last dropped {format_time(reading.last_down)[-5:]}")
+        if state == core_health.UNKNOWN:
+            return None
+        return state, text, "  ·  ".join(tip)
 
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         """The colours the meters are painted from.
@@ -386,7 +421,9 @@ class NavigationRail(QFrame):
                        usage=self._capacity.usage(letter),
                        tokens=self._tokens,
                        ejectable=bool(drive.get("ejectable")),
-                       meter=str(self._config.get("rail.capacity")))
+                       meter=str(self._config.get("rail.capacity")),
+                       health=self.health_for(letter.upper() if drive.get("unc")
+                                              else None))
         row.setProperty("state",
                         "current" if letter.lower() == self._current[:2] else "")
         row.chosen.connect(self.chosen)
@@ -401,8 +438,18 @@ class NavigationRail(QFrame):
             return
         tip = location.remote if not location.local else \
             f"{location.remote}\n{location.local}"
-        button = self._row(location.label, location.path, tip=tip,
+        from app.io import paths as io_paths
+
+        health = self.health_for((io_paths.share_root(location.path) or "").lower())
+        label = location.label
+        if health is not None:
+            label = f"{label}  ·  {health[1]}"
+            tip = f"{tip}\n{health[2]}"
+        button = self._row(label, location.path, tip=tip,
                            glyph="network")
+        if health is not None and self._tokens:
+            button.setIcon(_dot(self._tokens, health[0],
+                                float(self.devicePixelRatioF() or 1.0)))
         button.setProperty(
             "state",
             "current" if location.path.lower() == self._current.lower()[:len(location.path)]
@@ -564,6 +611,27 @@ class NavigationRail(QFrame):
             button.setText(metrics.elidedText(full, Qt.ElideMiddle, room))
 
 
+#: 0.37: which token colours each state of a share's dot.
+_HEALTH_TOKENS = {"good": "good", "slow": "warn", "down": "down"}
+
+
+def _dot(tokens: dict[str, str], state: str, ratio: float):
+    """A share's health as a round dot, for a row that takes an icon."""
+    from PySide6.QtGui import QIcon, QPixmap
+
+    size = 16
+    picture = QPixmap(int(size * ratio), int(size * ratio))
+    picture.setDevicePixelRatio(ratio)
+    picture.fill(Qt.transparent)
+    painter = QPainter(picture)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(parse_colour(tokens.get(_HEALTH_TOKENS.get(state, "txt_2"))))
+    painter.drawEllipse(QRectF(4.5, 4.5, 7, 7))
+    painter.end()
+    return QIcon(picture)
+
+
 class DriveRow(QWidget):
     """One drive: its letter, what it is mapped to, and how full it is.
 
@@ -590,8 +658,10 @@ class DriveRow(QWidget):
 
     def __init__(self, letter: str, unc: str, kind: str, *, usage=None,
                  tokens=None, ejectable: bool = False, meter: str = "bars",
-                 parent: QWidget | None = None) -> None:
+                 health=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        #: 0.37: `(state, "12 ms", tip)` for a mapped share, or None.
+        self._health = health
         #: 0.34: "bars" under the row, a "rings" gauge where the drive's glyph
         #: was, or "off". Only a measured drive draws either.
         self._meter = meter if meter in ("bars", "rings", "off") else "bars"
@@ -686,6 +756,18 @@ class DriveRow(QWidget):
                                ratio=float(self.devicePixelRatioF() or 1.0)).pixmap(14, 14)
             painter.drawPixmap(int(button.center().x() - 7), int(button.center().y() - 7), mark)
             right = int(button.left()) - 6
+        if self._health is not None:
+            state, reading, _tip = self._health
+            colour = self._colour(_HEALTH_TOKENS.get(state, "txt_2"))
+            width = metrics.horizontalAdvance(reading)
+            painter.setPen(colour)
+            painter.drawText(right - width, top, width, metrics.height(),
+                             Qt.AlignRight | Qt.AlignVCenter, reading)
+            painter.setBrush(colour)
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(QRectF(right - width - 12,
+                                       top + metrics.height() / 2 - 3.5, 7, 7))
+            right = int(right - width - 18)
         painter.setPen(self._colour("txt_2"))
         painter.drawText(
             label_left, top, max(0, right - label_left), metrics.height(),
@@ -758,6 +840,8 @@ class DriveRow(QWidget):
 
     def _tip(self) -> str:
         parts = [self.path]
+        if self._health is not None:
+            parts.append(self._health[2])
         if self._unc:
             parts.append(self._unc)
         if self._usage is not None and self._usage.total > 0:

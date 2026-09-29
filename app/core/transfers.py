@@ -30,7 +30,7 @@ from typing import Any, Iterable
 from PySide6.QtCore import QObject, Signal
 
 from app.core.listing import format_size
-from app.io import history, ops
+from app.io import history, holders, ops
 from app.io.protocol import Conflict, Event, JobKind, Progress
 
 
@@ -87,6 +87,9 @@ class JobState:
     #: exist. False only while such a step is actually running.
     interruptible: bool = True
     problems: list[str] = field(default_factory=list)
+    #: 0.37: `(pid, program)` for each failure the engine could say was a
+    #: file held open by a program on this machine, first one first.
+    holders: list[tuple[int, str]] = field(default_factory=list)
     #: Names Windows refused rather than failed at. Kept apart from `problems`
     #: because only these are worth offering to retry as administrator, and an
     #: offer made about a file that has simply gone would be a consent prompt
@@ -667,6 +670,9 @@ class TransferQueue(QObject):
             job.failed += 1
             name = event.payload.get("name", "")
             job.problems.append(f"{name}: {event.message}" if name else event.message)
+            held = holders.parse(event.message or "")
+            if held is not None and held not in job.holders:
+                job.holders.append(held)
             if event.payload.get("source"):
                 job.retry.append((str(event.payload["source"]),
                                   str(event.payload.get("into", ""))))

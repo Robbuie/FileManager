@@ -166,11 +166,13 @@ def main() -> int:
     from app.core.sync import SyncScan
 
     from app.core.accent import AccentSource
+    from app.core.health import ShareHealth
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
                         favorites, capacity, commands, network, backdrop=backdrop,
                         ejector=ejector, sync=SyncScan(bridge, config),
-                        accent_source=AccentSource(bridge, config))
+                        accent_source=AccentSource(bridge, config),
+                        health=ShareHealth(bridge, config))
     window.show()
 
     # Both panes list only once there is a window to paint into. Nothing has

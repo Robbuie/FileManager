@@ -162,6 +162,9 @@ def build(
     # Windows' own close-button red. A semantic colour that has to agree with
     # every other window on the screen, so it follows neither theme nor accent.
     out["close_hover"] = "#c42b1c"
+    # 0.37: a share that is not answering. Semantic, like the close button's
+    # red: it has to mean "down" whatever the accent is, so it follows neither.
+    out["down"] = "#e5534b"
     out["close_press"] = "#b22a1b"
 
     out["theme_name"] = theme_name

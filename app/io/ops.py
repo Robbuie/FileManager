@@ -107,7 +107,7 @@ except ImportError:  # pragma: no cover - everywhere but Windows
 if os.environ.get(COPY_LOOP_ENV):  # pragma: no cover - the harness's switch
     win32file = None
 
-from app.io import history, paths
+from app.io import history, holders, paths
 from app.io.protocol import (
     CHUNK,
     PROGRESS_INTERVAL,
@@ -1313,4 +1313,5 @@ def _describe_file(path: str) -> dict:
 def _describe(exc: BaseException) -> str:
     winerror = getattr(exc, "winerror", None)
     detail = f" (winerror {winerror})" if winerror else ""
-    return f"{type(exc).__name__}: {exc}{detail}"
+    # 0.37: a locked file says who has it. Asked only now, after the failure.
+    return f"{type(exc).__name__}: {exc}{detail}{holders.describe(exc)}"

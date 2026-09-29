@@ -102,13 +102,15 @@ class MainWindow(QMainWindow):
                  favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None, *, backdrop: str = "solid",
                  frame: str | None = None, ejector=None, sync=None,
-                 accent_source=None) -> None:
+                 accent_source=None, health=None) -> None:
         super().__init__(parent)
         self._config = config
         #: 0.35: where a Windows or wallpaper accent comes from, and the
         #: triple it gave, or None to use the named accent.
         self._accent_source = accent_source
         self._accent_rgb = None
+        #: 0.37: share health, or None for a window built without io.
+        self._health = health
         #: 0.30: the icon a finished-job notification is shown through. Made on
         #: the first one and hidden again once it has been read, so the
         #: notification area gains nothing permanent.
@@ -200,6 +202,8 @@ class MainWindow(QMainWindow):
                 network.changed.connect(self._rebuild_rail)
                 network.reconnected.connect(self._on_reconnected)
             self._rail.setVisible(bool(config.get("rail.shown")))
+            if health is not None:
+                self._rail.set_health(health)
             # Measured once the letters are known, and only the local fixed
             # ones -- see `core/capacity.py`. Nothing here touches a server.
             volumes.changed.connect(self._measure_local_drives)
@@ -220,6 +224,12 @@ class MainWindow(QMainWindow):
             # watched and the mark follows whichever is active, so the answer
             # changes when the pane does as well as when the folder does.
             pane.pathChanged.connect(self._sync_rail_mark)
+            if health is not None:
+                # Only a share a pane has been to is ever measured: this is
+                # the whole of how the health learns which shares exist.
+                pane.pathChanged.connect(
+                    lambda _shown, p=pane: health.watch(
+                        p.current.path, getattr(volumes, "drives", [])))
         if self._shell_menu is not None:
             self._shell_menu.invoked.connect(self._on_shell_invoked)
             self._shell_menu.problem.connect(
@@ -294,12 +304,29 @@ class MainWindow(QMainWindow):
         self._hints = HintBar()
         self._hints.apply_tokens(tokens)
         self.statusBar().addWidget(self._hints, 1)
+        # 0.37: "Switch to Logix Designer", after a job failed on a file some
+        # program had open. Hidden until there is one, and hidden again a
+        # little after, so it never becomes part of the furniture.
+        from PySide6.QtWidgets import QToolButton
+
+        self._holder_button = QToolButton()
+        self._holder_button.setProperty("role", "status")
+        self._holder_button.setFocusPolicy(Qt.NoFocus)
+        self._holder_button.hide()
+        self._holder_button.clicked.connect(self._switch_to_holder)
+        self._holder_pid = 0
+        self._holder_timer = QTimer(self)
+        self._holder_timer.setSingleShot(True)
+        self._holder_timer.setInterval(20000)
+        self._holder_timer.timeout.connect(self._holder_button.hide)
+        self.statusBar().addPermanentWidget(self._holder_button)
         # 0.29: the transfer readout floats over the bottom of the window
         # rather than sitting in the status bar. See `app/ui/pill.py`.
         self._transfer_bar = TransferPill(transfers, self)
         self._transfer_bar.apply_tokens(tokens)
         self._transfer_bar.opened.connect(self._show_queue)
         self._transfer_bar.set_motion(bool(config.get("look.motion")))
+        self._transfer_bar.set_speedline(bool(config.get("transfers.speedline")))
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
         #: Said once. See `_watch_for_remote`.
@@ -1534,6 +1561,12 @@ class MainWindow(QMainWindow):
                                             for w in widgets],
             "listing.scrollmap": lambda v: [w.set_scrollmap(v) for w in widgets],
             "rail.capacity": lambda _v: self._rebuild_rail(),
+            "network.ping": lambda _v: self._health.configure()
+            if self._health is not None else None,
+            "network.ping_seconds": lambda _v: self._health.configure()
+            if self._health is not None else None,
+            "network.amber_ms": lambda _v: self._rebuild_rail(),
+            "transfers.speedline": lambda v: self._transfer_bar.set_speedline(bool(v)),
             "preview.logix": lambda _v: self._previews.clear()
             if self._previews is not None else None,
         }
@@ -1768,7 +1801,27 @@ class MainWindow(QMainWindow):
             self._transfer_bar.refresh()
         if job.denied:
             self._offer_elevated_delete(job)
+        if getattr(job, "holders", None):
+            self._offer_holder(*job.holders[0])
         self._notify(job)
+
+    def _offer_holder(self, pid: int, name: str) -> None:
+        """A failure named the program holding a file: offer to go to it."""
+        self._holder_pid = int(pid)
+        self._holder_button.setText(f"Switch to {name}")
+        self._holder_button.setToolTip(
+            f"{name} (PID {pid}) had a file open when the job ran. Close it "
+            "there, then Ctrl+J to retry what failed.")
+        self._holder_button.show()
+        self._holder_timer.start()
+
+    def _switch_to_holder(self) -> None:
+        from app.core import programs
+
+        self._holder_button.hide()
+        if not programs.bring_forward(self._holder_pid):
+            self.statusBar().showMessage(
+                "that program has no window to bring forward, or has closed", 6000)
 
     def _notify(self, job) -> None:
         """Say a long job has ended, when this window is not the one in front.

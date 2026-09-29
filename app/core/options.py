@@ -191,6 +191,18 @@ OPTIONS: tuple[Option, ...] = (
     Option("favorites.bar", "rail", "Favorites bar",
            "Saved folders as buttons under each tab strip. The rail already "
            "lists them."),
+    Option("network.ping", "rail", "Ping network locations",
+           "A dot and the milliseconds beside each share in the rail: green, "
+           "amber when slow, red when not answering. Only shares a pane has "
+           "been to this session are measured.", heading="Share health",
+           new=True),
+    _choice("network.ping_seconds", "rail", "Check every",
+            _seconds((5, 15, 60)), "Longer is quieter on a busy network.",
+            needs=("network.ping", True), new=True),
+    _choice("network.amber_ms", "rail", "Amber above",
+            ((50.0, "50 ms"), (100.0, "100 ms"), (250.0, "250 ms")),
+            "Red always means no reply within five seconds.",
+            needs=("network.ping", True), new=True),
 
     # -------------------------------------------------------- previews
     Option("preview.thumbnails", "previews", "Pictures in the grid",
@@ -212,6 +224,9 @@ OPTIONS: tuple[Option, ...] = (
            heading="Peek", needs=("listing.space", "peek"), new=True),
 
     # ------------------------------------------------------- transfers
+    Option("transfers.speedline", "transfers", "Speed line in the pill",
+           "The running job's speed as a line beside its readout. Click the "
+           "pill for the last minute in full.", heading="The pill", new=True),
     _choice("notify.after", "transfers", "Say a job finished when it ran longer than",
             _seconds((0, 10, 20, 60, 120)),
             "Only while the window is not in front: the taskbar button "

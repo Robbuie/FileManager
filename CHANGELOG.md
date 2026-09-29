@@ -5,6 +5,29 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.37.0]
+
+### Added
+- **A locked file says who has it.** When a copy, move, delete or rename
+  fails because a file is open -- "being used by another process" -- the
+  failure now ends "open in Logix Designer (PID 4412)", from the Restart
+  Manager, which is asked only after the failure and only about that file.
+  After such a job a *Switch to Logix Designer* button appears in the status
+  bar for twenty seconds; it brings that program's window forward so the file
+  can be closed, and Ctrl+J retries what failed. It can only name programs on
+  this computer: a file on a share held open by somebody else's machine still
+  fails with Windows' own words.
+- **Share health** (Options, Rail and network; on): a dot and the
+  milliseconds beside each network location and mapped drive in the rail --
+  green, amber when slow (100 ms by default), red when it does not answer
+  within five seconds. The tooltip adds the usual time and when it last
+  dropped. Only shares a pane has been to this session are measured, one
+  stat of the share's root at a time, every 15 seconds by default (5, 15 or
+  60); a share never opened is never pinged.
+- **Speed line in the transfer pill** (Options, Transfers; on): the running
+  job's speed as a line beside its readout, so a slowdown is visible without
+  opening the pill. The pill is a little wider to make room.
+
 ## [0.36.0]
 
 ### Added

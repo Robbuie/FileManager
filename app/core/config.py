@@ -228,6 +228,13 @@ DEFAULTS: dict[str, Any] = {
     # yet is not in that table and has to be typed once.
     "network.saved": [],
 
+    # 0.37: share health. Only shares a pane has been to this session are
+    # measured -- one stat of the share's root at a time, every this many
+    # seconds -- and a reading at or above `amber_ms` draws the dot amber.
+    "network.ping": True,
+    "network.ping_seconds": 15.0,
+    "network.amber_ms": 100.0,
+
     # Seconds to wait for a share to answer while reconnecting to it. Long,
     # and deliberately: this is the one call in the application that is
     # *expected* to sit there, because what it is waiting for is a server
@@ -285,6 +292,8 @@ DEFAULTS: dict[str, Any] = {
     # shows a notification. 0 turns both off. Twenty seconds is about where
     # somebody has gone to do something else rather than waited.
     "notify.after": 20.0,
+    # 0.37: a line of the running job's speed inside the transfer pill.
+    "transfers.speedline": True,
 
     "updates.check_on_launch": True,
     "updates.skip_version": "",

@@ -33,7 +33,9 @@ from app.ui import glyphs
 from app.ui.rows import parse_colour
 
 PILL_H = 48
-PILL_W = 460
+PILL_W = 540
+#: 0.37: the width the speed line takes inside the collapsed pill.
+SPARK_W = 84
 CARD_H = 168
 MARGIN_BOTTOM = 44
 SLIDE_MS = 220
@@ -77,6 +79,8 @@ class TransferPill(QWidget):
         self._tokens: dict[str, str] = {}
         self.expanded = False
         self._shown = False
+        #: 0.37: a line of the speed so far inside the collapsed pill.
+        self._speedline = True
         self.setCursor(Qt.PointingHandCursor)
         self.hide()
 
@@ -99,6 +103,10 @@ class TransferPill(QWidget):
 
     def set_motion(self, on: bool) -> None:
         self._slide.setDuration(SLIDE_MS if on else 0)
+
+    def set_speedline(self, on: bool) -> None:
+        self._speedline = bool(on)
+        self.update()
 
     def _button(self, name: str, slot) -> QToolButton:
         button = QToolButton(self)
@@ -233,6 +241,15 @@ class TransferPill(QWidget):
 
         text_left = 52
         room = self.width() - text_left - 90
+        job = self._queue.current()
+        speeds = list(job.speeds) if job is not None and self._speedline else []
+        if len(speeds) >= 2:
+            # 0.37: the speed so far, in the pill itself, so a slowdown shows
+            # without opening anything. Room is taken from the text, which
+            # elides; the buttons keep theirs.
+            spark = QRectF(self.width() - 90 - SPARK_W, row_top + 12, SPARK_W - 10, 24)
+            room -= SPARK_W
+            self._spark(painter, spark, speeds)
         base = QFont(self.font())
         base.setPixelSize(13)
         small = QFont(self.font())
@@ -252,6 +269,22 @@ class TransferPill(QWidget):
         if self.expanded:
             self._card(painter, small, base)
         painter.end()
+
+    def _spark(self, painter: QPainter, box: QRectF, speeds: list[float]) -> None:
+        top = max(speeds) or 1.0
+        step = box.width() / (len(speeds) - 1)
+        line = QPainterPath()
+        for i, value in enumerate(speeds):
+            point = QPointF(box.left() + i * step,
+                            box.bottom() - box.height() * (value / top))
+            line.moveTo(point) if i == 0 else line.lineTo(point)
+        painter.save()
+        pen = QPen(parse_colour(self._tokens.get("accent")), 1.4)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(line)
+        painter.restore()
 
     def _card(self, painter: QPainter, small: QFont, base: QFont) -> None:
         t = self._tokens
