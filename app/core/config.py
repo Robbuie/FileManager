@@ -193,6 +193,14 @@ DEFAULTS: dict[str, Any] = {
     # somebody else's code, for the reason `icons.overlays` is a switch: a
     # misbehaving handler should cost the pictures and nothing else.
     "preview.shell": True,
+    # 0.36: an .L5X shown as what it is -- controller, firmware, counts,
+    # tasks and I/O -- rather than as its first screen of XML.
+    "preview.logix": True,
+    # 0.36: what Space does on a file. "size" counts, as Space always has
+    # (on a folder it always does); "peek" opens a large preview over the
+    # window. And whether that card grows out of the row or just appears.
+    "listing.space": "size",
+    "preview.peek_motion": True,
     # Which view each pane's tabs are in: "list" or "grid". Per pane rather
     # than per tab, deliberately. A view mode that varied by tab would mean
     # Ctrl+Tab changing the shape of the window, and the tabs in one pane are

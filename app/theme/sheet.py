@@ -397,6 +397,19 @@ QFrame[role="previewpanel"] {{
     border: none;
     border-radius: {radius_sm};
 }}
+/* 0.36: the peek card, floating over the window. */
+QFrame[role="peek"] {{
+    background: {bg_2};
+    border: 1px solid {line};
+    border-radius: 16px;
+}}
+QFrame[role="peekbody"] {{
+    background: {bg_1};
+    border: none;
+    border-radius: {radius};
+}}
+QFrame[role="peek"] QLabel[role="previewname"] {{ font-size: 15px; padding: 4px 4px; }}
+QFrame[role="peek"] QLabel {{ background: transparent; }}
 QLabel[role="previewname"] {{
     background: transparent;
     color: {txt_0};

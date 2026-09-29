@@ -143,7 +143,8 @@ TEXT_CONTROLS = frozenset(b"\t\n\r\f\v\b\x1b")
 
 def preview(path: str, *, box: int, deadline: float,
             text_bytes: int = PREVIEW_TEXT_BYTES,
-            allow_shell: bool = True, page: int = 0) -> Preview:
+            allow_shell: bool = True, page: int = 0,
+            logix: bool = False) -> Preview:
     """Everything this module can say about one file, at one size.
 
     `box` is the longest edge wanted from a picture, `deadline` a
@@ -157,6 +158,23 @@ def preview(path: str, *, box: int, deadline: float,
         size = os.path.getsize(paths.api(path))
     except OSError as exc:
         return Preview(form=PreviewForm.NONE, note=_short(exc))
+
+    if logix and _suffix(path) == ".l5x" and text_bytes > 0:
+        # 0.36: a Logix export says what it is -- controller, firmware,
+        # counts -- rather than showing its first screen of XML. Anything
+        # that goes wrong falls through to the ordinary ladder, which shows
+        # the XML as it always did. Not for the grid (`text_bytes` 0), which
+        # has nowhere to put a paragraph.
+        try:
+            from app.io import logix as logix_reader
+
+            summary = logix_reader.summarise(path, deadline)
+        except Exception:  # noqa: BLE001 - a malformed export is shown as text
+            summary = None
+        if summary is not None:
+            return Preview(form=PreviewForm.TEXT, source="logix", size=size,
+                           text=logix_reader.render(summary), encoding="xml",
+                           truncated=bool(summary.get("partial")))
 
     family = preview_family(os.path.basename(path))
     for attempt in _ladder(family, allow_shell=allow_shell):

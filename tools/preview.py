@@ -31,7 +31,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            pane_preview: bool = False, grid: bool = False, flat: str = "",
            backdrop: str = "solid",
            viewer: str = "", cell: int = 128, commands: bool = False,
-           stale: bool = False, options: str = "") -> str:
+           stale: bool = False, options: str = "", peek: str = "") -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -147,6 +147,31 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
         _mark_stale(window)
         QTimer.singleShot(200, app.quit)
         app.exec()
+
+    if peek:
+        # The peek card over the window, on the named file in the left pane.
+        config.set("listing.space", "peek")
+        widget = window._widgets[0]  # noqa: SLF001
+        model = window._panes[0].current.model  # noqa: SLF001
+        row = model.row_of(peek)
+        if row >= 0:
+            widget._go_to(row)  # noqa: SLF001
+            window._open_peek()  # noqa: SLF001
+        QTimer.singleShot(1500, app.quit)
+        app.exec()
+        if row >= 0:
+            # The worker cannot read a path off Windows, so the decoder is run
+            # here on the real file and its answer handed to the card.
+            import time as _time
+
+            from app.io import decode
+
+            card = window._peek  # noqa: SLF001
+            answer = decode.preview(os.path.join(path, peek), box=1600,
+                                    deadline=_time.monotonic() + 10, logix=True)
+            card.show_answer(card.path, peek, answer)
+            QTimer.singleShot(300, app.quit)
+            app.exec()
 
     if viewer:
         panel = _show_viewer(window, viewer)
@@ -640,6 +665,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="open this many tabs per pane, to see the strip")
     parser.add_argument("--commands", action="store_true",
                         help="the commands editor rather than the window")
+    parser.add_argument("--peek", default="", metavar="NAME",
+                        help="open the peek card on this file in the left pane")
     parser.add_argument("--options", default="", metavar="PAGE",
                         help="the Options dialog open at a page: look, listing, "
                              "rail, previews, transfers, general")
@@ -681,7 +708,7 @@ def main(argv: list[str] | None = None) -> int:
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
                      cell=args.cell, backdrop=args.backdrop, stale=args.stale,
-                     options=args.options))
+                     options=args.options, peek=args.peek))
         return 0
 
     from app.theme.tokens import THEMES

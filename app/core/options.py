@@ -156,6 +156,11 @@ OPTIONS: tuple[Option, ...] = (
              (365.0, "1 year")),
             "Old files step back so this week's work stands out. Folders "
             "are left alone.", new=True),
+    _choice("listing.space", "listing", "Space on a file",
+            (("size", "Counts it, as always"), ("peek", "Peeks at it")),
+            "Peek opens a large preview over the window; Up and Down step "
+            "through the folder behind it. Space on a folder always counts it.",
+            heading="Keys", new=True),
     Option("listing.scrollmap", "listing", "Scrollbar map",
            "Ticks on the scrollbar for marked rows, today's rows and the "
            "rows matching a quick search -- the ones not on screen.",
@@ -198,6 +203,13 @@ OPTIONS: tuple[Option, ...] = (
            "Pictures of the kinds this application cannot decode itself: "
            "video frames, Office documents, .psd. The one part of the "
            "previewer that runs somebody else's code.", heading="Decoders"),
+    Option("preview.logix", "previews", "Read Logix exports",
+           "An .L5X shows its controller, processor, firmware, export date, "
+           "counts of tags, programs, routines and modules, its tasks and "
+           "its I/O -- instead of its first screen of XML.", new=True),
+    Option("preview.peek_motion", "previews", "Peek grows out of the row",
+           "Off opens the card in place. Also off whenever animations are.",
+           heading="Peek", needs=("listing.space", "peek"), new=True),
 
     # ------------------------------------------------------- transfers
     _choice("notify.after", "transfers", "Say a job finished when it ran longer than",

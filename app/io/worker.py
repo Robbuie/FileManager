@@ -1010,7 +1010,7 @@ def _preview(request: Request, outbox: Any) -> None:
 
     answer = decode.preview(request.path, box=box, deadline=deadline,
                             text_bytes=text_bytes, allow_shell=allow_shell,
-                            page=page)
+                            page=page, logix=bool(request.args.get("logix")))
     outbox.put(Reply(request.id, Status.OK, payload=answer))
 
 

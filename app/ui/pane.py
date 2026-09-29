@@ -377,6 +377,9 @@ class PaneWidget(QFrame):
     #: window. What the pane provides is the folder, the files in the order it
     #: has them, and which one the cursor is on.
     viewRequested = Signal(str, list, int)
+    #: 0.36: Space on a file, with Space set to peek. The window owns the card
+    #: for the viewer's reason: it floats over both panes.
+    peekRequested = Signal()
     #: An external command, by its id in the table. The pane matches the
     #: keystroke because the pane is where a key is safe to act on; what to do
     #: with the id is the window's business.
@@ -1556,6 +1559,43 @@ class PaneWidget(QFrame):
         at = names.index(entry.name) if (entry is not None
                                         and entry.name in names) else 0
         self.viewRequested.emit(self._pane.current.path, names, at)
+
+    def peek_target(self):
+        """`(full path, entry)` for the file under the cursor, or None.
+
+        None for a folder, the `..` row and an empty listing: Space on those
+        keeps meaning "count this", which is what it has always meant.
+        """
+        model = self._pane.current.model
+        row = self.current_row()
+        if row < 0 or model.is_parent_row(row):
+            return None
+        entry = model.entry(row)
+        path = self._pane.row_path(row)
+        if entry is None or entry.is_dir or not path:
+            return None
+        return path, entry
+
+    def cursor_rect(self):
+        """The row under the cursor, in this widget's coordinates, for the
+        peek card to grow out of. An empty rect when there is none on screen."""
+        index = self._view.currentIndex()
+        if not index.isValid():
+            return QRect()
+        band = self._view.visualRect(index)
+        band.setLeft(0)
+        band.setRight(self._view.viewport().width())
+        top_left = self._view.viewport().mapTo(self, band.topLeft())
+        return QRect(top_left, band.size())
+
+    def step_cursor(self, step: int) -> None:
+        """Move the cursor by rows without marking anything -- what the arrow
+        keys do while the peek card has the keyboard."""
+        row = self.current_row()
+        model = self._view.model()
+        if model is None:
+            return
+        self._go_to(max(0, min(model.rowCount() - 1, row + step)))
 
     def reveal_name(self, name: str) -> None:
         """Put the cursor on a name. What the viewer's walk reports back.
@@ -2873,7 +2913,11 @@ class PaneWidget(QFrame):
             # toggling the selection, so a key press that never reaches this
             # widget would mark a row instead of counting it.
             if event.key() == Qt.Key_Space and not event.modifiers():
-                self.measure_selection()
+                if self._pane.config.get("listing.space") == "peek" \
+                        and self.peek_target() is not None:
+                    self.peekRequested.emit()
+                else:
+                    self.measure_selection()
                 return True
             if self._on_selection_key(event):
                 return True

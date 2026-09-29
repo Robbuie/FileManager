@@ -174,7 +174,8 @@ class Previews(QObject):
             timeout=float(self._config.get("timeout.preview")),
             on_reply=self._replier(path, key),
             args={"box": box, "text_bytes": text_bytes,
-                  "shell": bool(self._config.get("preview.shell"))},
+                  "shell": bool(self._config.get("preview.shell")),
+                  "logix": bool(self._config.get("preview.logix"))},
         )
 
     def _replier(self, path: str, key: tuple):
@@ -244,6 +245,11 @@ def describe(answer: Preview) -> str:
             parts.append(f"shown at {answer.shown} px")
         parts.append(_bytes(answer.size))
         return "  ".join(parts)
+    if answer.form is PreviewForm.TEXT and answer.source == "logix":
+        # 0.36: a summary rather than the file's text, so the line under it
+        # says so -- "0 lines, xml" would describe a document nobody is shown.
+        partial = "  counted in part" if answer.truncated else ""
+        return f"read as a Logix export{partial}  {_bytes(answer.size)}"
     if answer.form is PreviewForm.TEXT:
         lines = f"{answer.lines:,} lines" + (" so far" if answer.truncated else "")
         return f"{lines}  {answer.encoding}  {_bytes(answer.size)}"

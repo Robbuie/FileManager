@@ -5,6 +5,27 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.36.0]
+
+### Added
+- **Logix exports read as what they are** (Options, Previews; on). An `.L5X`
+  in the preview pane, the viewer or the peek card shows the controller,
+  processor, firmware revision, the Logix Designer version that saved it,
+  the export date, counts of tags, programs, routines, rungs, AOIs, UDTs and
+  modules, the tasks with the programs they schedule, and the I/O modules --
+  instead of its first screen of XML. The file is read once with its memory
+  kept flat, inside the preview's deadline; a large export on a slow share
+  that runs out of time shows the counts so far and says so. Anything that
+  is not a real export, or that fails to parse, is shown as text as before.
+  `.ACD` files are not read: their format is not documented.
+- **Peek** (Options, Listing: *Space on a file* -- *Peeks at it*; off by
+  default, so Space keeps counting). Space on a file opens a large preview
+  card over the window, growing out of the row. Up and Down move the cursor
+  in the listing behind it and the card follows; Space or Esc closes it,
+  Enter opens the file, F3 hands it to the viewer. Space on a folder still
+  counts it. The grow animation has its own switch and also follows
+  Animations.
+
 ## [0.35.0]
 
 ### Added

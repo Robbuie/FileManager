@@ -384,7 +384,9 @@ type a name  jump to it    Ctrl+G / Ctrl+Shift+G  the next, the previous match
 Ctrl+G steps the last name looked for, not only one still being typed; Enter
 steps while the search is live. Esc forgets it, and so does leaving the folder.
 F3 became the viewer in 0.16
-Space   count what is under the marked folders
+Space   count what is under the marked folders -- or, with Space set to
+        peek (0.36, off by default), open the peek card on a file under the
+        cursor; Up/Down step it, Space/Esc close, Enter opens, F3 the viewer
 Ctrl+Shift+Space  count every folder in the listing
 Num +   select a group     Num -   unselect a group     Num *  invert
 Alt+Num +/-  the rest of the files of this kind

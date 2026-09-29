@@ -233,6 +233,7 @@ class MainWindow(QMainWindow):
             widget.addFavoriteRequested.connect(self._add_favorite)
             widget.manageFavoritesRequested.connect(self._manage_favorites)
             widget.viewRequested.connect(self._on_view_requested)
+            widget.peekRequested.connect(self._open_peek)
             widget.commandRequested.connect(self._on_command)
         if self._commands is not None:
             self._commands.changed.connect(self._fill_tools)
@@ -311,6 +312,8 @@ class MainWindow(QMainWindow):
         self._palette = CommandPalette(self)
         self._palette.apply_tokens(tokens)
         self._palette.chosen.connect(self._on_palette_chosen)
+        #: 0.36: the peek card, built the first time Space peeks.
+        self._peek = None
         #: 0.33: the Options dialog, built on first use and kept, and the
         #: menu entries that show a setting, so a change made in either place
         #: is shown in the other. A checkable action per switch; a group of
@@ -1263,6 +1266,64 @@ class MainWindow(QMainWindow):
         self._viewer.raise_()
         self._viewer.activateWindow()
 
+    # ---------------------------------------------------------------- 0.36 peek
+
+    def _peek_card(self):
+        from app.ui.peek import PeekCard
+
+        if self._peek is None:
+            self._peek = PeekCard(self)
+            self._peek.apply_tokens(self._tokens)
+            self._peek.closed.connect(self.focus_active_pane)
+            self._peek.stepRequested.connect(self._step_peek)
+            self._peek.openRequested.connect(
+                lambda: self._current_widget()._open_current())
+            self._peek.viewRequested.connect(
+                lambda: self._current_widget().view_current())
+            if self._previews is not None:
+                self._previews.ready.connect(self._on_peek_ready)
+                self._previews.unavailable.connect(
+                    lambda path, why: self._peek.problem(path, why))
+        return self._peek
+
+    def _open_peek(self) -> None:
+        """Space on a file, with Space set to peek."""
+        widget = self._current_widget()
+        target = widget.peek_target()
+        if target is None or self._previews is None:
+            return
+        card = self._peek_card()
+        card.set_motion(bool(self._config.get("preview.peek_motion"))
+                        and bool(self._config.get("look.motion")))
+        row = widget.cursor_rect()
+        origin = row.translated(widget.mapTo(self, row.topLeft()) - row.topLeft()) \
+            if row.isValid() else row
+        self._ask_peek(target)
+        card.open_from(origin)
+
+    def _ask_peek(self, target) -> None:
+        from app.io.protocol import PREVIEW_BOX, PREVIEW_TEXT_BYTES
+
+        path, entry = target
+        self._peek.waiting(path, entry.name)
+        self._previews.ask(path, box=PREVIEW_BOX, text_bytes=PREVIEW_TEXT_BYTES,
+                           mtime=entry.mtime, size=entry.size, delay_ms=0)
+
+    def _step_peek(self, step: int) -> None:
+        widget = self._current_widget()
+        widget.step_cursor(step)
+        target = widget.peek_target()
+        if target is not None:
+            self._ask_peek(target)
+            return
+        row = widget.current_row()
+        entry = self._current_pane().current.model.entry(row) if row >= 0 else None
+        self._peek.not_a_file(entry.name if entry is not None else "..")
+
+    def _on_peek_ready(self, path: str, answer) -> None:
+        if self._peek is not None and self._peek.isVisible():
+            self._peek.show_answer(path, paths.leaf(path), answer)
+
     def _on_viewer_showing(self, path: str) -> None:
         widget = self._current_widget()
         name = os.path.basename(path.replace("\\", "/"))
@@ -1473,6 +1534,8 @@ class MainWindow(QMainWindow):
                                             for w in widgets],
             "listing.scrollmap": lambda v: [w.set_scrollmap(v) for w in widgets],
             "rail.capacity": lambda _v: self._rebuild_rail(),
+            "preview.logix": lambda _v: self._previews.clear()
+            if self._previews is not None else None,
         }
 
     def _apply_grid(self, tokens: dict) -> None:
@@ -1580,6 +1643,8 @@ class MainWindow(QMainWindow):
             self._queue_dialog.apply_tokens(tokens)
         if self._options is not None:
             self._options.apply_tokens(tokens)
+        if self._peek is not None:
+            self._peek.apply_tokens(tokens)
         if self._viewer is not None:
             # And the fourth, for the same reason and with the same trap: the
             # backdrop behind a picture is painted, so a viewer left open behind
