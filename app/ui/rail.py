@@ -38,7 +38,7 @@ its own text to the width it actually got.
 from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QPainter, QPainterPath
+from PySide6.QtGui import QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QLayout,
@@ -385,7 +385,8 @@ class NavigationRail(QFrame):
         row = DriveRow(letter, drive.get("unc") or "", drive.get("type", ""),
                        usage=self._capacity.usage(letter),
                        tokens=self._tokens,
-                       ejectable=bool(drive.get("ejectable")))
+                       ejectable=bool(drive.get("ejectable")),
+                       meter=str(self._config.get("rail.capacity")))
         row.setProperty("state",
                         "current" if letter.lower() == self._current[:2] else "")
         row.chosen.connect(self.chosen)
@@ -588,9 +589,12 @@ class DriveRow(QWidget):
     favoriteRequested = Signal(str)
 
     def __init__(self, letter: str, unc: str, kind: str, *, usage=None,
-                 tokens=None, ejectable: bool = False,
+                 tokens=None, ejectable: bool = False, meter: str = "bars",
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        #: 0.34: "bars" under the row, a "rings" gauge where the drive's glyph
+        #: was, or "off". Only a measured drive draws either.
+        self._meter = meter if meter in ("bars", "rings", "off") else "bars"
         self._letter = letter
         self._ejectable = ejectable
         self._unc = unc
@@ -622,7 +626,8 @@ class DriveRow(QWidget):
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt naming
         line = self.fontMetrics().height()
-        extra = METER_HEIGHT + 6 if self._usage is not None else 0
+        extra = METER_HEIGHT + 6 if self._usage is not None \
+            and self._meter == "bars" else 0
         return QSize(0, line + 8 + extra)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt naming
@@ -645,7 +650,11 @@ class DriveRow(QWidget):
         right = rect.right() - 8
         top = rect.top() + 3
 
-        if self._tokens:
+        ring = self._usage is not None and self._meter == "rings"
+        if ring:
+            self._ring(painter, QRectF(left, top + (metrics.height() - 16) / 2, 16, 16))
+            left += 16 + 8
+        elif self._tokens:
             current = self.property("state") == "current"
             glyph = glyphs.icon(
                 "network" if self._unc else "drive",
@@ -684,7 +693,7 @@ class DriveRow(QWidget):
             metrics.elidedText(self._label(), Qt.ElideMiddle,
                                max(0, right - label_left)))
 
-        if self._usage is None:
+        if self._usage is None or self._meter != "bars":
             painter.end()
             return
 
@@ -704,6 +713,29 @@ class DriveRow(QWidget):
                 self._colour("warn" if self._usage.share >= NEARLY_FULL
                              else "accent"))
         painter.end()
+
+    def _ring(self, painter: QPainter, box: QRectF) -> None:
+        """0.34: how full the drive is, as a ring where its glyph would be.
+
+        Starts at twelve o'clock and runs clockwise, the way every gauge
+        somebody has read does. Warn-coloured past `NEARLY_FULL`, the bar's
+        rule, for the bar's reason.
+        """
+        share = max(0.0, min(1.0, float(self._usage.share)))
+        pen = QPen(self._colour("bg_4"))
+        pen.setWidthF(2.6)
+        pen.setCapStyle(Qt.FlatCap)
+        inner = box.adjusted(1.5, 1.5, -1.5, -1.5)
+        painter.save()
+        painter.setBrush(Qt.NoBrush)
+        painter.setPen(pen)
+        painter.drawEllipse(inner)
+        if share > 0:
+            pen.setColor(self._colour("warn" if share >= NEARLY_FULL else "accent"))
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawArc(inner, 90 * 16, -int(share * 360 * 16))
+        painter.restore()
 
     def eject_rect(self) -> QRectF:
         """The eject button's square at the right of the first line."""

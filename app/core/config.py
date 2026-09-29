@@ -83,6 +83,9 @@ DEFAULTS: dict[str, Any] = {
     # Which sections are folded up, by heading. A list rather than a flag per
     # section so a group added later starts open without a migration.
     "rail.collapsed": [],
+    # 0.34: a measured drive's free space as a ring where its glyph was,
+    # the bar under it (0.12's), or neither.
+    "rail.capacity": "rings",
 
     # Deadlines. Seconds without progress before a request is given up on and
     # its worker restarted.
@@ -242,6 +245,20 @@ DEFAULTS: dict[str, Any] = {
     # listing: the rows are already here.
     "listing.hidden": True,
     "listing.system": True,
+
+    # 0.34: how the age of a row is shown. "chip" is the tinted age chip of
+    # 0.11; "glow" adds a green edge to rows changed today, which is what the
+    # folder-per-day habit wants to see at a glance; "off" leaves the age as
+    # plain text. And how many days old a file has to be before its row steps
+    # back, faded -- 0 for never.
+    "listing.recency": "glow",
+    "listing.fade_days": 0.0,
+    # 0.34: ticks on the listing's scrollbar for the marked rows, today's
+    # rows and the rows matching the name being looked for.
+    "listing.scrollmap": True,
+    # 0.34: a bar under a folder's size once it has been counted, against the
+    # largest counted folder here -- never against the files, see rows.py.
+    "listing.folder_bars": True,
 
     # The one network call the application makes, and the two things worth
     # remembering about it: whether to make it at all, and which version the

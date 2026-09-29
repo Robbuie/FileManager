@@ -135,6 +135,23 @@ OPTIONS: tuple[Option, ...] = (
            "Programs, shortcuts and .ico files draw their own icon. Reads the "
            "file, for the rows on screen only.",
            needs=("icons.style", "icons")),
+    _choice("listing.recency", "listing", "Recently changed files",
+            (("off", "Plain"), ("chip", "Age chip"), ("glow", "Glow")),
+            "Age chip tints the Age column green for the last day, week and "
+            "month. Glow also lights the edge of every row changed today.",
+            heading="Age", new=True),
+    _choice("listing.fade_days", "listing", "Fade files older than",
+            ((0.0, "Never"), (30.0, "1 month"), (90.0, "3 months"),
+             (365.0, "1 year")),
+            "Old files step back so this week's work stands out. Folders "
+            "are left alone.", new=True),
+    Option("listing.scrollmap", "listing", "Scrollbar map",
+           "Ticks on the scrollbar for marked rows, today's rows and the "
+           "rows matching a quick search -- the ones not on screen.",
+           heading="Extras", new=True),
+    Option("listing.folder_bars", "listing", "Bars on counted folders",
+           "Once Space has counted folders, each gets a bar against the "
+           "largest of them, in a colour of its own.", new=True),
     _choice("flat.layout", "listing", "Flat view shows",
             (("column", "A Location column"), ("groups", "A heading per folder")),
             "Ctrl+B: every file under a folder in one list.",
@@ -151,6 +168,10 @@ OPTIONS: tuple[Option, ...] = (
     Option("rail.shown", "rail", "Navigation rail",
            "Places, drives, network locations and saved folders down the "
            "left. Ctrl+Shift+B.", heading="Rail"),
+    _choice("rail.capacity", "rail", "Drive free space",
+            (("rings", "Rings"), ("bars", "Bars"), ("off", "Off")),
+            "Only for drives that have been measured: local disks by "
+            "themselves, anything else when asked.", new=True),
     Option("favorites.bar", "rail", "Favorites bar",
            "Saved folders as buttons under each tab strip. The rail already "
            "lists them."),

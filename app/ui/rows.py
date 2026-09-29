@@ -36,11 +36,13 @@ the model's own `size_scale`, computed once per change and cached there.
 
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
-from app.core import filetypes
+from app.core import filetypes, when
 from app.core.listing import ATTRIBUTE_HIDDEN, Column, ListingModel
 from app.io import paths
 from app.ui import glyphs
@@ -77,6 +79,10 @@ CUT_OPACITY = 0.45
 #: row: a cut row is about to go somewhere, a hidden one is merely not meant
 #: to be looked at, and it still has to be readable when somebody is looking.
 HIDDEN_OPACITY = 0.55
+
+#: 0.34: a file older than `fade_days`. Fainter than a hidden one: the point is
+#: that the eye skips it, and it is still one click from being read.
+OLD_OPACITY = 0.5
 
 
 def tabular(font: QFont) -> QFont:
@@ -176,6 +182,12 @@ class RowDelegate(QStyledItemDelegate):
         #: 0.29: `(folder, name) -> fraction or None`, for a row a transfer is
         #: writing. Set by the pane when there is a queue to ask.
         self.progress = None
+        #: 0.34: "off", "chip" or "glow" -- see `listing.recency`.
+        self.recency = "glow"
+        #: 0.34: files older than this many days are drawn faded; 0 is never.
+        self.fade_days = 0.0
+        self._today = 0.0
+        self._today_checked = 0.0
 
     # ------------------------------------------------------------- the state
 
@@ -267,15 +279,26 @@ class RowDelegate(QStyledItemDelegate):
         # and a second set of greyed tokens per theme is five more numbers to
         # keep in step for no gain. The band underneath keeps its strength --
         # a cut row that is also the selected row still has to look selected.
+        row_entry = entry if entry is not None else index.data(ListingModel.EntryRole)
+        if self.recency == "glow" and row_entry is not None \
+                and row_entry.mtime >= self._start_of_today():
+            self._glow(painter, option, index)
+
         fade = 1.0 if self._live else IDLE_OPACITY
         if index.data(ListingModel.CutRole):
             fade *= CUT_OPACITY
-        row_entry = entry if entry is not None else index.data(ListingModel.EntryRole)
         if row_entry is not None and row_entry.attributes & ATTRIBUTE_HIDDEN:
             # 0.33: shown, because the setting says so, and dimmed, because
             # a hidden file listed at full strength is indistinguishable from
             # one somebody meant to be there.
             fade *= HIDDEN_OPACITY
+        if self.fade_days > 0 and row_entry is not None and not row_entry.is_dir \
+                and row_entry.mtime \
+                and time.time() - row_entry.mtime > self.fade_days * 86400:
+            # 0.34: an old file steps back, so this week's work stands out.
+            # Files only: a folder's date moves whenever anything in it does,
+            # so an old folder date is rarer and says less.
+            fade *= OLD_OPACITY
         if fade < 1.0:
             painter.setOpacity(fade)
 
@@ -302,6 +325,44 @@ class RowDelegate(QStyledItemDelegate):
             super().paint(painter, opt, index)
             if index.column() == Column.SIZE:
                 self._bar(painter, option, index)
+        painter.restore()
+
+    def _start_of_today(self) -> float:
+        """Local midnight, worked out at most once a minute rather than per cell."""
+        now = time.time()
+        if now - self._today_checked > 60:
+            self._today = when.window("today", now)[0] or 0.0
+            self._today_checked = now
+        return self._today
+
+    def _glow(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:
+        """A row changed today: a faint green wash across it and a lit edge.
+
+        0.34. Green because it is the age chip's colour -- "fresh" already
+        means green in this listing -- and not the accent, because the accent
+        means "selected" and a row that is both has to read as both.
+        """
+        wash = parse_colour(self._t.get("age_row"))
+        cell = QRectF(option.rect).adjusted(0, BAND_GAP, 0, -BAND_GAP)
+        if wash.isValid():
+            painter.fillRect(cell, wash)
+        if index.column() != int(Column.NAME):
+            return
+        edge = parse_colour(self._t.get("good"))
+        halo = parse_colour(self._t.get("age_glow"))
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        top = cell.top() + 4
+        height = max(4.0, cell.height() - 8)
+        if halo.isValid():
+            painter.setBrush(halo)
+            painter.drawRoundedRect(QRectF(cell.left() + BAND_INSET - 2, top - 2,
+                                           7, height + 4), 3.5, 3.5)
+        if edge.isValid():
+            painter.setBrush(edge)
+            painter.drawRoundedRect(QRectF(cell.left() + BAND_INSET, top, 3, height),
+                                    1.5, 1.5)
         painter.restore()
 
     def _filling(self, painter: QPainter, option: QStyleOptionViewItem,
@@ -492,7 +553,11 @@ class RowDelegate(QStyledItemDelegate):
         share = index.data(ListingModel.SizeShareRole)
         if not share:
             return
-        colour = parse_colour(self._t.get("bg_4"))
+        # A folder's bar is on a scale of its own -- the largest counted
+        # folder -- so it is drawn in the accent's dim shade to keep the two
+        # scales from being read as one.
+        folder = bool(index.data(ListingModel.IsDirRole))
+        colour = parse_colour(self._t.get("accent_dim" if folder else "bg_4"))
         if not colour.isValid():
             return
 
@@ -523,7 +588,7 @@ class RowDelegate(QStyledItemDelegate):
         text = index.data(Qt.DisplayRole)
         if not text:
             return
-        step = index.data(ListingModel.AgeStepRole)
+        step = index.data(ListingModel.AgeStepRole) if self.recency != "off" else None
         tint = parse_colour(self._t.get(f"age_{step}")) if step else QColor()
         ink = parse_colour(self._t.get("age_text" if step else "txt_2"))
 

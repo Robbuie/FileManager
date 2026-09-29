@@ -117,6 +117,10 @@ def build(
     for name, alpha in AGE_ALPHA.items():
         out[f"age_{name}"] = rgba(good, alpha)
     out["age_text"] = mix(good, ink, 0.70)
+    # 0.34: the recency glow -- a wash under a row changed today and the halo
+    # round its lit edge. Same green, same reason.
+    out["age_row"] = rgba(good, 0.07)
+    out["age_glow"] = rgba(good, 0.30)
 
     for key, value in DENSITIES[density_name].items():
         out[key] = f"{value:g}px" if key == "ui_font" else f"{int(value)}px"

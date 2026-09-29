@@ -246,6 +246,9 @@ class ListingModel(QAbstractTableModel):
         #: filter and must not forget a setting.
         self._show_hidden = True
         self._show_system = True
+        #: 0.34: bars for counted folders, on a scale of their own.
+        self._folder_bars = False
+        self._dir_scale: int | None = None
         #: The largest file in `_rows`, for the size bars. Computed on demand
         #: and thrown away whenever the list changes -- one pass over a list
         #: already in memory is cheap, and doing it per batch during a
@@ -515,6 +518,28 @@ class ListingModel(QAbstractTableModel):
         self._apply_filter()
         self.endResetModel()
 
+    def set_folder_bars(self, on: bool) -> None:
+        self._folder_bars = bool(on)
+        self._dir_scale = None
+
+    def forget_folder_scale(self) -> None:
+        """A folder size arrived; the largest counted folder may have changed.
+
+        Called by the pane when the sizes provider says so. The model cannot
+        see that for itself -- the sizes live in the provider -- and working
+        the scale out on every paint would be a pass over every folder per
+        cell drawn.
+        """
+        self._dir_scale = None
+
+    @property
+    def folder_scale(self) -> int:
+        """The largest counted folder here, in bytes, or 0."""
+        if self._dir_scale is None:
+            self._dir_scale = max((self._counted(e.name) for e in self._rows
+                                   if e.is_dir), default=0)
+        return self._dir_scale
+
     @property
     def _filtering(self) -> bool:
         return bool(self._filter) or not (self._show_hidden and self._show_system)
@@ -604,6 +629,15 @@ class ListingModel(QAbstractTableModel):
         """
         return [index + self._offset for index, entry in enumerate(self._rows)
                 if when.inside(entry.mtime, span)]
+
+    def rows_containing(self, text: str) -> list[int]:
+        """Every row whose own name contains `text`, for the scrollbar map's
+        search ticks -- the rows Ctrl+G would step through, all at once."""
+        wanted = (text or "").lower()
+        if not wanted:
+            return []
+        return [index + self._offset for index, entry in enumerate(self._rows)
+                if wanted in self._leaf(entry).lower()]
 
     def all_rows(self) -> list[int]:
         """Every row a selection may hold, the parent row excluded."""
@@ -841,7 +875,18 @@ class ListingModel(QAbstractTableModel):
         if role == self.AgeStepRole:
             return age_step(entry.mtime) if column == Column.AGE else None
         if role == self.SizeShareRole:
-            if column != Column.SIZE or entry.is_dir or not entry.size:
+            if column != Column.SIZE:
+                return None
+            if entry.is_dir:
+                # A counted folder against the largest counted folder, never
+                # against the files: see `size_scale`. The delegate draws it
+                # in a different colour, so the two scales are not read as one.
+                if not self._folder_bars:
+                    return None
+                counted = self._counted(entry.name)
+                largest = self.folder_scale
+                return (counted / largest) if counted and largest else None
+            if not entry.size:
                 return None
             largest = self.size_scale
             return (entry.size / largest) if largest else None
@@ -955,6 +1000,7 @@ class ListingModel(QAbstractTableModel):
             e for e in self._all if self._passes(e)
         ]
         self._scale = None
+        self._dir_scale = None
         self._group_sizes = {}
         if self._grouped:
             for entry in self._rows:

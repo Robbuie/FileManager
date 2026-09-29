@@ -34,6 +34,7 @@ from PySide6.QtGui import (
 )
 
 from app.core import drops, when
+from app.core import scrollmap as core_scrollmap
 from app.core.commands import normalise_shortcut
 from app.core.icons import ROW_ICON
 from app.core.listing import (
@@ -59,6 +60,7 @@ from app.ui.grid import GridView
 from app.ui.header import FolderHeader
 from app.ui.preview import PANE_TEXT_BYTES, PreviewPanel
 from app.ui.rows import RowDelegate
+from app.ui.scrollmap import MapScrollBar
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -110,6 +112,11 @@ SHELL_VERBS_WE_HAVE = frozenset({
 #: that coming back to the keyboard starts a new search rather than extending
 #: one nobody remembers making.
 SEARCH_FORGETS_AFTER = 1500
+
+#: 0.34: how long the scrollbar map waits after the last change before it is
+#: worked out again. Long enough to swallow a run of Ins presses and the
+#: batches of a streaming listing; short enough to look immediate.
+MAP_SETTLE_MS = 150
 
 
 def _leaf(path: str) -> str:
@@ -515,6 +522,14 @@ class PaneWidget(QFrame):
         self._view.setMouseTracking(True)
         self._rows = RowDelegate(self._view)
         self._view.setItemDelegate(self._rows)
+        # 0.34: how recent and old rows are drawn, from the settings.
+        self._rows.recency = str(pane.config.get("listing.recency"))
+        self._rows.fade_days = float(pane.config.get("listing.fade_days"))
+        # 0.34: the scrollbar map. A scrollbar of this application's own, set
+        # before any model, so the view never draws with the stock one.
+        self._map = MapScrollBar(self._view)
+        self._view.setVerticalScrollBar(self._map)
+        self._map.set_enabled_map(bool(pane.config.get("listing.scrollmap")))
         self._view.entered.connect(self._on_row_entered)
         self._view.setWordWrap(False)
         self._view.setSortingEnabled(True)
@@ -741,6 +756,9 @@ class PaneWidget(QFrame):
             # A repaint rather than a model signal, for the reason the icons
             # give: the view asks the model about the rows it is drawing and
             # no others, which is what stays cheap at 50,000 rows.
+            # First, so the repaint below draws against the new scale.
+            self._pane.sizes.changed.connect(
+                lambda: self._pane.current.model.forget_folder_scale())
             self._pane.sizes.changed.connect(self._view.viewport().update)
             self._pane.sizes.changed.connect(self._render_status)
         if self._pane.clipboard is not None:
@@ -799,6 +817,13 @@ class PaneWidget(QFrame):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(SEARCH_FORGETS_AFTER)
         self._search_timer.timeout.connect(self._clear_search)
+        #: 0.34: the scrollbar map is worked out after the dust settles --
+        #: marking with Ins held down is dozens of selection changes a second,
+        #: and a streaming listing is one insert per batch.
+        self._map_timer = QTimer(self)
+        self._map_timer.setSingleShot(True)
+        self._map_timer.setInterval(MAP_SETTLE_MS)
+        self._map_timer.timeout.connect(self._update_map)
 
         # Switching back to a tab must not connect its model a second time.
         self._watched: set = set()
@@ -861,6 +886,7 @@ class PaneWidget(QFrame):
             self._tabs.setTabIcon(index, self._tab_icon)
         self._header.set_colour(tokens.get("accent", "#4aa8ff"))
         self._rows.apply_tokens(tokens)
+        self._map.apply_tokens(tokens)
         self._folder_header.apply_tokens(tokens)
         self._grid.apply_tokens(tokens)
         self._preview.apply_tokens(tokens)
@@ -2152,6 +2178,8 @@ class PaneWidget(QFrame):
             # A refresh or a live check reconciles rather than resets, and a
             # row that went can take a mark with it: the count has to follow.
             model.layoutChanged.connect(self._on_rows_settled)
+            for signal in (model.modelReset, model.layoutChanged, model.rowsInserted):
+                signal.connect(self._schedule_map)
             self._watched.add(model)
 
     def _watch_selection(self) -> None:
@@ -2159,6 +2187,7 @@ class PaneWidget(QFrame):
         picker = self._view.selectionModel()
         if picker is not None:
             picker.selectionChanged.connect(self._render_status)
+            picker.selectionChanged.connect(self._schedule_map)
             # The cursor, not the selection. A preview follows where the
             # keyboard is, which is `currentChanged` -- `selectionChanged` does
             # not fire when the cursor moves without marking anything, which is
@@ -2206,6 +2235,48 @@ class PaneWidget(QFrame):
         self._grouped_rows = []     # `setModel` put every row back to one height
         self._regroup()
         self._folder_header.follow(model, self._header_title())
+        self._schedule_map()
+
+    # ------------------------------------------------------------ 0.34 rows
+
+    def _schedule_map(self, *_ignored) -> None:
+        self._map_timer.start()
+
+    def _update_map(self) -> None:
+        """Work out the scrollbar's ticks for the tab in front.
+
+        Three passes over rows already in memory -- the marks, today, and the
+        name being looked for -- and none over the filesystem. Nothing at all
+        when the map is off.
+        """
+        if not bool(self._pane.config.get("listing.scrollmap")):
+            self._map.set_marks({})
+            return
+        model = self._pane.current.model
+        picker = self._view.selectionModel()
+        marked = [index.row() for index in picker.selectedRows()] if picker else []
+        term = self._search or self._last_search
+        self._map.set_marks(core_scrollmap.build(
+            model.rowCount(), marked=marked,
+            today=model.rows_modified(when.window("today")),
+            hits=model.rows_containing(term) if term else ()))
+
+    def update_rows(self) -> None:
+        self._view.viewport().update()
+
+    def set_scrollmap(self, on: bool) -> None:
+        self._map.set_enabled_map(bool(on))
+        self._update_map()
+
+    def set_row_style(self, *, recency: str | None = None,
+                      fade_days: float | None = None) -> None:
+        """How recent and old rows are drawn. Both panes get the same answer
+        from the window; a repaint is all it costs."""
+        if recency is not None:
+            self._rows.recency = str(recency)
+        if fade_days is not None:
+            self._rows.fade_days = float(fade_days)
+        self._view.viewport().update()
 
     def _on_flat_changed(self) -> None:
         # Laid out again rather than only re-hidden: the Location column
@@ -2596,6 +2667,7 @@ class PaneWidget(QFrame):
         if row >= 0:
             self._go_to(row)
         self._render_status()
+        self._schedule_map()
 
     def _step_search(self, direction: int) -> None:
         """The next match, or the previous one. Wraps, because the model does."""
@@ -2631,6 +2703,7 @@ class PaneWidget(QFrame):
         """
         if forget:
             self._last_search = ""
+            self._schedule_map()
         if not self._search:
             self._render_status()
             return

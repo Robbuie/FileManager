@@ -1433,6 +1433,7 @@ class MainWindow(QMainWindow):
         where they are used, so setting them is the whole of applying them.
         """
         panes = self._panes
+        widgets = self._widgets
         return {
             "theme": lambda _v: self.apply_theme(),
             "accent": lambda _v: self.apply_theme(),
@@ -1451,7 +1452,20 @@ class MainWindow(QMainWindow):
             "flat.layout": self._set_flat_layout,
             "listing.hidden": lambda _v: [pane.apply_rules() for pane in panes],
             "listing.system": lambda _v: [pane.apply_rules() for pane in panes],
+            "listing.folder_bars": lambda _v: self._refilter(),
+            "listing.recency": lambda v: [w.set_row_style(recency=v)
+                                          for w in widgets],
+            "listing.fade_days": lambda v: [w.set_row_style(fade_days=v)
+                                            for w in widgets],
+            "listing.scrollmap": lambda v: [w.set_scrollmap(v) for w in widgets],
+            "rail.capacity": lambda _v: self._rebuild_rail(),
         }
+
+    def _refilter(self) -> None:
+        for pane in self._panes:
+            pane.apply_rules()
+        for widget in self._widgets:
+            widget.update_rows()
 
     def apply_setting(self, key: str, value) -> None:
         """Set one setting and make the window agree with it, now.

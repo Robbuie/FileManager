@@ -5,6 +5,31 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.34.0]
+
+Four things the listing and the rail can now show, each with its own switch
+in Options.
+
+### Added
+- **Recently changed files** (Options, Listing): *Glow*, the new default,
+  lights the left edge of every row changed today and gives it a faint green
+  wash, on top of the age chip. *Age chip* is the listing as it was, and
+  *Plain* drops the chip's tint and keeps the text. "Today" means since
+  local midnight, the same as Select by date.
+- **Fade files older than** a month, three months or a year, so recent work
+  stands out in a folder of backups. Off by default. Folders are never faded.
+- **Scrollbar map** (on by default): ticks on the listing's scrollbar for the
+  marked rows (accent), rows changed today (green) and rows matching the last
+  quick search (yellow) -- including the ones scrolled out of view, so a mark
+  three thousand rows down is visible before F5 copies it.
+- **Bars on counted folders** (on by default): once Space has counted some
+  folders, each gets a bar under its size against the largest counted folder,
+  drawn in a different colour from the files' bars because it is a different
+  scale.
+- **Drive free space as rings** (Options, Rail and network): a measured
+  drive's glyph becomes a gauge of how full it is, amber past 90%. *Bars* is
+  the meter as before, *Off* shows the free space as text only.
+
 ## [0.33.0]
 
 A place to change things. From this release on, every feature that changes

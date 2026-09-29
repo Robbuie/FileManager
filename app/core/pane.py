@@ -244,6 +244,7 @@ class Pane(QObject):
         tab.model.set_attribute_rule(
             hidden=bool(self._config.get("listing.hidden")),
             system=bool(self._config.get("listing.system")))
+        tab.model.set_folder_bars(bool(self._config.get("listing.folder_bars")))
 
     def apply_rules(self) -> None:
         """A setting behind `_apply_rules` changed: every tab, at once.
