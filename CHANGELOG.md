@@ -5,6 +5,35 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.33.0]
+
+A place to change things. From this release on, every feature that changes
+how the window looks or behaves by itself arrives with a switch here.
+
+### Added
+- **Options** (View menu, Ctrl+, and the command palette): every setting that
+  had a menu entry, and several that were only in the settings file, on six
+  pages -- Look, Listing, Rail and network, Previews, Transfers, General.
+  Each change applies the moment it is made; there is no OK button. The
+  dialog is not modal, so the window can be watched while a switch is
+  flipped, and the View menu's ticks follow whatever is changed here (and the
+  other way round).
+- A search box finds a setting on any page by any words in its name or
+  description, and hides the pages with nothing to show.
+- Settings that only take effect after a restart (the title bar, the glass
+  backdrop) say so beside their name. Switches that do nothing because of
+  another setting -- the Windows icon switches while type badges are on --
+  are drawn faded rather than disabled, so they can be set up in advance.
+- Newly settable in the dialog: how often the folder on screen is checked
+  for changes, local and network separately; the flat view layout; how close
+  two times must be for the pane compare to call them equal; and when a
+  finished job is announced.
+- **Hidden files and system files**, as two separate switches (Options,
+  Listing). Both are on by default, which is what every earlier version did.
+  Turned off, those rows leave the listing at once without the folder being
+  read again, and the status line says how many are shown. Shown hidden files
+  are now drawn dimmed.
+
 ## [0.32.1]
 
 ### Fixed

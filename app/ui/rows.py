@@ -41,7 +41,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainter
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from app.core import filetypes
-from app.core.listing import Column, ListingModel
+from app.core.listing import ATTRIBUTE_HIDDEN, Column, ListingModel
 from app.io import paths
 from app.ui import glyphs
 
@@ -72,6 +72,11 @@ BAND_GAP = 1
 #: close to this. Lower and the name stops being readable on the dark themes,
 #: which turns "this is going somewhere" into "this row is broken".
 CUT_OPACITY = 0.45
+
+#: 0.33: a hidden file, when hidden files are shown. Not as faint as a cut
+#: row: a cut row is about to go somewhere, a hidden one is merely not meant
+#: to be looked at, and it still has to be readable when somebody is looking.
+HIDDEN_OPACITY = 0.55
 
 
 def tabular(font: QFont) -> QFont:
@@ -265,6 +270,12 @@ class RowDelegate(QStyledItemDelegate):
         fade = 1.0 if self._live else IDLE_OPACITY
         if index.data(ListingModel.CutRole):
             fade *= CUT_OPACITY
+        row_entry = entry if entry is not None else index.data(ListingModel.EntryRole)
+        if row_entry is not None and row_entry.attributes & ATTRIBUTE_HIDDEN:
+            # 0.33: shown, because the setting says so, and dimmed, because
+            # a hidden file listed at full strength is indistinguishable from
+            # one somebody meant to be there.
+            fade *= HIDDEN_OPACITY
         if fade < 1.0:
             painter.setOpacity(fade)
 

@@ -596,6 +596,60 @@ QListWidget::item {{ padding: 3px 5px; border-radius: {radius_sm}; }}
 QListWidget::item:selected {{ background: {accent_soft}; color: {accent_text}; }}
 QDialogButtonBox QPushButton {{ min-width: 92px; }}
 
+/* 0.33: the Options dialog. */
+QListWidget[role="optionsnav"] {{
+    background: transparent;
+    border: none;
+    color: {txt_1};
+    padding: 0px;
+}}
+QListWidget[role="optionsnav"]::item {{ padding: 8px 10px; border-radius: {radius}; }}
+QListWidget[role="optionsnav"]::item:hover {{ background: {bg_3}; color: {txt_0}; }}
+QListWidget[role="optionsnav"]::item:selected {{ background: {accent_soft}; color: {accent_text}; }}
+QLineEdit[role="optionsfind"] {{ padding: 5px 8px; }}
+QWidget[role="optionsbody"] {{ background: {bg_0}; }}
+QWidget[role="optionrow"] {{ background: transparent; border-bottom: 1px solid {line_soft}; }}
+QLabel[role="optionpage"] {{ font-size: 17px; font-weight: 600; padding: 2px 0px 6px 0px; }}
+QLabel[role="optionhead"] {{
+    color: {txt_2};
+    font-size: {head_font};
+    font-weight: 600;
+    letter-spacing: 1px;
+    padding: 16px 0px 2px 0px;
+}}
+QLabel[role="optionlabel"] {{ font-weight: 500; }}
+QLabel[role="newtag"] {{
+    background: {accent_soft};
+    color: {accent_text};
+    border-radius: 6px;
+    font-family: {mono};
+    font-size: 10px;
+    padding: 0px 6px;
+}}
+QLabel[role="restarttag"] {{
+    background: {bg_3};
+    color: {txt_1};
+    border-radius: 6px;
+    font-size: 10px;
+    padding: 0px 6px;
+}}
+QWidget[role="segments"] {{
+    background: {bg_1};
+    border: 1px solid {line};
+    border-radius: {radius};
+}}
+QPushButton[role="segment"] {{
+    background: transparent;
+    border: none;
+    border-radius: {radius_sm};
+    color: {txt_1};
+    padding: 3px 11px;
+    min-height: 22px;
+}}
+QPushButton[role="segment"]:hover {{ background: {bg_3}; color: {txt_0}; }}
+QPushButton[role="segment"]:checked {{ background: {accent_soft}; color: {accent_text}; }}
+QPushButton[role="segment"]:focus {{ border: 1px solid {accent_line}; }}
+
 QLabel[role="transfer"] {{ background: transparent; color: {txt_1}; }}
 QToolButton[role="status"] {{
     background: transparent;

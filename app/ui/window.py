@@ -303,6 +303,13 @@ class MainWindow(QMainWindow):
         self._palette = CommandPalette(self)
         self._palette.apply_tokens(tokens)
         self._palette.chosen.connect(self._on_palette_chosen)
+        #: 0.33: the Options dialog, built on first use and kept, and the
+        #: menu entries that show a setting, so a change made in either place
+        #: is shown in the other. A checkable action per switch; a group of
+        #: actions per choice, keyed by the value each one sets.
+        self._options = None
+        self._bound: dict[str, QAction] = {}
+        self._bound_choices: dict[str, dict] = {}
         self._build_menus()
         if self._frame_kind == "custom":
             # The menus are reached from the mark in the title bar now. A hidden
@@ -478,7 +485,9 @@ class MainWindow(QMainWindow):
         self._show_bar_action = QAction("Show the favorites bar", self,
                                        checkable=True)
         self._show_bar_action.setChecked(bool(self._config.get("favorites.bar")))
-        self._show_bar_action.triggered.connect(self._set_favorites_bar)
+        self._show_bar_action.triggered.connect(
+            lambda checked: self.apply_setting("favorites.bar", bool(checked)))
+        self._bound["favorites.bar"] = self._show_bar_action
         # Ctrl+1 to Ctrl+9, made here and not in the rebuilt part of the menu:
         # a shortcut action remade on every change leaves the old ones alive
         # on the window and Qt then honours none of them. Alt+n is the tabs,
@@ -561,7 +570,9 @@ class MainWindow(QMainWindow):
             entry = QAction(f"{size} px", self, checkable=True)
             entry.setChecked(size == current_cell)
             entry.triggered.connect(
-                lambda _checked=False, n=size: self._set_cell_size(n))
+                lambda _checked=False, n=size: self.apply_setting(
+                    "preview.thumb_size", n))
+            self._bound_choices.setdefault("preview.thumb_size", {})[size] = entry
             size_group.addAction(entry)
             cells.addAction(entry)
         view.addSeparator()
@@ -609,7 +620,8 @@ class MainWindow(QMainWindow):
             entry.setToolTip(tip)
             entry.setChecked(self._config.get("flat.layout") == key)
             entry.triggered.connect(
-                lambda _checked=False, k=key: self._set_flat_layout(k))
+                lambda _checked=False, k=key: self.apply_setting("flat.layout", k))
+            self._bound_choices.setdefault("flat.layout", {})[key] = entry
             layout_group.addAction(entry)
             layouts.addAction(entry)
             self._flat_layout_actions[key] = entry
@@ -622,7 +634,9 @@ class MainWindow(QMainWindow):
         rail.setChecked(bool(self._config.get("rail.shown")))
         rail.setEnabled(self._rail is not None)
         rail.setToolTip("Places, drives and the saved folders, down the left.")
-        rail.triggered.connect(self._toggle_rail)
+        rail.triggered.connect(
+            lambda checked: self.apply_setting("rail.shown", bool(checked)))
+        self._bound["rail.shown"] = rail
         view.addAction(rail)
         view.addSeparator()
         self._axis_menu(view, "Theme", THEME_LABELS, "theme")
@@ -638,24 +652,33 @@ class MainWindow(QMainWindow):
         badges.setChecked(self._config.get("icons.style") == "badges")
         badges.setToolTip("A tag with the extension, coloured by kind of file: "
                           "Logix, HMI, drawings, PDF. Off shows Windows' icons.")
-        badges.triggered.connect(self._set_badges)
+        badges.triggered.connect(
+            lambda checked: self.apply_setting(
+                "icons.style", "badges" if checked else "icons"))
+        self._bound["icons.style"] = badges
         view.addAction(badges)
         motion = QAction("Animations", self, checkable=True)
         motion.setChecked(bool(self._config.get("look.motion")))
         motion.setToolTip("Folders fade in, the active pane's glow moves across, "
                           "and the transfer readout slides in and out.")
-        motion.triggered.connect(self._set_motion)
+        motion.triggered.connect(
+            lambda checked: self.apply_setting("look.motion", bool(checked)))
+        self._bound["look.motion"] = motion
         view.addAction(motion)
         header = QAction("Folder header", self, checkable=True)
         header.setChecked(bool(self._config.get("pane.header")))
         header.setToolTip("The folder's name above the listing, and a bar of "
                           "what it holds by kind of file.")
-        header.triggered.connect(self._set_header)
+        header.triggered.connect(
+            lambda checked: self.apply_setting("pane.header", bool(checked)))
+        self._bound["pane.header"] = header
         view.addAction(header)
         shell_icons = QAction("Shell icons", self, checkable=True)
         shell_icons.setChecked(bool(self._config.get("icons.shell")))
         shell_icons.setEnabled(self._icons is not None)
-        shell_icons.triggered.connect(self._set_shell_icons)
+        shell_icons.triggered.connect(
+            lambda checked: self.apply_setting("icons.shell", bool(checked)))
+        self._bound["icons.shell"] = shell_icons
         view.addAction(shell_icons)
         overlays = QAction("Icon overlays", self, checkable=True)
         overlays.setChecked(bool(self._config.get("icons.overlays")))
@@ -663,7 +686,9 @@ class MainWindow(QMainWindow):
         overlays.setToolTip("Shared folders, OneDrive and source control badges. "
                             "The one icon lookup that asks about a file rather "
                             "than about its type.")
-        overlays.triggered.connect(self._set_overlays)
+        overlays.triggered.connect(
+            lambda checked: self.apply_setting("icons.overlays", bool(checked)))
+        self._bound["icons.overlays"] = overlays
         view.addAction(overlays)
         file_icons = QAction("Icons from the file itself", self, checkable=True)
         file_icons.setChecked(bool(self._config.get("icons.per_file")))
@@ -671,14 +696,18 @@ class MainWindow(QMainWindow):
         file_icons.setToolTip("Programs, shortcuts and .ico files draw their own "
                               "icon rather than the one for their type. Reads "
                               "the file, for the rows on screen only.")
-        file_icons.triggered.connect(self._set_file_icons)
+        file_icons.triggered.connect(
+            lambda checked: self.apply_setting("icons.per_file", bool(checked)))
+        self._bound["icons.per_file"] = file_icons
         view.addAction(file_icons)
         thumbs = QAction("Pictures in the grid", self, checkable=True)
         thumbs.setChecked(bool(self._config.get("preview.thumbnails")))
         thumbs.setEnabled(self._thumbnails is not None)
         thumbs.setToolTip("Off means the grid draws the icon for each kind, "
                           "which is still a grid and costs no reads.")
-        thumbs.triggered.connect(self._set_thumbnails)
+        thumbs.triggered.connect(
+            lambda checked: self.apply_setting("preview.thumbnails", bool(checked)))
+        self._bound["preview.thumbnails"] = thumbs
         view.addAction(thumbs)
         shell_preview = QAction("Windows thumbnail handlers", self, checkable=True)
         shell_preview.setChecked(bool(self._config.get("preview.shell")))
@@ -687,14 +716,21 @@ class MainWindow(QMainWindow):
                                  "frames, Office documents, .heic, .psd. This is "
                                  "the one part of the previewer that runs "
                                  "somebody else's code.")
-        shell_preview.triggered.connect(self._set_shell_previews)
+        shell_preview.triggered.connect(
+            lambda checked: self.apply_setting("preview.shell", bool(checked)))
+        self._bound["preview.shell"] = shell_preview
         view.addAction(shell_preview)
         shell_commands = QAction("Explorer context menu", self, checkable=True)
         shell_commands.setChecked(bool(self._config.get("menu.shell")))
         shell_commands.setEnabled(self._shell_menu is not None)
         shell_commands.triggered.connect(
-            lambda checked: self._config.set("menu.shell", bool(checked)))
+            lambda checked: self.apply_setting("menu.shell", bool(checked)))
+        self._bound["menu.shell"] = shell_commands
         view.addAction(shell_commands)
+        view.addSeparator()
+        options = self._action(view, "Options...", "Ctrl+,", self.open_options)
+        options.setToolTip("Every setting in one place, each one applied as it "
+                           "is changed.")
 
         self._tools_menu = self.menuBar().addMenu("&Tools")
         self._tools_menu.setToolTipsVisible(True)
@@ -736,7 +772,8 @@ class MainWindow(QMainWindow):
         automatic = QAction("Check on launch", self, checkable=True)
         automatic.setChecked(bool(self._config.get("updates.check_on_launch")))
         automatic.triggered.connect(
-            lambda checked: self._config.set("updates.check_on_launch", bool(checked)))
+            lambda checked: self.apply_setting("updates.check_on_launch", bool(checked)))
+        self._bound["updates.check_on_launch"] = automatic
         automatic.setEnabled(self._updates is not None)
         helping.addAction(automatic)
 
@@ -1307,7 +1344,9 @@ class MainWindow(QMainWindow):
         for name, label in labels.items():
             action = QAction(label, self, checkable=True)
             action.setChecked(name == current)
-            action.triggered.connect(lambda _checked=False, k=key, n=name: self._set_axis(k, n))
+            action.triggered.connect(
+                lambda _checked=False, k=key, n=name: self.apply_setting(k, n))
+            self._bound_choices.setdefault(key, {})[name] = action
             group.addAction(action)
             menu.addAction(action)
 
@@ -1331,7 +1370,8 @@ class MainWindow(QMainWindow):
                 action = QAction(label, self, checkable=True)
                 action.setChecked(name == current)
                 action.triggered.connect(
-                    lambda _checked=False, k=key, n=name: self._config.set(k, n))
+                    lambda _checked=False, k=key, n=name: self.apply_setting(k, n))
+                self._bound_choices.setdefault(key, {})[name] = action
                 group.addAction(action)
                 menu.addAction(action)
             menu.addSeparator()
@@ -1362,8 +1402,79 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ theme
 
     def _set_axis(self, key: str, value: str) -> None:
+        self.apply_setting(key, value)
+
+    # ---------------------------------------------------------------- options
+
+    def open_options(self, section: str = "") -> None:
+        """The Options dialog, built once and brought forward after that.
+
+        Kept rather than rebuilt so it stays on the page it was left on, and
+        not modal so the window behind it can be watched while a switch is
+        flipped -- which is most of the reason for applying at once.
+        """
+        from app.ui.options import OptionsDialog
+
+        if self._options is None:
+            self._options = OptionsDialog(self._config, self)
+            self._options.apply_tokens(self._tokens)
+            self._options.changed.connect(self.apply_setting)
+        if section:
+            self._options.show_section(section)
+        self._options.show()
+        self._options.raise_()
+        self._options.activateWindow()
+
+    def _appliers(self) -> dict:
+        """What each setting has to do to the window when it changes.
+
+        Only the ones that change something already on screen. The rest --
+        a deadline, a threshold, whether to check for updates -- are read
+        where they are used, so setting them is the whole of applying them.
+        """
+        panes = self._panes
+        return {
+            "theme": lambda _v: self.apply_theme(),
+            "accent": lambda _v: self.apply_theme(),
+            "density": lambda _v: self.apply_theme(),
+            "look.motion": self._set_motion,
+            "pane.header": self._set_header,
+            "icons.style": lambda v: self._set_badges(v == "badges"),
+            "icons.shell": self._set_shell_icons,
+            "icons.overlays": self._set_overlays,
+            "icons.per_file": self._set_file_icons,
+            "rail.shown": self._toggle_rail,
+            "favorites.bar": self._set_favorites_bar,
+            "preview.thumbnails": self._set_thumbnails,
+            "preview.shell": self._set_shell_previews,
+            "preview.thumb_size": lambda v: self._set_cell_size(int(v)),
+            "flat.layout": self._set_flat_layout,
+            "listing.hidden": lambda _v: [pane.apply_rules() for pane in panes],
+            "listing.system": lambda _v: [pane.apply_rules() for pane in panes],
+        }
+
+    def apply_setting(self, key: str, value) -> None:
+        """Set one setting and make the window agree with it, now.
+
+        The one entry point for a change from the Options dialog and from the
+        View menu, so the two cannot drift: both end here, the menu's tick and
+        the dialog's control are both moved to match, and neither has to know
+        the other exists.
+        """
         self._config.set(key, value)
-        self.apply_theme()
+        applier = self._appliers().get(key)
+        if applier is not None:
+            applier(value)
+        action = self._bound.get(key)
+        if action is not None:
+            on = (value == "badges") if key == "icons.style" else bool(value)
+            if action.isChecked() != on:
+                action.setChecked(on)
+        for known, entry in self._bound_choices.get(key, {}).items():
+            if known == value and not entry.isChecked():
+                entry.setChecked(True)
+        if self._options is not None:
+            self._options.sync(key)
 
     def apply_theme(self) -> None:
         tokens = sheet.apply(
@@ -1399,6 +1510,8 @@ class MainWindow(QMainWindow):
             # thing in the application that paints rather than styles, and the
             # third one that would silently stop following the picker.
             self._queue_dialog.apply_tokens(tokens)
+        if self._options is not None:
+            self._options.apply_tokens(tokens)
         if self._viewer is not None:
             # And the fourth, for the same reason and with the same trap: the
             # backdrop behind a picture is painted, so a viewer left open behind

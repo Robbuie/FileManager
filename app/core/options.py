@@ -1,0 +1,280 @@
+"""What the Options dialog offers: every setting a person can change, and how.
+
+A table rather than code in the dialog, for the command table's reason. The
+dialog draws whatever is listed here, the window applies whatever key comes
+back, and a setting added later is one row -- with no second place that has to
+remember it exists. It also makes the part worth testing testable without a
+screen: that every row names a real setting, that a choice's current value is
+always one of the choices offered, and that the search finds what it should.
+
+Two rules decide what goes in the table. A setting somebody would reasonably
+want to change without opening a JSON file goes in; a setting that only makes
+sense as a number somebody measured (a deadline, a walk's ceiling) stays in the
+file, where the comment beside it explains the number. And every feature added
+from 0.33 on that changes what the window looks like or does by itself arrives
+with a row here -- the user's rule, and the reason this dialog exists: a lot of
+it should be a choice rather than forced on.
+
+Nothing here touches Qt or the filesystem.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from app.core.config import DEFAULTS
+from app.io.protocol import THUMB_SIZES
+from app.theme.tokens import ACCENT_LABELS, DENSITY_LABELS, THEME_LABELS
+
+#: The pages, in the order the dialog lists them.
+SECTIONS: tuple[tuple[str, str], ...] = (
+    ("look", "Look"),
+    ("listing", "Listing"),
+    ("rail", "Rail and network"),
+    ("previews", "Previews"),
+    ("transfers", "Transfers"),
+    ("general", "General"),
+)
+
+TOGGLE = "toggle"
+CHOICE = "choice"
+
+
+@dataclass(frozen=True)
+class Option:
+    """One row of the dialog.
+
+    `choices` is `(value, label)` pairs for a CHOICE and empty for a TOGGLE.
+    `needs` is `(key, value)`: the row is drawn faded while that other setting
+    is not `value`, because the switch does nothing then -- but it stays
+    changeable, so somebody can set it up before turning the other one on.
+    `restart` says the change waits for the next start, and the dialog says so.
+    `new` marks a row added with the release that introduced it, which the
+    dialog tags so the new things can be found among the old.
+    """
+
+    key: str
+    section: str
+    label: str
+    help: str = ""
+    kind: str = TOGGLE
+    choices: tuple[tuple[Any, str], ...] = ()
+    heading: str = ""
+    needs: tuple[str, Any] | None = None
+    restart: bool = False
+    new: bool = False
+    words: tuple[str, ...] = field(default_factory=tuple)
+
+
+def _choice(key, section, label, choices, help="", **more) -> Option:
+    return Option(key, section, label, help, CHOICE, tuple(choices), **more)
+
+
+def _seconds(values) -> tuple[tuple[float, str], ...]:
+    out = []
+    for value in values:
+        if value == 0:
+            out.append((0.0, "Never"))
+        elif value < 60:
+            out.append((float(value), f"{value:g} s"))
+        else:
+            out.append((float(value), f"{value / 60:g} min"))
+    return tuple(out)
+
+
+OPTIONS: tuple[Option, ...] = (
+    # ---------------------------------------------------------------- look
+    _choice("theme", "look", "Theme", tuple(THEME_LABELS.items()),
+            "The greys. Accent and density are separate on purpose.",
+            heading="Theme"),
+    _choice("accent", "look", "Accent", tuple(ACCENT_LABELS.items()),
+            "Selection, focus, the active pane and everything else that "
+            "says where you are."),
+    _choice("density", "look", "Density", tuple(DENSITY_LABELS.items()),
+            "Row height and the size of the chrome."),
+    _choice("window.backdrop", "look", "Glass backdrop",
+            (("auto", "Automatic"), ("glass", "Glass"), ("solid", "Solid")),
+            "Automatic is glass where Windows can draw it and solid over "
+            "Remote Desktop or Hyper-V, where transparency is turned off.",
+            heading="Window", restart=True),
+    _choice("window.frame", "look", "Title bar",
+            (("custom", "This application's"), ("system", "Windows' own")),
+            "Windows' own brings the menu bar back. The way out if the drawn "
+            "one misbehaves on a machine it was not tried on.",
+            restart=True),
+    Option("look.motion", "look", "Animations",
+           "Folders fade in, the active pane's glow moves across, and the "
+           "transfer readout slides in and out.", heading="Motion"),
+
+    # ------------------------------------------------------------- listing
+    Option("listing.hidden", "listing", "Hidden files",
+           "Shown dimmed when on. Off leaves them out of the listing; they "
+           "are still there, and a new name still avoids them.",
+           heading="Files shown", new=True),
+    Option("listing.system", "listing", "System files",
+           "desktop.ini, thumbs.db and the rest. Separate from hidden, "
+           "because most of those are both and a person usually wants one "
+           "without the other.", new=True),
+    _choice("icons.style", "listing", "Each row starts with",
+            (("badges", "Type badge"), ("icons", "Windows icon")),
+            "A badge is a tag with the extension, coloured by kind of file.",
+            heading="Rows"),
+    Option("pane.header", "listing", "Folder header",
+           "The folder's name above the listing, and a bar of what it holds "
+           "by kind of file."),
+    Option("icons.shell", "listing", "Windows icons",
+           "Off draws every row as its kind. The switch for a shell "
+           "extension that misbehaves.", heading="Icons",
+           needs=("icons.style", "icons")),
+    Option("icons.overlays", "listing", "Icon overlays",
+           "Shared folders, OneDrive and source control badges. The one icon "
+           "lookup that asks about a file rather than its type.",
+           needs=("icons.style", "icons")),
+    Option("icons.per_file", "listing", "Icons from the file itself",
+           "Programs, shortcuts and .ico files draw their own icon. Reads the "
+           "file, for the rows on screen only.",
+           needs=("icons.style", "icons")),
+    _choice("flat.layout", "listing", "Flat view shows",
+            (("column", "A Location column"), ("groups", "A heading per folder")),
+            "Ctrl+B: every file under a folder in one list.",
+            heading="Flat view"),
+    _choice("refresh.local_seconds", "listing", "Check local folders every",
+            _seconds((0, 1, 2, 5, 10)),
+            "The folder on screen is listed again to pick up changes made "
+            "by other programs.", heading="Live folders"),
+    _choice("refresh.network_seconds", "listing", "Check network folders every",
+            _seconds((0, 5, 10, 30, 60)),
+            "A slow folder is checked less often than this, never more."),
+
+    # ----------------------------------------------------------- rail
+    Option("rail.shown", "rail", "Navigation rail",
+           "Places, drives, network locations and saved folders down the "
+           "left. Ctrl+Shift+B.", heading="Rail"),
+    Option("favorites.bar", "rail", "Favorites bar",
+           "Saved folders as buttons under each tab strip. The rail already "
+           "lists them."),
+
+    # -------------------------------------------------------- previews
+    Option("preview.thumbnails", "previews", "Pictures in the grid",
+           "Off draws the icon for each kind, which is still a grid and "
+           "costs no reads.", heading="Thumbnail grid"),
+    _choice("preview.thumb_size", "previews", "Cell size",
+            tuple((size, f"{size} px") for size in THUMB_SIZES),
+            "Each step is a fresh read of every file on screen."),
+    Option("preview.shell", "previews", "Windows thumbnail handlers",
+           "Pictures of the kinds this application cannot decode itself: "
+           "video frames, Office documents, .psd. The one part of the "
+           "previewer that runs somebody else's code.", heading="Decoders"),
+
+    # ------------------------------------------------------- transfers
+    _choice("notify.after", "transfers", "Say a job finished when it ran longer than",
+            _seconds((0, 10, 20, 60, 120)),
+            "Only while the window is not in front: the taskbar button "
+            "flashes and Windows shows a notification.", heading="When a job ends"),
+    _choice("compare.tolerance", "transfers", "Compare treats times as equal within",
+            ((0.0, "Exact"), (1.0, "1 s"), (2.0, "2 s"), (5.0, "5 s")),
+            "Two seconds is FAT's resolution; an exact compare calls half the "
+            "files on a USB stick newer every time.", heading="Compare and sync"),
+
+    # --------------------------------------------------------- general
+    Option("menu.shell", "general", "Explorer context menu",
+           "The shell's own entries after this application's. Off is the "
+           "answer when an extension misbehaves.", heading="Shell"),
+    Option("updates.check_on_launch", "general", "Check for updates on launch",
+           "One request to this application's release feed, shortly after "
+           "start. Nothing is downloaded without asking.", heading="Updates"),
+)
+
+
+def by_key() -> dict[str, Option]:
+    return {option.key: option for option in OPTIONS}
+
+
+def in_section(section: str) -> list[Option]:
+    return [option for option in OPTIONS if option.section == section]
+
+
+def current(config, option: Option) -> Any:
+    """The value to draw for `option`, as one of its own choices.
+
+    A settings file can hold a value no choice matches -- a hand-edited
+    number, or one from a later version. The dialog must still show *something*
+    selected rather than nothing, so an unmatched value is returned as it is
+    and `choices_for` adds it to the row.
+    """
+    value = config.get(option.key)
+    if option.kind == TOGGLE:
+        return bool(value)
+    for choice, _label in option.choices:
+        if _same(choice, value):
+            return choice
+    return value
+
+
+def choices_for(config, option: Option) -> tuple[tuple[Any, str], ...]:
+    """The choices to draw, with the stored value added if it is not one."""
+    value = config.get(option.key)
+    if any(_same(choice, value) for choice, _label in option.choices):
+        return option.choices
+    return (*option.choices, (value, f"{value:g}" if isinstance(value, (int, float))
+                              and not isinstance(value, bool) else str(value)))
+
+
+def _same(a: Any, b: Any) -> bool:
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) \
+            and not isinstance(a, bool) and not isinstance(b, bool):
+        return abs(float(a) - float(b)) < 1e-9
+    return a == b
+
+
+def live(config, option: Option) -> bool:
+    """Whether the row does anything right now (see `Option.needs`)."""
+    if option.needs is None:
+        return True
+    key, wanted = option.needs
+    return _same(config.get(key), wanted)
+
+
+def matches(option: Option, text: str) -> bool:
+    """Whether a search for `text` should show this row.
+
+    Every word has to appear somewhere in the label, the help, the heading or
+    the page's name, so "hidden" finds the row and "grid pictures" finds the
+    thumbnail switch without anybody having to know which page it is on.
+    """
+    words = [word for word in (text or "").lower().split() if word]
+    if not words:
+        return True
+    section = dict(SECTIONS).get(option.section, "")
+    haystack = " ".join((option.label, option.help, option.heading, section,
+                         *option.words)).lower()
+    return all(word in haystack for word in words)
+
+
+def check() -> list[str]:
+    """What is wrong with the table, for the test that keeps it honest."""
+    problems = []
+    sections = dict(SECTIONS)
+    seen = set()
+    for option in OPTIONS:
+        if option.key in seen:
+            problems.append(f"{option.key} is listed twice")
+        seen.add(option.key)
+        if option.key not in DEFAULTS:
+            problems.append(f"{option.key} is not a setting")
+        if option.section not in sections:
+            problems.append(f"{option.key} is on an unknown page {option.section}")
+        if option.kind == CHOICE:
+            if not option.choices:
+                problems.append(f"{option.key} offers nothing")
+            elif not any(_same(c, DEFAULTS.get(option.key)) for c, _ in option.choices):
+                problems.append(f"{option.key}'s default is not one of its choices")
+        elif option.kind == TOGGLE:
+            if not isinstance(DEFAULTS.get(option.key), bool):
+                problems.append(f"{option.key} is a switch over a value that is not")
+        else:
+            problems.append(f"{option.key} has an unknown kind {option.kind}")
+        if option.needs is not None and option.needs[0] not in DEFAULTS:
+            problems.append(f"{option.key} depends on an unknown setting")
+    return problems

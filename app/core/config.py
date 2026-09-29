@@ -233,6 +233,16 @@ DEFAULTS: dict[str, Any] = {
     "refresh.local_seconds": 2.0,
     "refresh.network_seconds": 5.0,
 
+    # 0.33: whether rows with the hidden and the system attribute are listed.
+    # On, both, because that is what every version before this did -- a
+    # setting that arrives with an update must not make files disappear. Two
+    # switches rather than one because most of the files people mean are
+    # both, and it is usually one of the two they want gone. Filtered in the
+    # model rather than the worker, so turning either back on costs no
+    # listing: the rows are already here.
+    "listing.hidden": True,
+    "listing.system": True,
+
     # The one network call the application makes, and the two things worth
     # remembering about it: whether to make it at all, and which version the
     # user has already said no to.

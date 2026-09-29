@@ -36,6 +36,12 @@ from app.io.protocol import Entry
 #: total has to remember to skip it, and one of them eventually will not.
 PARENT_NAME = ".."
 
+#: `FILE_ATTRIBUTE_HIDDEN` and `FILE_ATTRIBUTE_SYSTEM`, written out rather than
+#: imported from pywin32 so the model stays importable off Windows, which is
+#: where its tests run.
+ATTRIBUTE_HIDDEN = 0x2
+ATTRIBUTE_SYSTEM = 0x4
+
 
 class Column(IntEnum):
     NAME = 0
@@ -235,6 +241,11 @@ class ListingModel(QAbstractTableModel):
         self._sort_column = Column.NAME
         self._sort_order = Qt.AscendingOrder
         self._filter = ""
+        #: 0.33: whether hidden and system rows are let through. Kept apart
+        #: from `_filter` because it outlives a folder: `begin` forgets a typed
+        #: filter and must not forget a setting.
+        self._show_hidden = True
+        self._show_system = True
         #: The largest file in `_rows`, for the size bars. Computed on demand
         #: and thrown away whenever the list changes -- one pass over a list
         #: already in memory is cheap, and doing it per batch during a
@@ -422,7 +433,7 @@ class ListingModel(QAbstractTableModel):
         if not entries:
             return
         self._all.extend(entries)
-        visible = [e for e in entries if self._passes(e)] if self._filter else list(entries)
+        visible = [e for e in entries if self._passes(e)] if self._filtering else list(entries)
         if not visible:
             return
         start = len(self._rows) + self._offset
@@ -488,6 +499,25 @@ class ListingModel(QAbstractTableModel):
         self.beginResetModel()
         self._sort_rows()
         self.endResetModel()
+
+    def set_attribute_rule(self, *, hidden: bool, system: bool) -> None:
+        """Whether rows carrying the hidden or the system attribute are shown.
+
+        Applied to what already arrived, so a change is a re-filter rather
+        than a new listing. `names()` still reports every row, for the
+        filter's reason: a hidden file still takes up its name.
+        """
+        hidden, system = bool(hidden), bool(system)
+        if (hidden, system) == (self._show_hidden, self._show_system):
+            return
+        self.beginResetModel()
+        self._show_hidden, self._show_system = hidden, system
+        self._apply_filter()
+        self.endResetModel()
+
+    @property
+    def _filtering(self) -> bool:
+        return bool(self._filter) or not (self._show_hidden and self._show_system)
 
     def set_filter(self, text: str) -> None:
         """Show only the rows whose name matches.
@@ -651,7 +681,7 @@ class ListingModel(QAbstractTableModel):
             text = (f"{count_of(len(self._all), 'file') or 'no files'} in "
                     f"{count_of(places, 'folder') or 'no folders'}, "
                     f"{format_size(total)}")
-            if self._filter:
+            if self._filtering and len(self._rows) != len(self._all):
                 text += f"  ·  {len(self._rows):,} shown"
             return text
         folders = sum(1 for e in self._all if e.is_dir)
@@ -660,7 +690,7 @@ class ListingModel(QAbstractTableModel):
         counted = ", ".join(part for part in
                             (count_of(folders, "folder"), count_of(files, "file")) if part)
         text = f"{counted or 'empty'}, {format_size(total)}" if counted else "empty folder"
-        if self._filter:
+        if self._filtering and len(self._rows) != len(self._all):
             text += f"  ·  {len(self._rows):,} shown"
         return text
 
@@ -911,13 +941,17 @@ class ListingModel(QAbstractTableModel):
     # ---------------------------------------------------------------- filter
 
     def _passes(self, entry: Entry) -> bool:
-        return matches(self._leaf(entry), self._filter)
+        if not self._show_hidden and entry.attributes & ATTRIBUTE_HIDDEN:
+            return False
+        if not self._show_system and entry.attributes & ATTRIBUTE_SYSTEM:
+            return False
+        return not self._filter or matches(self._leaf(entry), self._filter)
 
     def _apply_filter(self) -> None:
         """Recompute the visible list. Callers own the reset around it."""
         # A copy, not the same list: `add` appends to both, and aliasing them
         # would append every batch twice the moment no filter is set.
-        self._rows = list(self._all) if not self._filter else [
+        self._rows = list(self._all) if not self._filtering else [
             e for e in self._all if self._passes(e)
         ]
         self._scale = None

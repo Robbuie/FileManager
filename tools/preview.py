@@ -31,7 +31,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            pane_preview: bool = False, grid: bool = False, flat: str = "",
            backdrop: str = "solid",
            viewer: str = "", cell: int = 128, commands: bool = False,
-           stale: bool = False) -> str:
+           stale: bool = False, options: str = "") -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -151,6 +151,17 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     if viewer:
         panel = _show_viewer(window, viewer)
         QTimer.singleShot(600, app.quit)
+        app.exec()
+        image = panel.grab()
+        image.save(out)
+        pool.shutdown()
+        return out
+
+    if options:
+        window.open_options(options)
+        panel = window._options
+        panel.resize(900, 640)
+        QTimer.singleShot(400, app.quit)
         app.exec()
         image = panel.grab()
         image.save(out)
@@ -629,6 +640,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="open this many tabs per pane, to see the strip")
     parser.add_argument("--commands", action="store_true",
                         help="the commands editor rather than the window")
+    parser.add_argument("--options", default="", metavar="PAGE",
+                        help="the Options dialog open at a page: look, listing, "
+                             "rail, previews, transfers, general")
     parser.add_argument("--queue", action="store_true",
                         help="render the queue panel instead of the window, "
                              "with invented jobs in every state")
@@ -666,7 +680,8 @@ def main(argv: list[str] | None = None) -> int:
                      queue=args.queue, cut=args.cut, grid=args.grid,
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
-                     cell=args.cell, backdrop=args.backdrop, stale=args.stale))
+                     cell=args.cell, backdrop=args.backdrop, stale=args.stale,
+                     options=args.options))
         return 0
 
     from app.theme.tokens import THEMES

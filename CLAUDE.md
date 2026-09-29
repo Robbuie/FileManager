@@ -321,6 +321,7 @@ Ctrl+J  the job queue     Ctrl+D  save this folder as a favourite
 Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 Ctrl+K  the command palette: every menu command, saved and recent folders,
 the folders here, or a typed path (0.28)
+Ctrl+,  Options: every setting, applied as it is changed (0.33)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
@@ -415,6 +416,15 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
 - **Qt signals for UI-to-core, queues for core-to-IO.** Do not let a Qt signal
   cross the process boundary.
 - New settings go through the config module with a default; never read a raw key.
+- **A setting somebody would change goes in `core/options.py` as well** (0.33),
+  and anything that changes how the window looks or behaves on its own arrives
+  with a row there -- the user's rule: a lot of this should be a choice, not
+  forced on. `MainWindow.apply_setting` is the one place a change is applied,
+  for the Options dialog and the View menu alike; a key whose change has to
+  reach something already on screen gets an entry in `_appliers`, and one read
+  where it is used needs nothing. `options.check()` is what the test runs, so
+  a row naming a key that does not exist fails the build rather than the
+  dialog.
 
 ## Things that will bite you
 

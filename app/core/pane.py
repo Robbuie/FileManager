@@ -204,6 +204,8 @@ class Pane(QObject):
         # stops the second pane decoding it again.
         self.thumbnails = thumbnails
         self.tabs: list[Tab] = self._restore()
+        for tab in self.tabs:
+            self._apply_rules(tab)
         self.index = min(max(0, int(config.get(f"{side}.tab") or 0)),
                          len(self.tabs) - 1)
 
@@ -236,6 +238,24 @@ class Pane(QObject):
                             file_icons=self.file_icons,
                             clipboard=self.clipboard))
         return tabs
+
+    def _apply_rules(self, tab: "Tab") -> None:
+        """The settings every tab's model follows, handed to one tab."""
+        tab.model.set_attribute_rule(
+            hidden=bool(self._config.get("listing.hidden")),
+            system=bool(self._config.get("listing.system")))
+
+    def apply_rules(self) -> None:
+        """A setting behind `_apply_rules` changed: every tab, at once.
+
+        Re-filtered from the rows already here rather than listed again --
+        the attributes arrived with the listing -- so this costs nothing on a
+        share however many tabs are open.
+        """
+        for tab in self.tabs:
+            self._apply_rules(tab)
+            if tab.request_id is None and tab.listed:
+                self._set_status(tab, tab.model.summary(), tab.status_state)
 
     def session(self) -> list[dict]:
         """What to write out so the tabs come back. Paths, not models."""
@@ -1009,6 +1029,7 @@ class Pane(QObject):
         tab = Tab(path or self.current.path, self.icons, self.overlays,
                   self.sizes, locked=locked, file_icons=self.file_icons,
                   clipboard=self.clipboard)
+        self._apply_rules(tab)
         self.tabs.append(tab)
         self.tabsChanged.emit()
         if background:
