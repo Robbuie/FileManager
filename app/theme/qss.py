@@ -165,6 +165,11 @@ def build(
     # 0.37: a share that is not answering. Semantic, like the close button's
     # red: it has to mean "down" whatever the accent is, so it follows neither.
     out["down"] = "#e5534b"
+    # 0.38: the six label colours. Semantic -- a red label means what its
+    # owner decided red means -- so they follow neither theme nor accent.
+    for number, colour in enumerate(("#e5534b", "#e8913a", "#e6c547",
+                                     "#46c98b", "#4a91ff", "#a07cff"), start=1):
+        out[f"label_{number}"] = colour
     out["close_press"] = "#b22a1b"
 
     out["theme_name"] = theme_name

@@ -203,6 +203,10 @@ class Pane(QObject):
         # pixels is the same on both sides of the window, and the cache is what
         # stops the second pane decoding it again.
         self.thumbnails = thumbnails
+        #: 0.38: colour labels and notes, set by the window; None draws none.
+        self.labels = None
+        #: 0.38: git's marks, set by the window; None asks nothing.
+        self.git = None
         self.tabs: list[Tab] = self._restore()
         for tab in self.tabs:
             self._apply_rules(tab)
@@ -245,6 +249,22 @@ class Pane(QObject):
             hidden=bool(self._config.get("listing.hidden")),
             system=bool(self._config.get("listing.system")))
         tab.model.set_folder_bars(bool(self._config.get("listing.folder_bars")))
+        tab.model.set_labels(self.labels if bool(self._config.get("labels.shown"))
+                             else None)
+        tab.model.set_git(self.git)
+
+    def set_git(self, git) -> None:
+        self.git = git
+        self.apply_rules()
+
+    def ask_git(self) -> None:
+        """The folder in front has been listed: let git's marks catch up."""
+        if self.git is not None and not self.current.flat:
+            self.git.ask(self.current.path)
+
+    def set_labels(self, labels) -> None:
+        self.labels = labels
+        self.apply_rules()
 
     def apply_rules(self) -> None:
         """A setting behind `_apply_rules` changed: every tab, at once.
@@ -771,10 +791,18 @@ class Pane(QObject):
         if source is None or not name:
             return
         self._set_status(tab, f"renaming to {name}", BUSY)
+        old = paths.leaf(source)
+        folder = tab.path
+
+        def carry() -> None:
+            # 0.38: a label is kept by path, so a rename made here takes it along.
+            if self.labels is not None:
+                self.labels.moved(folder, old, folder, name)
+
         self._mutate(tab, Op.RENAME, source,
                      timeout=float(self._config.get("timeout.rename")),
                      args={"name": name}, reveal=name,
-                     failed=f"could not rename to {name}")
+                     failed=f"could not rename to {name}", done=carry)
 
     def duplicate_suggestion(self, row: int, today: datetime.date | None = None) -> str | None:
         """The name a duplicate of this row is offered, or None for no row.
@@ -976,7 +1004,7 @@ class Pane(QObject):
 
     def _mutate(self, tab: Tab, op: Op, path: str, *, timeout: float,
                 args: dict | None = None, reveal: str | None = None,
-                failed: str = "the operation failed") -> None:
+                failed: str = "the operation failed", done=None) -> None:
         """Submit something that changes the folder, then re-list it.
 
         Re-listed rather than patched into the model: the folder is the truth,
@@ -995,6 +1023,8 @@ class Pane(QObject):
                     if plan is not None:
                         self.elevationOffered.emit(plan, elevate.describe(plan))
                 return
+            if done is not None:
+                done()
             if reveal:
                 tab.reveal_name = reveal
             if tab is self.current:
@@ -1041,6 +1071,30 @@ class Pane(QObject):
         self.index = len(self.tabs) - 1
         self.currentChanged.emit()
         self.navigate(tab.path, record=False)
+
+    def replace_tabs(self, items: list[dict], index: int = 0) -> None:
+        """0.38: every tab replaced by these, as a workspace opens them.
+
+        Locked tabs go too: a workspace is a whole arrangement, and one that
+        kept whatever happened to be locked would not be the one that was
+        saved. The tab in front is listed now; the others list as they would
+        after a restart, when they are looked at.
+        """
+        if not items:
+            return
+        for tab in self.tabs:
+            self._abandon(tab)
+        self.tabs = []
+        for item in items[:MAX_TABS]:
+            tab = Tab(item["path"], self.icons, self.overlays, self.sizes,
+                      locked=bool(item.get("locked")), file_icons=self.file_icons,
+                      clipboard=self.clipboard)
+            self._apply_rules(tab)
+            self.tabs.append(tab)
+        self.index = max(0, min(int(index), len(self.tabs) - 1))
+        self.tabsChanged.emit()
+        self.currentChanged.emit()
+        self.navigate(self.current.path, record=False)
 
     def duplicate_tab(self, index: int | None = None) -> None:
         """A second tab on the same folder, which is how a copy within one

@@ -322,6 +322,8 @@ Ctrl+U  swap panes         Ctrl+Shift+M  other pane comes here
 Ctrl+K  the command palette: every menu command, saved and recent folders,
 the folders here, or a typed path (0.28)
 Ctrl+,  Options: every setting, applied as it is changed (0.33)
+Alt+Ins  the marked files into the basket (0.38)
+Ctrl+Alt+1 .. Ctrl+Alt+9  open a saved workspace (0.38)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
@@ -577,6 +579,18 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   from `Pane.pathChanged` -- never from the rail, the saved locations or the
   drive list -- and that is what keeps it on the right side of the rule
   above. Anything added to it keeps both halves.
+- **Labels live in the settings, not in the files.** 0.38's colour labels
+  and notes are keyed by full path in `config["labels"]`. An alternate data
+  stream would travel with the file, and was the first design -- but reading
+  one per row is the per-row open the listing path forbids, and writing one
+  bumps the file's modified time on the servers this is used against, which
+  would make a labelled drawing newer to sync and to the Age column. A rename
+  made here carries the label (`Labels.moved`); one made elsewhere does not.
+- **Git is asked, never parsed.** `app/io/gitstatus.py` runs `git status
+  --porcelain -z -b` in the volume's side lane, local volumes only, once per
+  folder shown and at most every `REFRESH` seconds (`core/gitmarks.py`). The
+  index format is git's business; reading `.git` here would be wrong on the
+  next version of it.
 - **A breadcrumb chevron is a scan, not chrome.** `Op.FOLDERS` is capped in
   the worker rather than sliced by the caller, so a chevron on a 50,000-row
   folder costs two hundred names -- which also means past the cap the names

@@ -39,7 +39,7 @@ from __future__ import annotations
 import time
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from app.core import filetypes, when
@@ -83,6 +83,9 @@ HIDDEN_OPACITY = 0.55
 #: 0.34: a file older than `fade_days`. Fainter than a hidden one: the point is
 #: that the eye skips it, and it is still one click from being read.
 OLD_OPACITY = 0.5
+
+#: 0.38: the width a label's dot or a note's mark takes at the end of a name.
+LABEL_ROOM = 14
 
 
 def tabular(font: QFont) -> QFont:
@@ -302,6 +305,18 @@ class RowDelegate(QStyledItemDelegate):
         if fade < 1.0:
             painter.setOpacity(fade)
 
+        marker = None
+        if index.column() == Column.NAME:
+            label = index.data(ListingModel.LabelRole) or (0, "")
+            git = index.data(ListingModel.GitRole) or ""
+            if label[0] or label[1] or git:
+                marker = (label[0], label[1], git)
+        if marker:
+            # 0.38: room at the end of the name for git's letter, the label's
+            # dot and the note's mark, taken from the text so a long name
+            # elides short of them instead of running under them.
+            room = sum(LABEL_ROOM for part in marker if part) + (4 if marker[2] else 0)
+            opt.rect = opt.rect.adjusted(0, 0, -room, 0)
         if index.column() in (Column.SIZE, Column.AGE, Column.MODIFIED):
             opt.font = tabular(opt.font)
         ext = self._inline_ext(opt, index)
@@ -325,7 +340,75 @@ class RowDelegate(QStyledItemDelegate):
             super().paint(painter, opt, index)
             if index.column() == Column.SIZE:
                 self._bar(painter, option, index)
+        if marker:
+            self._label(painter, option, marker)
         painter.restore()
+
+    def _label(self, painter: QPainter, option: QStyleOptionViewItem, marker) -> None:
+        """Git's letter, a colour label's dot and a note's mark, at the end of
+        the name, right to left in that order of importance."""
+        colour, note, git = marker
+        right = option.rect.right() - 6
+        middle = option.rect.center().y()
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        if colour:
+            fill = parse_colour(self._t.get(f"label_{colour}"))
+            if fill.isValid():
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(fill)
+                painter.drawEllipse(QRectF(right - 8, middle - 4, 8, 8))
+            right -= LABEL_ROOM
+        if note:
+            ink = parse_colour(self._t.get("warn"))
+            if ink.isValid():
+                pen = QPen(ink, 1.3)
+                painter.setPen(pen)
+                painter.setBrush(Qt.NoBrush)
+                shape = QPainterPath()
+                shape.moveTo(right - 9, middle - 4)
+                shape.lineTo(right, middle - 4)
+                shape.lineTo(right, middle + 2)
+                shape.lineTo(right - 5, middle + 2)
+                shape.lineTo(right - 8, middle + 5)
+                shape.lineTo(right - 8, middle + 2)
+                shape.lineTo(right - 9, middle + 2)
+                shape.closeSubpath()
+                painter.drawPath(shape)
+            right -= LABEL_ROOM
+        if git:
+            self._git_chip(painter, right, middle, git)
+        painter.restore()
+
+    def _git_chip(self, painter: QPainter, right: float, middle: float, code: str) -> None:
+        """Git's mark as a small chip: amber for a change, green for something
+        new, the muted grey for untracked, and a dot for a folder with changes
+        somewhere under it."""
+        tone = {"M": "warn", "R": "warn", "U": "down", "D": "down", "A": "good",
+                "?": "txt_2", "*": "warn"}.get(code, "txt_2")
+        ink = parse_colour(self._t.get(tone))
+        if not ink.isValid():
+            return
+        if code == "*":
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(ink)
+            painter.drawEllipse(QRectF(right - 7, middle - 3, 6, 6))
+            return
+        box = QRectF(right - 13, middle - 7, 13, 14)
+        fill = QColor(ink)
+        fill.setAlphaF(0.18)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(box, 3, 3)
+        if self._badge_font is None:
+            font = QFont(painter.font())
+            font.setFamilies(["Cascadia Mono", "Consolas", "monospace"])
+            font.setPixelSize(9)
+            font.setBold(True)
+            self._badge_font = font
+        painter.setFont(self._badge_font)
+        painter.setPen(ink)
+        painter.drawText(box, int(Qt.AlignCenter), code)
 
     def _start_of_today(self) -> float:
         """Local midnight, worked out at most once a minute rather than per cell."""

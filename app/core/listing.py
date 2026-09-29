@@ -226,6 +226,11 @@ class ListingModel(QAbstractTableModel):
     #: faded. A fact about the clipboard rather than about the listing, so it
     #: is asked of a provider rather than stored on the entry.
     CutRole = Qt.UserRole + 5
+    #: 0.38: `(colour, note)` for a row with a label or a note, else None.
+    LabelRole = Qt.UserRole + 6
+    #: 0.38: git's one-letter mark for a row ("M", "A", "?", "D", "U", "R",
+    #: or "*" for a folder with changes under it), else None.
+    GitRole = Qt.UserRole + 7
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -236,6 +241,8 @@ class ListingModel(QAbstractTableModel):
         self._file_icons = None          # and for the few files carrying one
         self._sizes = None               # recursive folder sizes, once asked for
         self._cut = None                 # the clipboard, for the faded rows
+        self._labels = None              # 0.38: colour labels and notes
+        self._git = None                 # 0.38: git's marks
         self._folder = ""                # what the per-path requests ask about
         self._has_parent = False
         self._sort_column = Column.NAME
@@ -363,6 +370,15 @@ class ListingModel(QAbstractTableModel):
         when the clipboard changed, and the widget above it does.
         """
         self._cut = provider
+
+    def set_git(self, provider) -> None:
+        """Where git's marks come from, or None for none."""
+        self._git = provider
+
+    def set_labels(self, provider) -> None:
+        """Where colour labels and notes come from, or None for none. A dict
+        read per row painted, like the cut provider."""
+        self._labels = provider
 
     def set_sizes(self, provider) -> None:
         """Where a folder's recursive size comes from, or None for a model
@@ -846,6 +862,17 @@ class ListingModel(QAbstractTableModel):
             return entry.is_dir
         if role == self.EntryRole:
             return entry
+        if role == self.GitRole:
+            if self._git is None or column != Column.NAME:
+                return None
+            return self._git.mark(self._folder, self._leaf(entry))
+        if role == self.LabelRole:
+            if self._labels is None:
+                return None
+            return self._labels.label(self._folder, entry.name)
+        if role == Qt.ToolTipRole and column == Column.NAME and self._labels is not None:
+            found = self._labels.label(self._folder, entry.name)
+            return found[1] or None if found else None
         if role == self.CutRole:
             if self._cut is None or not self._folder:
                 return False

@@ -90,7 +90,8 @@ RESERVED: frozenset[str] = frozenset({
     "Ctrl+Shift+T", "Ctrl+U", "Ctrl+V", "Ctrl+W", "Ctrl+Shift+W", "Ctrl+X",
     "Ctrl+Shift+C", "Ctrl+Shift+D", "Ctrl+Shift+L", "Ctrl+Shift+M",
     "Ctrl+Shift+Space", "Ctrl+Enter", "Alt+Left", "Alt+Right", "Ctrl+K",
-    "Ctrl+,",
+    "Ctrl+,", "Alt+Ins",
+    *(f"Ctrl+Alt+{n}" for n in range(1, 10)),
 })
 
 #: The order modifiers are written in, so two spellings of one key compare

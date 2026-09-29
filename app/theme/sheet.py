@@ -397,6 +397,16 @@ QFrame[role="previewpanel"] {{
     border: none;
     border-radius: {radius_sm};
 }}
+/* 0.38: the basket's tray, over the bottom left of the window. */
+QFrame[role="basket"] {{
+    background: {bg_2};
+    border: 1px solid {line};
+    border-radius: 14px;
+}}
+QFrame[role="basket"] QLabel {{ background: transparent; }}
+QLabel[role="baskettitle"] {{ font-weight: 600; }}
+QListWidget[role="basketlist"] {{ background: {bg_1}; border: none; }}
+
 /* 0.36: the peek card, floating over the window. */
 QFrame[role="peek"] {{
     background: {bg_2};

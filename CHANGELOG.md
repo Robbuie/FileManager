@@ -5,6 +5,35 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.38.0]
+
+### Added
+- **Basket** (Options, Transfers; on). Alt+Ins -- or *Add to basket* on the
+  right-click menu -- puts the marked files, or the one under the cursor,
+  into a basket that stays while the pane goes to other folders. A tray over
+  the bottom left lists what is in it; *Copy here* and *Move here* send the
+  lot to the folder of the pane that has the keyboard, through the same
+  prompt F5 uses, and *Empty* clears it. Nothing is kept across a restart.
+- **Workspaces** (a new Workspaces menu, and the command palette). *Save this
+  layout as...* keeps both panes' tabs -- which folders, which are locked,
+  which is in front on each side -- under a name; choosing it later puts them
+  all back. Ctrl+Alt+1 to 9 open the first nine. Saving under an existing name
+  replaces it; *Delete* removes one.
+- **Colour labels and notes** (Options, Listing; on). Right-click a row for
+  *Label* -- six colours or none -- and, on a single row, *Note...*. A label
+  is a dot at the end of the name, a note a small mark whose text is the
+  name's tooltip. They are kept in this application's settings by path, not
+  in the files: reading a label from every file would be a read per row on a
+  share, and writing one into a file changes its modified time. So a file
+  renamed or moved outside this application leaves its label behind; a
+  rename made here takes it along.
+- **Git badges** (Options, Listing; on). In a folder inside a git repository
+  on a local disk, each changed file shows git's letter at the end of its
+  name -- M changed, A added, ? untracked, D deleted, U conflicted -- and a
+  folder with changes somewhere under it shows a dot. Git is run once per
+  folder shown, at most every ten seconds, beside the listing rather than in
+  front of it; a machine without git shows nothing.
+
 ## [0.37.0]
 
 ### Added

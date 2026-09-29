@@ -118,10 +118,12 @@ class NamePrompt(Dialog):
     def __init__(self, parent: QWidget | None, *, title: str, label: str,
                  initial: str = "", ok_text: str = "OK",
                  taken: Callable[[str], bool] | None = None,
-                 filename: bool = True) -> None:
+                 filename: bool = True, allow_empty: bool = False) -> None:
         super().__init__(parent)
         self._taken = taken
         self._filename = filename
+        #: 0.38: a note may be emptied, which is how one is removed.
+        self._allow_empty = allow_empty
         self.setWindowTitle(title)
         self.setModal(True)
         self.setMinimumWidth(420)
@@ -157,7 +159,7 @@ class NamePrompt(Dialog):
         not a place to enforce anything, because a dialog can be bypassed.
         """
         name = text.strip()
-        usable = bool(name)
+        usable = bool(name) or self._allow_empty
         if self._filename:
             usable = usable and not any(ch in name for ch in '\\/:*?"<>|')
             usable = usable and name not in (".", "..")
@@ -782,7 +784,7 @@ def _count(value: int) -> str:
 def ask_name(parent: QWidget, *, title: str, label: str, initial: str = "",
              ok_text: str = "OK", stem: bool = False,
              taken: Callable[[str], bool] | None = None,
-             filename: bool = True) -> str | None:
+             filename: bool = True, allow_empty: bool = False) -> str | None:
     """A name, or None if the dialog was cancelled or nothing was typed.
 
     `taken` refuses a name already in use, in the dialog, while it can still be
@@ -790,11 +792,14 @@ def ask_name(parent: QWidget, *, title: str, label: str, initial: str = "",
     disk; the only rule left then is that it is not empty.
     """
     dialog = NamePrompt(parent, title=title, label=label, initial=initial,
-                        ok_text=ok_text, taken=taken, filename=filename)
+                        ok_text=ok_text, taken=taken, filename=filename,
+                        allow_empty=allow_empty)
     if stem:
         dialog.select_stem()
     if dialog.exec() != QDialog.Accepted:
         return None
+    if allow_empty:
+        return dialog.value()
     return dialog.value() or None
 
 

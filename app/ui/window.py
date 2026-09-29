@@ -102,7 +102,7 @@ class MainWindow(QMainWindow):
                  favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None, *, backdrop: str = "solid",
                  frame: str | None = None, ejector=None, sync=None,
-                 accent_source=None, health=None) -> None:
+                 accent_source=None, health=None, git=None) -> None:
         super().__init__(parent)
         self._config = config
         #: 0.35: where a Windows or wallpaper accent comes from, and the
@@ -244,6 +244,7 @@ class MainWindow(QMainWindow):
             widget.manageFavoritesRequested.connect(self._manage_favorites)
             widget.viewRequested.connect(self._on_view_requested)
             widget.peekRequested.connect(self._open_peek)
+            widget.basketRequested.connect(self._fill_basket)
             widget.commandRequested.connect(self._on_command)
         if self._commands is not None:
             self._commands.changed.connect(self._fill_tools)
@@ -341,6 +342,29 @@ class MainWindow(QMainWindow):
         self._palette.chosen.connect(self._on_palette_chosen)
         #: 0.36: the peek card, built the first time Space peeks.
         self._peek = None
+        #: 0.38: the basket, and its tray over the bottom left.
+        from app.core.basket import Basket
+        from app.ui.basket import BasketTray
+
+        self._basket = Basket(self)
+        # 0.38: colour labels and notes, one store for both panes.
+        from app.core.labels import Labels
+
+        self._labels = Labels(config, self)
+        for pane in self._panes:
+            pane.set_labels(self._labels)
+        self._labels.changed.connect(
+            lambda: [w.update_rows() for w in self._widgets])
+        # 0.38: git's marks, or None for a window built without io.
+        self._git = git
+        if git is not None:
+            for pane in self._panes:
+                pane.set_git(git)
+            git.changed.connect(lambda: [w.update_rows() for w in self._widgets])
+        self._basket_tray = BasketTray(self._basket, self)
+        self._basket_tray.set_enabled(bool(config.get("basket.enabled")))
+        self._basket_tray.copyRequested.connect(lambda: self._empty_basket(move=False))
+        self._basket_tray.moveRequested.connect(lambda: self._empty_basket(move=True))
         #: 0.33: the Options dialog, built on first use and kept, and the
         #: menu entries that show a setting, so a change made in either place
         #: is shown in the other. A checkable action per switch; a group of
@@ -551,6 +575,26 @@ class MainWindow(QMainWindow):
         # menu drawn and inert rather than a menu bar that is a different shape
         # from the real one.
         self._favorites_menu.setEnabled(self._favorites is not None)
+
+        # 0.38: workspaces. Rebuilt on every change, like the favourites; the
+        # nine keys are made once, for the favourites' reason.
+        from app.core.workspaces import Workspaces
+
+        self._workspaces = Workspaces(self._config, self)
+        self._workspaces_menu = self.menuBar().addMenu("&Workspaces")
+        self._workspaces_menu.setToolTipsVisible(True)
+        self._workspace_keys = []
+        for position in range(1, 10):
+            entry = QAction(f"Workspace {position}", self)
+            entry.setShortcut(QKeySequence(f"Ctrl+Alt+{position}"))
+            entry.setShortcutContext(Qt.WindowShortcut)
+            entry.triggered.connect(
+                lambda _checked=False, n=position - 1: self._open_workspace_at(n))
+            entry.setVisible(False)
+            self.addAction(entry)
+            self._workspace_keys.append(entry)
+        self._workspaces.changed.connect(self._fill_workspaces)
+        self._fill_workspaces()
 
         go = self.menuBar().addMenu("&Go")
         self._action(go, "Up", "Backspace", lambda: self._current_pane().go_up())
@@ -995,6 +1039,62 @@ class MainWindow(QMainWindow):
             self._config.set("rail.width", int(sizes[0]))
 
     # -------------------------------------------------------------- favorites
+
+    def _fill_workspaces(self) -> None:
+        """The saved workspaces, with Save at the top and Delete at the end."""
+        menu = self._workspaces_menu
+        # `clear` deletes the actions this menu owns, which is every one made
+        # below -- so nothing from an earlier fill outlives it.
+        menu.clear()
+        save = QAction("Save this layout as...", menu)
+        save.setToolTip("Both panes' tabs, and which one is in front on each "
+                        "side, under a name. Saving under a name already here "
+                        "replaces it.")
+        save.triggered.connect(self._save_workspace)
+        menu.addAction(save)
+        names = self._workspaces.names()
+        if names:
+            menu.addSeparator()
+        for position, name in enumerate(names):
+            key = f"\tCtrl+Alt+{position + 1}" if position < 9 else ""
+            entry = QAction(f"{name}{key}", menu)
+            entry.triggered.connect(
+                lambda _checked=False, n=name: self._open_workspace(n))
+            menu.addAction(entry)
+        if names:
+            menu.addSeparator()
+            removing = menu.addMenu("Delete")
+            for name in names:
+                entry = QAction(name, removing)
+                entry.triggered.connect(
+                    lambda _checked=False, n=name: self._workspaces.remove(n))
+                removing.addAction(entry)
+
+    def _save_workspace(self) -> None:
+        name = dialogs.ask_name(self, title="Save workspace",
+                                label="Name for this layout:", filename=False)
+        if name:
+            self._workspaces.save(name, *self._panes)
+            self.statusBar().showMessage(f"saved workspace {name}", 4000)
+
+    def _open_workspace_at(self, position: int) -> None:
+        names = self._workspaces.names()
+        if 0 <= position < len(names):
+            self._open_workspace(names[position])
+
+    def _open_workspace(self, name: str) -> None:
+        """Both panes' tabs replaced by the ones saved under `name`."""
+        from app.core.workspaces import side
+
+        entry = self._workspaces.named(name)
+        if entry is None:
+            return
+        for pane, which in zip(self._panes, ("left", "right")):
+            tabs, index = side(entry, which)
+            if tabs:
+                pane.replace_tabs(tabs, index)
+        self.statusBar().showMessage(f"workspace {name}", 4000)
+        self.focus_active_pane()
 
     def _fill_favorites(self) -> None:
         """The saved locations, with the two commands that maintain them.
@@ -1567,6 +1667,11 @@ class MainWindow(QMainWindow):
             if self._health is not None else None,
             "network.amber_ms": lambda _v: self._rebuild_rail(),
             "transfers.speedline": lambda v: self._transfer_bar.set_speedline(bool(v)),
+            "basket.enabled": lambda v: self._basket_tray.set_enabled(bool(v)),
+            "labels.shown": lambda _v: self._refilter(),
+            "git.badges": lambda _v: (self._git.forget() if self._git is not None
+                                      else None, [p.ask_git() for p in panes],
+                                      self._refilter()),
             "preview.logix": lambda _v: self._previews.clear()
             if self._previews is not None else None,
         }
@@ -1723,6 +1828,33 @@ class MainWindow(QMainWindow):
             self._transfers.copy(sources, destination)
         else:
             self._transfers.move(sources, destination)
+
+    def _fill_basket(self, full_paths: list) -> None:
+        added = self._basket.add(full_paths)
+        total = len(self._basket)
+        self.statusBar().showMessage(
+            f"{added:,} added to the basket, {total:,} in it" if added
+            else "already in the basket", 4000)
+
+    def _empty_basket(self, *, move: bool) -> None:
+        """Copy here / Move here: the basket into the active pane's folder,
+        through the prompt F5 puts up. Emptied only once the job is queued."""
+        if not len(self._basket):
+            return
+        pane = self._current_pane()
+        transfer = JobKind.MOVE if move else JobKind.COPY
+        prompt = TransferPrompt(transfer, self._basket.names(), pane.display(), self)
+        if prompt.exec() != QueueDialog.Accepted:
+            return
+        destination = pane.as_path(prompt.destination())
+        if not destination:
+            return
+        sources = self._basket.paths
+        if move:
+            self._transfers.move(sources, destination)
+        else:
+            self._transfers.copy(sources, destination)
+        self._basket.clear()
 
     def _on_drop_requested(self, widget: PaneWidget, sources: list,
                            destination: str, move: bool) -> None:

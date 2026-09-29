@@ -59,6 +59,9 @@ class Op(str, Enum):
     #: whole folder to find out which those are, which is the cost being
     #: avoided.
     FOLDERS = "folders"
+    #: 0.38: git's marks for the names in one folder, and the branch. Local
+    #: volumes only, asked once per folder shown; see `app/io/gitstatus.py`.
+    GIT = "git"
 
     #: Every file under a folder, streamed like LIST -- flat view, 0.25.
     #:

@@ -32,7 +32,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
-from app.io import decode, elevate, holders, paths
+from app.io import decode, elevate, gitstatus, holders, paths
 from app.io.protocol import (
     BATCH_SIZE,
     WALK_HEARTBEAT,
@@ -165,6 +165,9 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _overlays(request, outbox)
     elif request.op is Op.FOLDERS:
         _folders(request, outbox, control, cancelled)
+    elif request.op is Op.GIT:
+        outbox.put(Reply(request.id, Status.OK,
+                         payload=gitstatus.status(request.path, request.timeout)))
     elif request.op is Op.WALK:
         _walk(request, outbox, control, cancelled)
     elif request.op is Op.DRIVES:

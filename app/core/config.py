@@ -294,6 +294,22 @@ DEFAULTS: dict[str, Any] = {
     "notify.after": 20.0,
     # 0.37: a line of the running job's speed inside the transfer pill.
     "transfers.speedline": True,
+    # 0.38: the basket -- Alt+Ins gathers files from several folders to copy
+    # or move as one. Off takes the key and the tray away.
+    "basket.enabled": True,
+    # 0.38: named arrangements of both panes' tabs. A list of
+    # `{"name", "left": {"tabs", "tab"}, "right": {...}}`, the same shape the
+    # window keeps for each side on close.
+    "workspaces": [],
+    # 0.38: colour labels and notes, keyed by full path, and whether the
+    # listing draws them. See `core/labels.py` for why they live here rather
+    # than in the files.
+    "labels": {},
+    "labels.shown": True,
+    # 0.38: git's marks on the rows of a folder inside a repository, on local
+    # disks only, and how long git may take to answer.
+    "git.badges": True,
+    "timeout.git": 10.0,
 
     "updates.check_on_launch": True,
     "updates.skip_version": "",

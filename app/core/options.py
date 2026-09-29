@@ -168,6 +168,15 @@ OPTIONS: tuple[Option, ...] = (
     Option("listing.folder_bars", "listing", "Bars on counted folders",
            "Once Space has counted folders, each gets a bar against the "
            "largest of them, in a colour of its own.", new=True),
+    Option("git.badges", "listing", "Git badges",
+           "Inside a git repository on a local disk: a letter on each changed "
+           "file (M, A, ?, D) and a dot on a folder with changes under it. "
+           "Read by running git once per folder shown.", new=True),
+    Option("labels.shown", "listing", "Colour labels and notes",
+           "Right-click a row to give it a colour or a note. Kept in this "
+           "application's settings, by path: a file renamed or moved outside "
+           "this application leaves its label behind. Off hides them; they "
+           "are not forgotten.", new=True),
     _choice("flat.layout", "listing", "Flat view shows",
             (("column", "A Location column"), ("groups", "A heading per folder")),
             "Ctrl+B: every file under a folder in one list.",
@@ -227,6 +236,10 @@ OPTIONS: tuple[Option, ...] = (
     Option("transfers.speedline", "transfers", "Speed line in the pill",
            "The running job's speed as a line beside its readout. Click the "
            "pill for the last minute in full.", heading="The pill", new=True),
+    Option("basket.enabled", "transfers", "Basket",
+           "Alt+Ins puts the marked files into a basket that stays while the "
+           "pane goes elsewhere; Copy here and Move here take them all, after "
+           "the usual prompt. Off frees the key.", heading="Basket", new=True),
     _choice("notify.after", "transfers", "Say a job finished when it ran longer than",
             _seconds((0, 10, 20, 60, 120)),
             "Only while the window is not in front: the taskbar button "

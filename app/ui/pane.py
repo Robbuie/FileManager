@@ -380,6 +380,8 @@ class PaneWidget(QFrame):
     #: 0.36: Space on a file, with Space set to peek. The window owns the card
     #: for the viewer's reason: it floats over both panes.
     peekRequested = Signal()
+    #: 0.38: Alt+Ins -- these full paths go into the basket.
+    basketRequested = Signal(list)
     #: An external command, by its id in the table. The pane matches the
     #: keystroke because the pane is where a key is safe to act on; what to do
     #: with the id is the window's business.
@@ -1410,6 +1412,10 @@ class PaneWidget(QFrame):
             menu.addAction("Move to other pane\tF6",
                            lambda: self.transferRequested.emit("move"))
             menu.addAction("Duplicate\tShift+F5", self.duplicate_current)
+            if self._pane.config.get("basket.enabled"):
+                menu.addAction("Add to basket\tAlt+Ins", self.add_to_basket)
+            if self._pane.labels is not None and self._pane.config.get("labels.shown"):
+                self._label_menu(menu, names)
             menu.addAction("Rename\tF2", self.rename_current)
             menu.addAction("Delete\tDel", self.delete_selection)
             menu.addAction("Delete permanently\tShift+Del",
@@ -1560,6 +1566,42 @@ class PaneWidget(QFrame):
                                         and entry.name in names) else 0
         self.viewRequested.emit(self._pane.current.path, names, at)
 
+    def _label_menu(self, menu: QMenu, names: list[str]) -> None:
+        """0.38: a colour for the rows, and a note for the one under the cursor."""
+        from app.core.labels import COLOURS
+
+        labels = self._pane.labels
+        folder = self._pane.current.path
+        colours = menu.addMenu("Label")
+        colours.addAction("None", lambda: labels.set_colour(folder, names, 0))
+        colours.addSeparator()
+        for number, name in enumerate(COLOURS, start=1):
+            colours.addAction(name, lambda n=number: labels.set_colour(folder, names, n))
+        if len(names) == 1:
+            menu.addAction("Note...", lambda name=names[0]: self.edit_note(name))
+
+    def edit_note(self, name: str) -> None:
+        labels = self._pane.labels
+        if labels is None:
+            return
+        folder = self._pane.current.path
+        found = labels.label(folder, name)
+        text = dialogs.ask_name(self, title="Note", label=f"A note on {name}:",
+                                initial=found[1] if found else "", filename=False,
+                                allow_empty=True)
+        if text is not None:
+            labels.set_note(folder, name, text)
+
+    def add_to_basket(self) -> None:
+        """Alt+Ins: the marked rows, or the one under the cursor, into the
+        basket -- by full path, so the pane can go anywhere afterwards. The
+        marks are left as they are."""
+        if not self._pane.config.get("basket.enabled"):
+            return
+        names = self.selected_names()
+        if names:
+            self.basketRequested.emit(self._pane.paths_for(names))
+
     def peek_target(self):
         """`(full path, entry)` for the file under the cursor, or None.
 
@@ -1659,6 +1701,9 @@ class PaneWidget(QFrame):
             return
         if key == Qt.Key_Backspace:
             self._pane.go_up()
+            return
+        if key == Qt.Key_Insert and event.modifiers() & Qt.AltModifier:
+            self.add_to_basket()
             return
         if key == Qt.Key_Insert:
             self._mark_and_advance()
@@ -2248,6 +2293,7 @@ class PaneWidget(QFrame):
                 and not self._view.currentIndex().isValid()):
             picker.setCurrentIndex(model.index(0, 0), QItemSelectionModel.NoUpdate)
         self._render_status()
+        self._pane.ask_git()
 
     def _sync_current(self) -> None:
         self._clear_search(forget=True)
