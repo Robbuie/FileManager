@@ -147,6 +147,16 @@ class MainWindow(QMainWindow):
         self._favorites = favorites
         self._capacity = capacity
         self._panes = (left, right)
+        # 0.43: what the panes and the status bar said, for Copy diagnostics.
+        # Kept in memory only; see core/diagnostics.py.
+        from app.core.diagnostics import Events
+        self._events = Events()
+        for side, pane in (("left", left), ("right", right)):
+            pane.statusChanged.connect(
+                lambda text, state, s=side: self._events.add(s, text) if state == "bad" else None)
+        #: 0.43: set once settings have been restored, so closing does not
+        #: write the old panes' tabs over the restored ones.
+        self._restored = False
         self._icons = left.icons
         self._overlays = left.overlays
         self._file_icons = left.file_icons
@@ -445,6 +455,8 @@ class MainWindow(QMainWindow):
         self._action(files, "Rename several...", "Ctrl+M",
                      lambda: self._current_widget().rename_several())
         self._hint(files, "Checksums...", lambda: self._current_widget().checksums())
+        self._hint(files, "Attributes and dates...",
+                   lambda: self._current_widget().attributes())
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
@@ -898,6 +910,31 @@ class MainWindow(QMainWindow):
         self._bound["updates.check_on_launch"] = automatic
         automatic.setEnabled(self._updates is not None)
         helping.addAction(automatic)
+        helping.addSeparator()
+        # 0.43: the report to send when something misbehaves, and settings
+        # backups. None of the four needs a worker: the report is built in
+        # memory, and the backups folder is the settings file's own.
+        diagnostics = QAction("Copy diagnostics", self)
+        diagnostics.setToolTip("Version, Windows, Qt, changed settings (your folders "
+                               "and labels by count only) and recent problems, on the "
+                               "clipboard to paste into a report. Nothing is sent.")
+        diagnostics.triggered.connect(self._copy_diagnostics)
+        helping.addAction(diagnostics)
+        helping.addSeparator()
+        backup = QAction("Back up settings", self)
+        backup.setToolTip("A dated copy of every setting -- favourites, workspaces, "
+                          "labels, commands -- beside the settings file.")
+        backup.triggered.connect(self._back_up_settings)
+        helping.addAction(backup)
+        restore = QAction("Restore settings...", self)
+        restore.triggered.connect(self._restore_settings)
+        helping.addAction(restore)
+        folder = QAction("Show settings folder", self)
+        folder.setToolTip("Opens the folder holding the settings and their backups in "
+                          "the active pane, to copy them to another machine.")
+        folder.triggered.connect(
+            lambda: self._current_pane().open_tab(os.path.dirname(self._config.path)))
+        helping.addAction(folder)
 
     # ------------------------------------------------------------------- rail
 
@@ -1028,6 +1065,16 @@ class MainWindow(QMainWindow):
         """
         if why:
             self.statusBar().showMessage(f"{path}: {why}", 10000)
+            # 0.43: a failure an account could fix gets a login prompt; any
+            # other failure is only reported, as before.
+            from app.ui import credentials
+
+            if self._network is not None and credentials.wants_login(why):
+                answer = credentials.ask(self, share=path, reason=why)
+                if answer is not None:
+                    user, password, save = answer
+                    self.statusBar().showMessage(f"connecting to {path} as {user}", 10000)
+                    self._network.reconnect(path, user=user, password=password, save=save)
             return
         self.statusBar().showMessage(f"{path} is connected", 6000)
         # The pane on it, if there is one, can stop saying it is not there.
@@ -2598,12 +2645,54 @@ class MainWindow(QMainWindow):
         self._transfers.shutdown()
         if self._updates is not None:
             self._updates.shutdown()
-        self._config.set("window.width", self.width())
-        self._config.set("window.height", self.height())
-        self._remember_rail_width()
-        for side, pane in zip(("left", "right"), self._panes):
-            self._config.set(f"{side}.path", pane.current.path)
-            self._config.set(f"{side}.tabs", pane.session())
-            self._config.set(f"{side}.tab", pane.index)
-        self._config.save()
+        if not self._restored:
+            self._config.set("window.width", self.width())
+            self._config.set("window.height", self.height())
+            self._remember_rail_width()
+            for side, pane in zip(("left", "right"), self._panes):
+                self._config.set(f"{side}.path", pane.current.path)
+                self._config.set(f"{side}.tabs", pane.session())
+                self._config.set(f"{side}.tab", pane.index)
+            self._config.save()
         super().closeEvent(event)
+
+    # ------------------------------------------------------------ 0.43 help
+
+    def _copy_diagnostics(self) -> None:
+        from app.core import diagnostics
+        from app.core.config import DEFAULTS
+
+        extra = {"backdrop": self._backdrop, "settings": self._config.path}
+        text = diagnostics.report(version=__version__, values=self._config.values(),
+                                  defaults=DEFAULTS, events=self._events.lines(),
+                                  extra=extra)
+        QApplication.clipboard().setText(text)
+        self.statusBar().showMessage("diagnostics copied -- paste them into a report", 6000)
+
+    def _back_up_settings(self) -> None:
+        from app.core import backups
+
+        try:
+            made = backups.make(self._config)
+        except OSError as exc:
+            self.statusBar().showMessage(f"could not back up the settings: {exc}", 8000)
+            return
+        self.statusBar().showMessage(f"settings backed up as {os.path.basename(made.path)}",
+                                     6000)
+
+    def _restore_settings(self) -> None:
+        from app.core import backups
+        from app.ui.restore import RestoreDialog
+
+        dialog = RestoreDialog(self, backups.listing(self._config))
+        if dialog.exec() != RestoreDialog.Accepted or not dialog.chosen():
+            return
+        try:
+            backups.restore(self._config, dialog.chosen())
+        except (OSError, ValueError) as exc:
+            self.statusBar().showMessage(str(exc), 8000)
+            return
+        self._restored = True
+        self.statusBar().showMessage(
+            "settings restored -- close File Manager and start it again to use them",
+            0)

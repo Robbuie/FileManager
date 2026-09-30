@@ -203,7 +203,8 @@ class Network(QObject):
 
     # ---------------------------------------------------------- reconnecting
 
-    def reconnect(self, path: str) -> None:
+    def reconnect(self, path: str, *, user: str = "", password: str = "",
+                  save: bool = False) -> None:
         """Attach to a share again, for one that has stopped answering.
 
         The one call in this module that touches the network, so it is only
@@ -219,7 +220,10 @@ class Network(QObject):
             Op.CONNECT, target,
             timeout=float(self._config.get("timeout.connect")),
             on_reply=self._replier(target),
-            args={"remember": True},
+            # 0.43: an account when the login prompt supplied one. The
+            # password lives in this request and nowhere else.
+            args={"remember": True, **({"user": user, "password": password, "save": save}
+                                       if user else {})},
         )
 
     def _replier(self, target: str):

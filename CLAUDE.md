@@ -631,6 +631,13 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   once the walk ends and lays it out squarified; `ui/foldermap.py` paints it
   from the theme's `kind_*` tokens. No second scanner, and nothing in the
   worker knows the map exists.
+- **Passwords pass through; they are never kept.** Since 0.43 a reconnect
+  that fails for an account reason offers `ui/credentials.py`; the password
+  travels in that one `Op.CONNECT` request's args to `paths.connect` and is
+  gone. Remembering it is Windows' job (`win32cred.CredWrite`, only after the
+  connection worked). It must never reach the settings, a status line, the
+  diagnostics ring (`core/diagnostics.py`, which also reports the user's own
+  folders and labels by count only) or a log.
 - **Rename several is a plan, then one request.** `core/renamer.py` decides
   every new name and refuses the bad ones before anything runs; `plan` sends a
   name that another row is about to take through a temporary name first; and

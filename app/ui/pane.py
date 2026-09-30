@@ -1314,6 +1314,32 @@ class PaneWidget(QFrame):
         pane.config.set("checksum.algorithm", dialog.algorithm)
         pane.cancel_request(dialog.request_id)
 
+    def attributes(self) -> None:
+        """0.43: attributes and dates of the marked rows, in bulk."""
+        from app.ui.attributes import AttributesDialog, nothing_to_do
+
+        if self._read_only():
+            return
+        names = self.selected_names()
+        model = self._pane.current.model
+        entries = [entry for name in names
+                   if (entry := model.entry(model.row_of(name))) is not None]
+        if not entries:
+            return
+        dialog = AttributesDialog(
+            self.window(), names=[entry.name for entry in entries],
+            attributes=[int(entry.attributes or 0) for entry in entries],
+            mtime=max(float(entry.mtime or 0) for entry in entries),
+            has_folders=any(entry.is_dir for entry in entries))
+        if dialog.exec() != AttributesDialog.Accepted:
+            return
+        change = dialog.change()
+        if nothing_to_do(change):
+            return
+        still = {name.lower() for name in model.names()}
+        self._pane.set_attributes([e.name for e in entries if e.name.lower() in still
+                                   or "\\" in e.name], change)
+
     def _archive_verbs(self, menu: QMenu, name: str) -> None:
         """0.41: on an archive row -- open it as a folder, or extract it all."""
         menu.addSeparator()
@@ -1540,6 +1566,7 @@ class PaneWidget(QFrame):
             menu.addAction("Rename\tF2", self.rename_current)
             if len(names) > 1:
                 menu.addAction("Rename several...\tCtrl+M", self.rename_several)
+            menu.addAction("Attributes and dates...", self.attributes)
             menu.addAction("Delete\tDel", self.delete_selection)
             menu.addAction("Delete permanently\tShift+Del",
                            lambda: self.delete_selection(permanent=True))

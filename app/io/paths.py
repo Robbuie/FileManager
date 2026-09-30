@@ -486,7 +486,8 @@ def _without_duplicates(found: list[Connection]) -> list[Connection]:
     return sorted(best.values(), key=lambda c: (not c.local, c.label.lower()))
 
 
-def connect(remote: str, *, remember: bool = False) -> str:
+def connect(remote: str, *, remember: bool = False, user: str = "", password: str = "",
+            save_credential: bool = False) -> str:
     """Re-establish a connection to a share. Returns "" or why it failed.
 
     This *is* a network call and belongs nowhere near the UI thread. It is the
@@ -497,7 +498,11 @@ def connect(remote: str, *, remember: bool = False) -> str:
     case that matters -- a share that dropped because the server restarted
     comes back without anybody being asked anything. A share that genuinely
     needs a different account fails here with the reason, and that is a better
-    outcome than a prompt this application would have to own.
+    outcome than a prompt this application would have to own. Since 0.43 the
+    window offers a login prompt for exactly those reasons, which comes back
+    here with `user` and `password`; `save_credential` hands them to Windows'
+    Credential Manager for the server, as `cmdkey /add` does, and only once the
+    connection has worked -- a wrong password is not worth remembering.
     """
     if win32wnet is None:
         return "not running on Windows"
@@ -507,10 +512,34 @@ def connect(remote: str, *, remember: bool = False) -> str:
     resource.lpLocalName = None
     try:
         win32wnet.WNetAddConnection2(
-            resource, None, None, _CONNECT_UPDATE_PROFILE if remember else 0)
+            resource, password or None, user or None,
+            _CONNECT_UPDATE_PROFILE if remember else 0)
     except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
         return str(getattr(exc, "strerror", None) or exc)
+    if user and save_credential:
+        _save_credential(normalize(remote), user, password)
     return ""
+
+
+def _save_credential(remote: str, user: str, password: str) -> None:
+    """The server's login in Credential Manager, as `cmdkey /add:server`.
+    Best effort: the connection already worked, and failing to remember it
+    is not a reason to say it did not."""
+    parts = split_unc(remote)
+    if parts is None:
+        return
+    try:
+        import win32cred
+
+        win32cred.CredWrite({
+            "Type": win32cred.CRED_TYPE_DOMAIN_PASSWORD,
+            "TargetName": parts[0],
+            "UserName": user,
+            "CredentialBlob": password,
+            "Persist": win32cred.CRED_PERSIST_ENTERPRISE,
+        }, 0)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def mapped_drives(*, refresh: bool = False) -> dict[str, str]:

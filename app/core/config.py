@@ -471,6 +471,16 @@ class Config:
             raise KeyError(f"unknown setting {key!r}; add it to config.DEFAULTS")
         self._values[key] = value
 
+    def values(self) -> dict[str, Any]:
+        """0.43: every setting somebody set, as saved -- for a backup."""
+        return dict(self._values)
+
+    def replace_all(self, values: dict[str, Any]) -> None:
+        """0.43: every setting at once, from a backup. Unknown keys -- from a
+        later version, or not a settings file at all -- are dropped, the way
+        `load` drops them."""
+        self._values = _look_024({k: v for k, v in values.items() if k in DEFAULTS})
+
     def save(self) -> bool:
         """Write the settings out. Returns False rather than raising: failing
         to save a preference is not worth an error dialog on the way out.

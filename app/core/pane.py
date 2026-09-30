@@ -1010,6 +1010,33 @@ class Pane(QObject):
                                    on_reply=handle,
                                    args={"names": list(names), "algorithm": algorithm})
 
+    def set_attributes(self, names: list[str], change: dict) -> None:
+        """0.43: attributes and dates for named rows, then the folder again."""
+        tab = self.current
+        if not names:
+            return
+        count = len(names)
+        self._set_status(tab, f"changing {count} item{'s' if count != 1 else ''}", BUSY)
+
+        def handle(reply: Reply) -> None:
+            payload = reply.payload or {}
+            failed = payload.get("failed") or {}
+            done = int(payload.get("changed") or 0)
+            if failed:
+                first = next(iter(failed.items()))
+                self._set_status(tab, f"changed {done:,}; {len(failed):,} could not be "
+                                      f"changed -- {first[0]}: {first[1]}", BAD)
+            elif reply.status is not Status.OK:
+                self._set_status(tab, f"could not change them: {_explain(reply)}", BAD)
+            else:
+                self._set_status(tab, f"changed {done:,} item{'s' if done != 1 else ''}", IDLE)
+            if tab is self.current:
+                self.refresh()
+
+        timeout = float(self._config.get("timeout.listing")) * (4 if change.get("recursive") else 1)
+        self._bridge.submit(Op.ATTRIBUTES, tab.path, timeout=timeout, on_reply=handle,
+                            args={"names": list(names), **change})
+
     def cancel_request(self, request_id: int | None) -> None:
         if request_id is not None:
             self._bridge.cancel(request_id)

@@ -5,6 +5,32 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.43.0]
+
+### Added
+- **Attributes and dates** (File menu, and the right-click menu). Read-only,
+  hidden, system and archive for any number of marked items at once -- each a
+  three-way box that starts mixed when the items disagree, so only what you
+  change is changed -- and the modified and created dates, each set only when
+  its own box is ticked. For folders, *Also everything inside* passes it on.
+  Folders keep their own read-only mark, as Explorer's does. One item that
+  cannot be changed is reported by name and the rest go on.
+- **A login prompt for shares.** When reconnecting to a share fails because
+  the account is wrong -- the user name or password, or access denied -- a
+  prompt asks for another account and tries again with it. *Remember* stores
+  it in Windows' Credential Manager, the way `cmdkey` does, and only after the
+  connection has worked; this application keeps no passwords.
+- **Copy diagnostics** (Help menu). Version, Windows, Python, Qt, whether
+  pywin32 loaded, every setting changed from its default -- favourites,
+  labels, workspaces and the like by count only, never their contents -- and
+  the last few hundred problems the panes reported, on the clipboard to paste
+  into a report. Nothing is written or sent.
+- **Back up settings / Restore settings / Show settings folder** (Help
+  menu). A dated copy of every setting beside the settings file, the newest
+  twenty kept; restoring one backs up what it replaces first, then asks for a
+  restart. Show settings folder opens it in a pane, to copy backups to another
+  machine.
+
 ## [0.42.0]
 
 ### Added

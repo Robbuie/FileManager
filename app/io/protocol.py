@@ -168,6 +168,12 @@ class Op(str, Enum):
     #: PARTIALs carry no rows and exist only to keep the watchdog satisfied
     #: while a large file is read.
     HASH = "hash"
+    #: 0.43: change attributes and dates of `args["names"]` in the folder at
+    #: `path`. `args["set"]` and `args["clear"]` are attribute bits;
+    #: `args["mtime"]`/`args["ctime"]` epoch seconds, absent to leave alone;
+    #: `args["recursive"]` also changes everything inside named folders. The
+    #: reply is `{"changed": n, "failed": {name: reason}}`.
+    ATTRIBUTES = "attributes"
 
     #: Delete `args["names"]` from the folder at `path`, to the Recycle Bin
     #: unless `args["permanent"]`. Several names in one request rather than one

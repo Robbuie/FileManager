@@ -234,3 +234,13 @@ def test_a_folder_from_outside_opens_in_a_new_tab_of_the_active_pane(window, tmp
     assert pane.current.path.rstrip("\\/") == str(tmp_path).rstrip("\\/")
     window.open_from_outside("")                 # only brings the window forward
     assert len(pane.tabs) == before + 1
+
+
+def test_copy_diagnostics_puts_a_report_on_the_clipboard(window):
+    """0.43: Help, Copy diagnostics."""
+    from PySide6.QtWidgets import QApplication
+
+    window._current_pane().say("could not reach S:\\\\Jobs", "bad")
+    window._copy_diagnostics()
+    text = QApplication.clipboard().text()
+    assert text.startswith("File Manager ") and "could not reach" in text

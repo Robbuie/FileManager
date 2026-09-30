@@ -73,6 +73,13 @@ except Exception:  # noqa: BLE001 - reported by _open, like paths.win32_problem
     win32shell = None
     shellcon = None
 
+#: 0.43: attributes and file times. Separate from the block above so a
+#: machine with half of pywin32 still gets whichever half it has.
+try:
+    import win32file
+except Exception:  # noqa: BLE001
+    win32file = None
+
 #: Whether this process has initialised COM. Done once, lazily, and only for
 #: the shell: `ShellExecuteEx` hands the work to shell extensions, and most of
 #: them require a single-threaded apartment. Without it the association can
@@ -142,7 +149,8 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
 
 
 #: 0.41: what may not happen inside an archive, which is read-only here.
-_ARCHIVE_WRITES = frozenset({Op.MKDIR, Op.RENAME, Op.RENAME_MANY, Op.DELETE})
+_ARCHIVE_WRITES = frozenset({Op.MKDIR, Op.RENAME, Op.RENAME_MANY, Op.DELETE,
+                             Op.ATTRIBUTES})
 #: Reads that ask Windows about a real file, which a name inside an archive is
 #: not. Answered with a plain refusal; the callers already treat a failure as
 #: "no badge", "no icon", "no marks".
@@ -222,6 +230,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _rename_many(request, outbox)
     elif request.op is Op.HASH:
         _hash(request, outbox, control, cancelled)
+    elif request.op is Op.ATTRIBUTES:
+        _attributes(request, outbox, control, cancelled)
     elif request.op is Op.DELETE:
         _delete(request, outbox)
     elif request.op is Op.PING:
@@ -858,7 +868,10 @@ def _connect(request: Request, outbox: Any) -> None:
     without being asked.
     """
     why = paths.connect(request.path,
-                        remember=bool(request.args.get("remember")))
+                        remember=bool(request.args.get("remember")),
+                        user=str(request.args.get("user") or ""),
+                        password=str(request.args.get("password") or ""),
+                        save_credential=bool(request.args.get("save")))
     if why:
         outbox.put(Reply(request.id, Status.ERROR, message=why))
         return
@@ -2271,3 +2284,119 @@ def _hash(request: Request, outbox: Any, control: Any, cancelled: set[int], *,
         return
     outbox.put(Reply(request.id, Status.OK, seq=seq,
                      payload={"algorithm": algorithm, "sums": sums, "failed": failed}))
+
+
+#: The attribute bits `Op.ATTRIBUTES` may change. Everything else --
+#: directory, compressed, encrypted, reparse point -- is the filesystem's.
+SETTABLE_ATTRIBUTES = 0x1 | 0x2 | 0x4 | 0x20
+
+
+def _attributes(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:
+    """0.43: attributes and dates for named items, and optionally everything
+    inside named folders. See `Op.ATTRIBUTES`.
+
+    One item failing -- locked, denied -- is reported by name and the rest go
+    on; the reply says how many changed. A folder's own dates are set with
+    backup semantics, which is what Windows needs to open a directory for
+    writing its times.
+    """
+    names = [str(name) for name in (request.args.get("names") or [])]
+    to_set = int(request.args.get("set") or 0) & SETTABLE_ATTRIBUTES
+    to_clear = int(request.args.get("clear") or 0) & SETTABLE_ATTRIBUTES
+    mtime = request.args.get("mtime")
+    ctime = request.args.get("ctime")
+    recursive = bool(request.args.get("recursive"))
+    changed = 0
+    failed: dict[str, str] = {}
+    seen = 0
+
+    def one(path: str, label: str) -> None:
+        nonlocal changed
+        try:
+            # Read-only means nothing useful on a folder in Windows -- it is
+            # how Explorer marks a customised one -- so folders keep theirs,
+            # as Explorer's own "apply to subfolders" does.
+            folder = os.path.isdir(paths.api(path))
+            mask = ~0x1 if folder else ~0
+            _set_attributes(path, to_set & mask, to_clear & mask)
+            _set_times(path, mtime, ctime)
+            changed += 1
+        except OSError as exc:
+            failed[label] = _describe(exc)
+
+    for name in names:
+        if not paths.is_bare_name(name.replace("\\", "/").split("/")[-1]) or ".." in name.split("\\"):
+            failed[name] = "not a name in this folder"
+            continue
+        full = os.path.join(request.path, name)
+        one(full, name)
+        if recursive and os.path.isdir(paths.api(full)) and not os.path.islink(paths.api(full)):
+            for folder, dirs, files in os.walk(paths.api(full)):
+                for child in dirs + files:
+                    seen += 1
+                    if seen % CHECK_INTERVAL == 0:
+                        _drain_control(control, cancelled)
+                        if request.id in cancelled:
+                            cancelled.discard(request.id)
+                            outbox.put(Reply(request.id, Status.CANCELLED))
+                            return
+                    child_path = os.path.join(folder, child)
+                    one(child_path, os.path.relpath(child_path, paths.api(request.path)))
+    outbox.put(Reply(request.id, Status.OK if not failed or changed else Status.ERROR,
+                     payload={"changed": changed, "failed": failed},
+                     message=next(iter(failed.values()), "")))
+
+
+def _set_attributes(path: str, to_set: int, to_clear: int) -> None:
+    if not (to_set or to_clear):
+        return
+    target = paths.api(path)
+    if win32file is not None:
+        try:
+            current = win32file.GetFileAttributes(target)
+            wanted = (current | to_set) & ~to_clear
+            # FILE_ATTRIBUTE_NORMAL is only valid alone.
+            if wanted & ~0x80 == 0:
+                wanted = 0x80
+            else:
+                wanted &= ~0x80
+            if wanted != current:
+                win32file.SetFileAttributes(target, wanted)
+            return
+        except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+            raise OSError(getattr(exc, "winerror", 0), getattr(exc, "strerror", str(exc))) from exc
+    # Off Windows only read-only means anything, as the write bits.
+    import stat as stat_module
+
+    mode = os.stat(target).st_mode
+    if to_set & 0x1:
+        os.chmod(target, mode & ~(stat_module.S_IWUSR | stat_module.S_IWGRP | stat_module.S_IWOTH))
+    elif to_clear & 0x1:
+        os.chmod(target, mode | stat_module.S_IWUSR)
+
+
+def _set_times(path: str, mtime, ctime) -> None:
+    if mtime is None and ctime is None:
+        return
+    target = paths.api(path)
+    if win32file is not None:
+        import pywintypes
+
+        try:
+            handle = win32file.CreateFile(
+                target, 0x100,                      # FILE_WRITE_ATTRIBUTES
+                win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE
+                | win32file.FILE_SHARE_DELETE, None, win32file.OPEN_EXISTING,
+                0x02000000, None)                   # FILE_FLAG_BACKUP_SEMANTICS
+            try:
+                created = pywintypes.Time(float(ctime)) if ctime is not None else None
+                modified = pywintypes.Time(float(mtime)) if mtime is not None else None
+                win32file.SetFileTime(handle, created, None, modified)
+            finally:
+                handle.Close()
+            return
+        except Exception as exc:  # noqa: BLE001
+            raise OSError(getattr(exc, "winerror", 0), getattr(exc, "strerror", str(exc))) from exc
+    if mtime is not None:
+        stat = os.stat(target)
+        os.utime(target, (stat.st_atime, float(mtime)))
