@@ -5,6 +5,43 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.41.0]
+
+### Added
+- **Archives open like folders** (Options, Listing; on). Enter on a .zip, or
+  a .tar, .tar.gz, .tgz, .tar.bz2 or .tar.xz, goes into it: folders inside
+  are folders, the breadcrumb and its chevrons work, the preview pane, F3 and
+  the thumbnail grid show what is inside, Enter on a file opens it in its
+  program from a read-only temporary copy, Space counts a folder, and flat
+  view walks it. F5 copies the marked files out -- that is extraction, through
+  the queue with its progress, cancel and conflict questions, and drag and
+  drop onto the other pane does the same.
+- **Extract to other pane / Extract here** on an archive's right-click menu:
+  all of it, into a folder named for the archive. A folder of that name that
+  already exists is not merged into.
+- **Inside an archive is read-only here**, and says so: F2, F6, F7, Del,
+  Rename several, Duplicate, paste and a move out are refused with a sentence
+  on the status line rather than a failed job, and the Explorer menu entries
+  are left off. The status line reads "archive, read-only".
+- Member names that would escape the archive (an absolute path, a drive, a
+  "..") or that Windows cannot hold are left out, and the status line says
+  how many. A file whose name only looks like an archive -- a folder called
+  backup.zip -- is treated as what it is.
+- Temporary copies of opened and previewed members are kept under
+  %TEMP%\FileManager\archives and cleared after two days.
+
+### Changed
+- **The two compare commands start File Compare first** (Ctrl+F2 and
+  Alt+F2), the family's own compare tool, and fall back to Beyond Compare and
+  then WinMerge on a machine without it. A compare row still holding the old
+  shipped default is moved over when the settings are read; a row pointed at
+  a program of your own is left alone. (Prepared as 0.40.1 in another session
+  and released here.)
+
+7-Zip and RAR archives are not read: that needs a bundled 7-Zip, which is
+several megabytes. Nothing inside an archive can be changed yet; packing
+files into a new zip is a later release.
+
 ## [0.40.0]
 
 ### Added

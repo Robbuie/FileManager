@@ -85,6 +85,7 @@ import errno
 import multiprocessing as mp
 import os
 import queue
+import re
 import shutil
 import signal
 import threading
@@ -107,7 +108,7 @@ except ImportError:  # pragma: no cover - everywhere but Windows
 if os.environ.get(COPY_LOOP_ENV):  # pragma: no cover - the harness's switch
     win32file = None
 
-from app.io import history, holders, paths
+from app.io import archive, history, holders, paths
 from app.io.protocol import (
     CHUNK,
     PROGRESS_INTERVAL,
@@ -156,6 +157,9 @@ class Item:
     target: str
     size: int = 0
     is_dir: bool = False
+    #: 0.41: `(archive, inner)` when the source is inside an archive, which
+    #: makes copying it an extraction.
+    member: tuple[str, str] | None = None
 
 
 @dataclass
@@ -186,6 +190,10 @@ def run(inbox: Any, outbox: Any, history_path: str = "") -> None:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     except (ValueError, OSError):
         pass
+    # 0.41: temp copies of archive members from earlier sessions. Here because
+    # this process starts once per session, off the window's thread, and a
+    # few stale folders in %TEMP% are not worth a thread of their own.
+    archive.clear_temp()
     Runner(inbox, outbox, history_path=history_path).loop()
 
 
@@ -397,6 +405,13 @@ class Runner:
             "kind": job.kind.value, "destination": job.destination,
             "sources": len(job.sources),
         })
+        if job.kind in (JobKind.RECYCLE, JobKind.ERASE) and any(
+                _inside_archive(source) for source in job.sources):
+            # 0.41: nothing inside an archive is deleted here; see READ_ONLY.
+            self._emit(job.id, Progress.FAILED_ITEM, {"name": ""}, message=archive.READ_ONLY)
+            self._emit(job.id, Progress.DONE, {"failed": len(job.sources)},
+                       message=archive.READ_ONLY)
+            return
         if job.kind is JobKind.RECYCLE:
             self._recycle(job)
             return
@@ -408,6 +423,18 @@ class Runner:
     def _move_or_copy(self, job: Job) -> None:
         totals = Totals()
         sources = list(job.sources)
+        # 0.41: an archive is read-only here. Copying out of one is allowed --
+        # that is extraction -- and nothing else: a move out would have to
+        # rewrite the archive to remove the source, and a copy or move into
+        # one would have to rewrite it to add. Refused per source, with the
+        # reason, before anything is scanned.
+        refused = self._archive_refusals(job, sources)
+        if refused:
+            for source in refused:
+                totals.failed += 1
+                self._emit(job.id, Progress.FAILED_ITEM,
+                           {"name": _leaf(source)}, message=archive.READ_ONLY)
+            sources = [source for source in sources if source not in refused]
 
         # A cancel is caught here rather than by the loop, so that the job can
         # still say what it managed before it was stopped. "Cancelled" on its
@@ -456,6 +483,15 @@ class Runner:
             "failed": totals.failed, "bytes": totals.bytes,
             "cancelled": totals.cancelled,
         })
+
+    def _archive_refusals(self, job: Job, sources: list[str]) -> list[str]:
+        into_archive = _inside_archive(job.destination) or any(
+            _inside_archive(folder) for folder in (job.into or ()))
+        if into_archive:
+            return list(sources)
+        if job.kind is JobKind.MOVE:
+            return [source for source in sources if _inside_archive(source)]
+        return []
 
     # ---------------------------------------------------------------- deletes
 
@@ -660,6 +696,10 @@ class Runner:
                       else destination)
             target = (os.path.join(folder, _target_name(job, source))
                       if folder else "")
+            member = _inside_archive(source)
+            if member is not None:
+                self._scan_archive(job, source, member, target, items, unreadable, folder)
+                continue
             try:
                 if (os.path.isdir(paths.api(source))
                         and not os.path.islink(paths.api(source))):
@@ -671,6 +711,37 @@ class Runner:
             except OSError as exc:
                 unreadable.append((source, _describe(exc), folder))
         return items, unreadable
+
+    def _scan_archive(self, job: Job, source: str, member: tuple[str, str],
+                      target: str, items: list[Item],
+                      unreadable: list[tuple[str, str, str]], folder: str) -> None:
+        """A source inside an archive: its files and folders from the index."""
+        arc, inner = member
+        try:
+            index = archive.index_for(arc, time.monotonic() + 600)
+        except (OSError, archive.BadArchive, TimeoutError) as exc:
+            unreadable.append((source, _describe(exc), folder))
+            return
+        entry = index.entry(inner) if inner else None
+        is_folder = not inner or (entry is not None and entry.is_dir)
+        if entry is None and inner:
+            unreadable.append((source, f"{inner} is not in {os.path.basename(arc)}", folder))
+            return
+        if not is_folder:
+            items.append(Item(source, target, size=entry.size, member=(arc, inner)))
+            return
+        items.append(Item(source, target, is_dir=True))
+        base = inner.strip("\\")
+        for path, child in index.files_under(inner):
+            self._checkpoint(job)
+            relative = path[len(base):].lstrip("\\") if base else path
+            child_target = os.path.join(target, *relative.split("\\")) if target else ""
+            child_source = f"{arc}\\{path}"
+            if child.is_dir:
+                items.append(Item(child_source, child_target, is_dir=True))
+            else:
+                items.append(Item(child_source, child_target, size=child.size,
+                                  member=(arc, path)))
 
     def _walk(self, job: Job, source: str, target: str, items: list[Item],
               unreadable: list[tuple[str, str, str]]) -> None:
@@ -791,7 +862,14 @@ class Runner:
         # somebody else's file that happened to have the partial's name.
         partial: str | None = None
         try:
-            if win32file is not None:
+            if item.member is not None:
+                # 0.41: out of an archive. The same write-beside-and-rename;
+                # only where the bytes come from differs.
+                partial = _partial_name(target)
+                archive.extract(item.member[0], item.member[1], partial,
+                                progress=progress,
+                                checkpoint=lambda: self._checkpoint(job))
+            elif win32file is not None:
                 partial = self._copy_native(job, item, target, progress)
             else:
                 partial = _partial_name(target)
@@ -1175,8 +1253,32 @@ def _retryable(source: str, into: str) -> dict:
 
 
 def _target_name(job: Job, source: str) -> str:
-    """The name a source takes at the destination: its own, or a duplicate's."""
-    return job.rename or os.path.basename(source)
+    """The name a source takes at the destination: its own, or a duplicate's.
+
+    A path inside an archive is joined with backslashes whatever the platform,
+    so its last part is found with both separators in mind.
+    """
+    return job.rename or _leaf(source)
+
+
+def _leaf(path: str) -> str:
+    return re.split(r"[\\/]", path.rstrip("\\/"))[-1]
+
+
+def _inside_archive(path: str) -> tuple[str, str] | None:
+    """`(archive, inner)` for a path inside an archive file, else None.
+
+    Inside means past the archive's name: `a.zip\\x` is a member and
+    `a.zip\\` -- trailing separator -- is all of it, which is how an
+    "extract everything" job is written. `a.zip` alone is the file, and
+    copying it copies the file.
+    """
+    if not path or not archive.inside(path):
+        return None
+    found = archive.split(path)
+    if found is None or not archive.is_archive_file(found[0]):
+        return None
+    return found
 
 
 def _duplicate_problem(job: Job) -> str:

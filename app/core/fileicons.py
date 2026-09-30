@@ -34,6 +34,8 @@ and a refresh of a folder that has not changed costs nothing.
 
 from __future__ import annotations
 
+from app.io.archive import split as archive_split
+
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -139,6 +141,8 @@ class FileIcons(QObject):
         return self._images.get(known[2]) if known[2] else None
 
     def want(self, folder: str, entry: Entry) -> None:
+        if archive_split(folder) is not None:
+            return  # 0.41: reading an icon out of a member would mean extracting it
         if not self.enabled or not folder or not carries_own_icon(entry):
             return
         waiting = self._pending.setdefault(folder, {})

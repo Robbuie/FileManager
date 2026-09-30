@@ -22,6 +22,8 @@ menu that is briefly shorter rather than a dialog that vanishes.
 
 from __future__ import annotations
 
+from app.io.archive import split as archive_split
+
 import sys
 from typing import Any
 
@@ -66,6 +68,11 @@ class ShellMenu(QObject):
         """
         if self._running:
             self.unavailable.emit("a command from the last menu is still open")
+            return
+        if archive_split(folder) is not None:
+            # 0.41: Explorer's menu is about real files, and these are names
+            # inside an archive.
+            self.unavailable.emit("Explorer's entries are not offered inside an archive")
             return
         self._forget()
         self._folder = folder

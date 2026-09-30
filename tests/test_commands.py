@@ -467,3 +467,24 @@ def test_no_list_file_is_written_when_the_template_did_not_ask_for_one() -> None
     reply = run_request(program="python3", arguments=["-c", "pass"],
                         list=[r"C:\a.txt"])
     assert reply.payload["list"] == ""
+
+
+def test_the_compare_rows_start_file_compare_and_fall_back() -> None:
+    """0.40.1: File Compare first, then Beyond Compare, then WinMerge."""
+    for identity in ("compare", "compare-files"):
+        command = find(DEFAULTS, identity)
+        assert command.program == "FileCompare.exe"
+        assert command.alternatives == ("BCompare.exe", "WinMergeU.exe")
+
+
+def test_a_saved_untouched_compare_row_moves_to_file_compare() -> None:
+    from app.core.commands import from_config
+
+    old = dict(find(DEFAULTS, "compare").as_dict(), program="BCompare.exe",
+               alternatives=["WinMergeU.exe"])
+    mine = dict(find(DEFAULTS, "compare-files").as_dict(), program="C:\\Tools\\diff.exe",
+                alternatives=[])
+    loaded = {c.id: c for c in from_config([old, mine])}
+    assert loaded["compare"].program == "FileCompare.exe"
+    assert loaded["compare"].alternatives == ("BCompare.exe", "WinMergeU.exe")
+    assert loaded["compare-files"].program == "C:\\Tools\\diff.exe"

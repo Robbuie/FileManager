@@ -291,6 +291,9 @@ DEFAULTS: dict[str, Any] = {
     # 0.41: a second start -- or Explorer's "Open in File Manager" -- hands its
     # folder to the window already open instead of opening another.
     "general.single_instance": True,
+    # 0.41: Enter on a .zip or a tar goes into it like a folder, read-only,
+    # rather than handing it to Windows.
+    "archives.browse": True,
     # 0.41: the last rule Rename several was used with, as `renamer.Rule`'s
     # fields. Empty for the plain [N].[E].
     "rename.last": {},

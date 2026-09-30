@@ -32,6 +32,8 @@ not, so carrying it across a refresh would show yesterday's status.
 
 from __future__ import annotations
 
+from app.io.archive import split as archive_split
+
 from typing import Any
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -104,6 +106,8 @@ class Overlays(QObject):
         return self._images.get(key) if key else None
 
     def want(self, folder: str, name: str) -> None:
+        if archive_split(folder) is not None:
+            return  # 0.41: a name inside an archive has no shell badge to ask for
         if not self.enabled or not folder or not name:
             return
         waiting = self._pending.setdefault(folder, set())

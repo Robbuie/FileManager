@@ -812,7 +812,14 @@ class ListingModel(QAbstractTableModel):
             if entry is None or not self._folder:
                 continue
             full.append(paths.join(self._folder, entry.name))
-        data.setUrls([QUrl.fromLocalFile(path) for path in full])
+        # 0.41: names inside an archive are not files Windows can take, so
+        # a drag out of one carries only this application's own format: it
+        # can be dropped on the other pane (and extracted there) and nowhere
+        # else.
+        from app.io.archive import split as archive_split
+
+        if archive_split(self._folder or "") is None:
+            data.setUrls([QUrl.fromLocalFile(path) for path in full])
         # The same paths again in this application's own format, which is the
         # only thing a drop onto a pane accepts. See `core/drops.py`.
         data.setData(drops.DRAG_FORMAT, drops.encode(full))

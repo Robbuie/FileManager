@@ -240,6 +240,8 @@ class MainWindow(QMainWindow):
                 lambda sources, destination, move, w=widget:
                 self._on_drop_requested(w, sources, destination, move))
             widget.clipboardRequested.connect(self._on_clipboard_requested)
+            widget.extractRequested.connect(
+                lambda name, w=widget: self._on_extract_requested(w, name))
             widget.addFavoriteRequested.connect(self._add_favorite)
             widget.manageFavoritesRequested.connect(self._manage_favorites)
             widget.viewRequested.connect(self._on_view_requested)
@@ -1827,6 +1829,14 @@ class MainWindow(QMainWindow):
         if not names:
             return
         transfer = JobKind.COPY if kind == "copy" else JobKind.MOVE
+        # 0.41: said now rather than after the prompt. The engine refuses
+        # these as well; this is only so nobody fills in a dialog for nothing.
+        if transfer is JobKind.MOVE and pane.in_archive:
+            pane.say("inside an archive is read-only: F5 copies files out", "bad")
+            return
+        if other.in_archive:
+            pane.say("the other pane is inside an archive, which is read-only here", "bad")
+            return
         prompt = TransferPrompt(transfer, names, other.display(), self)
         if prompt.exec() != QueueDialog.Accepted:
             return
@@ -1880,6 +1890,15 @@ class MainWindow(QMainWindow):
             return
         pane = self._panes[self._widgets.index(widget)]
         transfer = JobKind.MOVE if move else JobKind.COPY
+        # 0.41: the same courtesy F6 gets. The engine is the rule.
+        from app.io.archive import inside as in_archive, split as archive_split
+
+        if archive_split(destination) is not None:
+            pane.say("that is inside an archive, which is read-only here", "bad")
+            return
+        if move and any(in_archive(source) for source in sources):
+            pane.say("files inside an archive can be copied out, not moved", "bad")
+            return
         names = [paths.leaf(source) for source in sources]
         prompt = TransferPrompt(transfer, names, pane.display(destination), self)
         if prompt.exec() != QueueDialog.Accepted:
@@ -1891,6 +1910,29 @@ class MainWindow(QMainWindow):
             self._transfers.copy(list(sources), target)
         else:
             self._transfers.move(list(sources), target)
+
+    def _on_extract_requested(self, widget: PaneWidget, name: str) -> None:
+        """0.41: all of an archive, into a folder named for it in the other
+        pane's folder -- through the prompt, like every other write."""
+        if self._transfers is None:
+            return
+        index = self._widgets.index(widget)
+        pane, other = self._panes[index], self._panes[1 - index]
+        row = pane.current.model.row_of(name)
+        folder = pane.archive_extract_name(row) if row >= 0 else None
+        if folder is None:
+            return
+        if other.in_archive:
+            pane.say("the other pane is inside an archive, which is read-only here", "bad")
+            return
+        prompt = TransferPrompt(JobKind.COPY, [f"{name}  ->  {folder}"],
+                                other.display(), self)
+        if prompt.exec() != QueueDialog.Accepted:
+            return
+        target = pane.as_path(prompt.destination())
+        row = pane.current.model.row_of(name)          # found again after the dialog
+        if target and row >= 0:
+            pane.extract(row, target)
 
     def _on_clipboard_requested(self, what: str) -> None:
         """Ctrl+C, Ctrl+X and Ctrl+V, in the pane that has the keyboard.

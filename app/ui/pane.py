@@ -390,6 +390,8 @@ class PaneWidget(QFrame):
     #: dropped into, and whether Ctrl made it a move. The window confirms it
     #: with the transfer prompt; nothing is written from here.
     dropRequested = Signal(list, str, bool)
+    #: 0.41: extract the named archive row into the other pane's folder.
+    extractRequested = Signal(str)
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
                  favorites=None, parent: QWidget | None = None):
@@ -1262,6 +1264,8 @@ class PaneWidget(QFrame):
     # ------------------------------------------------------------ operations
 
     def new_folder(self) -> None:
+        if self._read_only():
+            return
         name = dialogs.ask_name(
             self.window(), title="New folder",
             label=f"Create a folder in {self._pane.display()}",
@@ -1271,6 +1275,8 @@ class PaneWidget(QFrame):
             self._pane.make_folder(name)
 
     def rename_current(self) -> None:
+        if self._read_only():
+            return
         if self._pane.current.flat:
             self._pane.say("Rename works outside flat view -- Ctrl+B to leave it", "bad")
             return
@@ -1290,6 +1296,37 @@ class PaneWidget(QFrame):
         if name and name != names[0] and row >= 0:
             self._pane.rename(row, name)
 
+    def _archive_verbs(self, menu: QMenu, name: str) -> None:
+        """0.41: on an archive row -- open it as a folder, or extract it all."""
+        menu.addSeparator()
+        menu.addAction("Open as folder",
+                       lambda: self._pane.navigate(paths.join(self._pane.current.path, name)))
+        menu.addAction("Extract to other pane", lambda: self._extract(name, other=True))
+        menu.addAction("Extract here", lambda: self._extract(name, other=False))
+
+    def _extract(self, name: str, *, other: bool) -> None:
+        """Ask the window for the destination when it is the other pane, which
+        only the window knows; extract here directly."""
+        row = self._pane.current.model.row_of(name)
+        if row < 0:
+            return
+        if other:
+            self.extractRequested.emit(name)
+            return
+        folder = self._pane.archive_extract_name(row) or name
+        if self._pane.name_taken(folder):
+            self._pane.say(f"{folder} already exists here -- extract elsewhere or "
+                           "rename it first", "bad")
+            return
+        self._pane.extract(row, self._pane.current.path)
+
+    def _read_only(self) -> bool:
+        """0.41: say so, and stop, when the tab is inside an archive."""
+        if not self._pane.in_archive:
+            return False
+        self._pane.say("inside an archive is read-only: F5 copies files out", "bad")
+        return True
+
     def rename_several(self) -> None:
         """0.41, Ctrl+M: rename the marked rows by a rule, previewed first.
 
@@ -1299,6 +1336,8 @@ class PaneWidget(QFrame):
         guessed at.
         """
         pane = self._pane
+        if self._read_only():
+            return
         if pane.current.flat:
             pane.say("Rename works outside flat view -- Ctrl+B to leave it", "bad")
             return
@@ -1337,6 +1376,8 @@ class PaneWidget(QFrame):
         again, because a duplicate that merged into an existing folder would
         mix two days together.
         """
+        if self._read_only():
+            return
         if self._pane.current.flat:
             self._pane.say("Duplicate works outside flat view -- Ctrl+B to leave it", "bad")
             return
@@ -1355,6 +1396,8 @@ class PaneWidget(QFrame):
             self._pane.duplicate(row, name)
 
     def delete_selection(self, *, permanent: bool = False) -> None:
+        if self._read_only():
+            return
         names = self.selected_names()
         if not names:
             return
@@ -1449,6 +1492,17 @@ class PaneWidget(QFrame):
                 # photograph this is the entry somebody wants and Open hands the
                 # file to whatever Windows has associated with it.
                 menu.addAction("View\tF3", self.view_current)
+            if self._pane.in_archive:
+                # 0.41: inside an archive, the things that read and nothing
+                # that writes. F5 is extraction.
+                menu.addSeparator()
+                menu.addAction("Copy out to other pane\tF5",
+                               lambda: self.transferRequested.emit("copy"))
+                if self._pane.config.get("basket.enabled"):
+                    menu.addAction("Add to basket\tAlt+Ins", self.add_to_basket)
+                return
+            if entry is not None and self._pane.archive_extract_name(row) is not None:
+                self._archive_verbs(menu, entry.name)
             menu.addSeparator()
             menu.addAction("Copy\tCtrl+C",
                            lambda: self.clipboardRequested.emit("copy"))
@@ -1583,7 +1637,8 @@ class PaneWidget(QFrame):
             self._menu_commands[action] = (token, item.id)
 
     def _shell_wanted(self) -> bool:
-        return self._pane.menu is not None and not self._pane.menu.busy
+        return (self._pane.menu is not None and not self._pane.menu.busy
+                and not self._pane.in_archive)
 
     def _extended(self) -> bool:
         """Shift-right-click asks for the entries Explorer hides behind Shift."""

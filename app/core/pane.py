@@ -15,6 +15,7 @@ the wrong folder.
 from __future__ import annotations
 
 import datetime
+import re
 import time
 from typing import Callable
 
@@ -25,6 +26,8 @@ from app.core.clipboard import refusal
 from app.core.listing import ListingModel, format_size
 from app.core.remembered import Remembered
 from app.core.sorts import SortMemory
+from app.io.archive import SUFFIXES as ARCHIVE_SUFFIXES, is_archive_name
+from app.io.archive import split as archive_split
 from app.io import elevate, paths
 from app.io.protocol import Conflict, Op, Reply, Status
 
@@ -264,8 +267,46 @@ class Pane(QObject):
         self.git = git
         self.apply_rules()
 
+    @property
+    def in_archive(self) -> bool:
+        """0.41: whether the tab in front is inside an archive, by its name.
+
+        Name only, which is all this side may know: a folder that is merely
+        called `backup.zip` answers yes here and is then listed as the folder
+        it is. Used for courtesy -- saying "read-only" before a request rather
+        than after -- and never as the rule; the worker and the engine refuse
+        writes into a real archive whatever this says.
+        """
+        return archive_split(self.current.path) is not None
+
+    def archive_extract_name(self, row: int) -> str | None:
+        """The folder an archive row would be extracted into: its name without
+        the archive suffix. None for a row that is not an archive."""
+        entry = self.current.model.entry(row)
+        if entry is None or entry.is_dir or not is_archive_name(entry.name):
+            return None
+        lowered = entry.name.lower()
+        for suffix in ARCHIVE_SUFFIXES:
+            if lowered.endswith(suffix):
+                return entry.name[:-len(suffix)]
+        return None
+
+    def extract(self, row: int, destination: str) -> bool:
+        """0.41: all of an archive row, into a folder named for it under
+        `destination`, as a copy job. The trailing separator on the source is
+        what tells the engine "the contents", not "the file"."""
+        name = self.archive_extract_name(row)
+        source = self.row_path(row)
+        if name is None or source is None or self.transfers is None:
+            return False
+        self._set_status(self.current, f"extracting {paths.leaf(source)}", BUSY)
+        self.transfers.extract(source + "\\", destination, name)
+        return True
+
     def ask_git(self) -> None:
         """The folder in front has been listed: let git's marks catch up."""
+        if self.in_archive:
+            return
         if self.git is not None and not self.current.flat:
             self.git.ask(self.current.path)
 
@@ -726,6 +767,11 @@ class Pane(QObject):
             return
         if entry.is_dir:
             self.navigate(paths.join(tab.path, entry.name))
+        elif (is_archive_name(entry.name) and not tab.flat and not self.in_archive
+              and self._config.get("archives.browse")):
+            # 0.41: into the archive, like a folder. Not from inside one:
+            # archives inside archives are not opened.
+            self.navigate(paths.join(tab.path, entry.name))
         else:
             self.open(row)
 
@@ -964,6 +1010,12 @@ class Pane(QObject):
         """
         if not names or self.clipboard is None:
             return 0
+        if self.in_archive:
+            # 0.41: the clipboard hands paths to Explorer and every other
+            # program, and these are not paths any of them can open.
+            self._set_status(self.current,
+                             "files inside an archive are copied out with F5", BAD)
+            return 0
         items = self.paths_for(names)
         placed = self.clipboard.cut(items) if cut else self.clipboard.copy(items)
         if not placed:
@@ -993,6 +1045,8 @@ class Pane(QObject):
         sources, cut = self.clipboard.contents()
         destination = self.current.path
         why = refusal(sources, destination, cut=cut)
+        if not why and self.in_archive:
+            why = "inside an archive is read-only here"
         if why:
             # On this pane's own line, not the window's. A refused paste is
             # the pane answering, and the pane answers where it answers
@@ -1322,8 +1376,8 @@ class Pane(QObject):
             self._set_stale(tab, False)
             self._schedule(tab, elapsed, ok=True)
             if not quiet or changed or tab.status_state == BAD:
-                self._set_status(tab, tab.model.summary() + _walk_note(tab, reply),
-                                 IDLE)
+                self._set_status(tab, tab.model.summary() + _walk_note(tab, reply)
+                                 + _archive_status(reply), IDLE)
             if not quiet:
                 self._request_space(tab)
             if tab.reveal_name and tab is self.current:
@@ -1485,3 +1539,16 @@ def _explain(reply: Reply) -> str:
     if reply.status is Status.CANCELLED:
         return "cancelled"
     return reply.message or "failed"
+
+
+def _archive_status(reply: Reply) -> str:
+    """0.41: what a listing inside an archive adds to the summary."""
+    message = reply.message or ""
+    if not message.startswith("archive"):
+        return ""
+    note = "  ·  archive, read-only"
+    found = re.search(r"skipped=(\d+)", message)
+    if found and int(found.group(1)):
+        count = int(found.group(1))
+        note += f"  ·  {count} unusable name{'s' if count != 1 else ''} left out"
+    return note

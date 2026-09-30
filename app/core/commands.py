@@ -209,6 +209,16 @@ class Launch:
 
 # --------------------------------------------------------------- the defaults
 
+#: 0.40.1. The two compare rows start File Compare first -- the family's own
+#: compare tool, which takes the same `%C` and `%P %T` Beyond Compare does --
+#: and fall back to Beyond Compare, then WinMerge, on a machine without it.
+COMPARE_FALLBACKS = ("BCompare.exe", "WinMergeU.exe")
+
+#: The compare rows as every version before 0.40.1 shipped them. A saved table
+#: still holding exactly this is the untouched default and is moved on; see
+#: `from_config`.
+_OLD_COMPARE = ("BCompare.exe", ("WinMergeU.exe",))
+
 #: The table a machine that has never been configured starts with.
 #:
 #: Four of these are the wish list's own words -- a terminal on F9, an editor on
@@ -247,16 +257,16 @@ DEFAULTS: tuple[Command, ...] = (
     Command(
         id="compare",
         name="Compare the two panes",
-        program="BCompare.exe",
-        alternatives=("WinMergeU.exe",),
+        program="FileCompare.exe",
+        alternatives=COMPARE_FALLBACKS,
         arguments="%P %T",
         shortcut="Ctrl+F2",
     ),
     Command(
         id="compare-files",
         name="Compare the marked files",
-        program="BCompare.exe",
-        alternatives=("WinMergeU.exe",),
+        program="FileCompare.exe",
+        alternatives=COMPARE_FALLBACKS,
         arguments="%C",
         shortcut="Alt+F2",
     ),
@@ -559,10 +569,18 @@ def from_config(value: Any) -> tuple[Command, ...]:
         alternatives = entry.get("alternatives") or ()
         if isinstance(alternatives, str):
             alternatives = (alternatives,)
+        program = str(entry.get("program", "") or "")
+        if identity in ("compare", "compare-files") and \
+                (program, tuple(str(a) for a in alternatives)) == _OLD_COMPARE:
+            # 0.40.1: the shipped compare row, saved into the settings the
+            # first time the table was written. Moved to File Compare first
+            # for the same reason as the %S template above; a row somebody
+            # pointed at a program of their own is left alone.
+            program, alternatives = "FileCompare.exe", COMPARE_FALLBACKS
         commands.append(Command(
             id=identity,
             name=name,
-            program=str(entry.get("program", "") or ""),
+            program=program,
             arguments=arguments,
             working=str(entry.get("working", "") or ""),
             shortcut=normalise_shortcut(str(entry.get("shortcut", "") or "")),

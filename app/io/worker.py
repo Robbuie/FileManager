@@ -32,7 +32,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
-from app.io import decode, elevate, gdi, gitstatus, holders, paths
+from app.io import archive, decode, elevate, gdi, gitstatus, holders, paths
 from app.io.protocol import (
     BATCH_SIZE,
     WALK_HEARTBEAT,
@@ -140,7 +140,46 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
             outbox.put(Reply(request.id, Status.ERROR, message=_describe(exc)))
 
 
+#: 0.41: what may not happen inside an archive, which is read-only here.
+_ARCHIVE_WRITES = frozenset({Op.MKDIR, Op.RENAME, Op.RENAME_MANY, Op.DELETE})
+#: Reads that ask Windows about a real file, which a name inside an archive is
+#: not. Answered with a plain refusal; the callers already treat a failure as
+#: "no badge", "no icon", "no marks".
+_ARCHIVE_UNKNOWN = frozenset({Op.OVERLAY, Op.FILE_ICON, Op.GIT})
+#: Reads about the place rather than the file, answered for the folder the
+#: archive is in: how much room there is, where a terminal opens.
+_ARCHIVE_HOST = frozenset({Op.FREE_SPACE, Op.RUN})
+
+
+def _in_archive(path: str) -> tuple[str, str] | None:
+    """`(archive, inner)` when `path` is inside an archive file, else None.
+
+    Name first, then one `isfile` -- a folder that is merely called
+    `backup.zip` is a folder, and is listed as one.
+    """
+    found = archive.split(path)
+    if found is None or not archive.is_archive_file(found[0]):
+        return None
+    return found
+
+
 def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:
+    if request.op in _ARCHIVE_WRITES or request.op in _ARCHIVE_UNKNOWN \
+            or request.op in _ARCHIVE_HOST or request.op in _ARCHIVE_READS:
+        found = _in_archive(request.path)
+        if found is not None:
+            if request.op in _ARCHIVE_WRITES:
+                outbox.put(Reply(request.id, Status.ERROR, message=archive.READ_ONLY))
+                return
+            if request.op in _ARCHIVE_UNKNOWN:
+                outbox.put(Reply(request.id, Status.ERROR,
+                                 message="not available inside an archive"))
+                return
+            if request.op in _ARCHIVE_HOST:
+                request = replace(request, path=os.path.dirname(found[0]) or found[0])
+            else:
+                _ARCHIVE_READS[request.op](request, outbox, control, cancelled, *found)
+                return
     if request.op is Op.LIST:
         _list(request, outbox, control, cancelled)
     elif request.op is Op.STAT:
@@ -1769,3 +1808,212 @@ def _describe(exc: BaseException) -> str:
     detail = f" (winerror {winerror})" if winerror else ""
     # 0.37: a locked file says who has it. Asked only now, after the failure.
     return f"{type(exc).__name__}: {exc}{detail}{holders.describe(exc)}"
+
+
+# --------------------------------------------------------------------------
+# 0.41: archives. The reads that understand them, dispatched from `_handle`
+# with the archive and the part inside it already split out.
+# --------------------------------------------------------------------------
+
+#: The largest member extracted to draw one cell of the thumbnail grid. The
+#: preview pane and the viewer use `decode.MAX_DECODE_BYTES`, as for any file.
+ARCHIVE_THUMB_BYTES = 32 * 1024 * 1024
+
+
+def _archive_index(request: Request, outbox: Any, found: tuple[str, str],
+                   deadline: float):
+    """The archive's index, or None after replying with why there is none."""
+    try:
+        return archive.index_for(found[0], deadline)
+    except archive.BadArchive as exc:
+        outbox.put(Reply(request.id, Status.ERROR, message=str(exc)))
+    except TimeoutError as exc:
+        outbox.put(Reply(request.id, Status.TIMEOUT, message=str(exc)))
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+    return None
+
+
+def _archive_note(index) -> str:
+    note = f"archive {index.kind}"
+    if index.skipped:
+        note += f" skipped={index.skipped}"
+    return note
+
+
+def _archive_list(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                  arc: str, inner: str) -> None:
+    index = _archive_index(request, outbox, (arc, inner), time.monotonic() + request.timeout)
+    if index is None:
+        return
+    rows = index.listing(inner)
+    if rows is None:
+        outbox.put(Reply(request.id, Status.GONE,
+                         message=f"{inner} is not a folder in {os.path.basename(arc)}"))
+        return
+    seq = 0
+    for start in range(0, len(rows), BATCH_SIZE):
+        chunk = rows[start:start + BATCH_SIZE]
+        if start + BATCH_SIZE < len(rows):
+            outbox.put(Reply(request.id, Status.PARTIAL, payload=chunk, seq=seq))
+            seq += 1
+        else:
+            outbox.put(Reply(request.id, Status.OK, payload=chunk, seq=seq,
+                             message=_archive_note(index)))
+            return
+    outbox.put(Reply(request.id, Status.OK, payload=[], seq=seq,
+                     message=_archive_note(index)))
+
+
+def _archive_folders(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                     arc: str, inner: str) -> None:
+    limit = max(1, int(request.args.get("limit", FOLDER_LIMIT)))
+    index = _archive_index(request, outbox, (arc, inner), time.monotonic() + request.timeout)
+    if index is None:
+        return
+    rows = index.listing(inner) or []
+    names = sorted((row.name for row in rows if row.is_dir), key=str.lower)
+    outbox.put(Reply(request.id, Status.OK, payload={
+        "names": names[:limit], "more": len(names) > limit,
+    }))
+
+
+def _archive_size(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                  arc: str, inner: str) -> None:
+    index = _archive_index(request, outbox, (arc, inner), time.monotonic() + request.timeout)
+    if index is None:
+        return
+    total, files, folders = index.size_under(inner)
+    outbox.put(Reply(request.id, Status.OK, payload={
+        "bytes": total, "files": files, "folders": folders,
+    }))
+
+
+def _archive_walk(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                  arc: str, inner: str) -> None:
+    """Flat view, and search, inside an archive: `_walk`'s contract, from the index."""
+    limit = max(1, int(request.args.get("limit", 50_000)))
+    with_folders = bool(request.args.get("folders"))
+    index = _archive_index(request, outbox, (arc, inner), time.monotonic() + request.timeout)
+    if index is None:
+        return
+    if index.listing(inner) is None:
+        outbox.put(Reply(request.id, Status.GONE,
+                         message=f"{inner} is not a folder in {os.path.basename(arc)}"))
+        return
+    prefix = inner.strip("\\")
+    batch: list[Entry] = []
+    seq = 0
+    count = 0
+    matcher = _walk_matcher(request)
+    for path, entry in index.files_under(inner):
+        relative = path[len(prefix):].lstrip("\\") if prefix else path
+        if entry.is_dir and not with_folders:
+            continue
+        if matcher is not None and not matcher(relative, entry, None):
+            continue
+        batch.append(replace(entry, name=relative))
+        count += 1
+        if count >= limit:
+            outbox.put(Reply(request.id, Status.OK, payload=batch, seq=seq,
+                             message="limit skipped=0"))
+            return
+        if len(batch) >= BATCH_SIZE:
+            outbox.put(Reply(request.id, Status.PARTIAL, payload=batch, seq=seq))
+            seq += 1
+            batch = []
+    outbox.put(Reply(request.id, Status.OK, payload=batch, seq=seq,
+                     message="skipped=0"))
+
+
+def _archive_temp(request: Request, outbox: Any, arc: str, inner: str,
+                  limit: int | None) -> str | None:
+    try:
+        return archive.temp_copy(arc, inner, limit=limit)
+    except ValueError as exc:
+        outbox.put(Reply(request.id, Status.OK, payload=Preview(
+            form=PreviewForm.NONE, note=str(exc))))
+    except archive.BadArchive as exc:
+        outbox.put(Reply(request.id, Status.ERROR, message=str(exc)))
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+    return None
+
+
+def _archive_preview(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                     arc: str, inner: str) -> None:
+    copy = _archive_temp(request, outbox, arc, inner, decode.MAX_DECODE_BYTES)
+    if copy is not None:
+        _preview(replace(request, path=copy), outbox)
+
+
+def _archive_open(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                  arc: str, inner: str) -> None:
+    """Open a member in its program, from a read-only temp copy."""
+    try:
+        copy = archive.temp_copy(arc, inner)
+    except (OSError, archive.BadArchive) as exc:
+        outbox.put(Reply(request.id, Status.ERROR, message=_describe(exc)))
+        return
+    _open(replace(request, path=copy), outbox)
+
+
+def _archive_thumbnails(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                        arc: str, inner: str) -> None:
+    names = [str(name) for name in (request.args.get("names") or [])]
+    size = max(16, int(request.args.get("size") or 128))
+    deadline = time.monotonic() + request.timeout
+    rows: dict[str, str] = {}
+    images: dict[str, bytes] = {}
+    for name in names:
+        if time.monotonic() > deadline:
+            break
+        if any(ch in name for ch in _SEPARATORS):
+            continue
+        if preview_family(name) not in PICTURE_FAMILIES:
+            continue
+        member = f"{inner}\\{name}" if inner else name
+        try:
+            copy = archive.temp_copy(arc, member, limit=ARCHIVE_THUMB_BYTES)
+            picture = decode.thumbnail(copy, size, deadline=deadline, allow_shell=False)
+        except Exception:  # noqa: BLE001 - one unreadable member is one plain cell
+            continue
+        if not picture:
+            continue
+        key = hashlib.sha1(picture).hexdigest()[:16]
+        rows[name] = key
+        images.setdefault(key, picture)
+    outbox.put(Reply(request.id, Status.OK,
+                     payload={"size": size, "rows": rows, "images": images}))
+
+
+def _archive_stat(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                  arc: str, inner: str) -> None:
+    index = _archive_index(request, outbox, (arc, inner), time.monotonic() + request.timeout)
+    if index is None:
+        return
+    if not inner:
+        _stat(replace(request, path=arc), outbox)
+        return
+    entry = index.entry(inner)
+    if entry is None:
+        outbox.put(Reply(request.id, Status.GONE, message=f"{inner} is not in the archive"))
+        return
+    outbox.put(Reply(request.id, Status.OK, payload=entry))
+
+
+_ARCHIVE_READS = {
+    Op.LIST: _archive_list,
+    Op.FOLDERS: _archive_folders,
+    Op.DIR_SIZE: _archive_size,
+    Op.WALK: _archive_walk,
+    Op.PREVIEW: _archive_preview,
+    Op.THUMBNAIL: _archive_thumbnails,
+    Op.OPEN: _archive_open,
+    Op.STAT: _archive_stat,
+}
+
+
+def _walk_matcher(request: Request):
+    """What a walk keeps: None for everything. 0.42's search fills this in."""
+    return None

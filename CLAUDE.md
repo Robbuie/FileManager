@@ -598,6 +598,21 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   the current one is closed, so a start arriving in between never finds no
   pipe and opens a second window. Explorer's command line splits `"C:\"` into
   `C:"`; `clean_folder` is why a drive right-clicked opens that drive.
+- **An archive is a folder only for reading.** Since 0.41 a path such as
+  `S:\Jobs\export.zip\HMI\a.mer` is inside an archive, found by name
+  (`app/io/archive.py`, `split`) and confirmed with one `isfile` in the worker
+  -- a folder called `backup.zip` stays a folder. The worker answers LIST,
+  FOLDERS, DIR_SIZE, WALK, PREVIEW, THUMBNAIL, OPEN and STAT from the archive's
+  index (read once, cached per process by path, size and mtime), refuses
+  MKDIR, RENAME, RENAME_MANY and DELETE, and answers FREE_SPACE and RUN for
+  the folder the archive is in. The engine copies *out* of one as extraction
+  (`Item.member`, still written beside and renamed onto the target) and
+  refuses every move out and every write in. Three rules to keep: **a member
+  name that is absolute, has a drive or a `..` is never indexed**, because the
+  engine joins these names onto a real destination; **`a.zip` is the file and
+  `a.zip\` is its contents** (`archive.inside`), which is how F5 on the zip
+  row still copies the zip; and the UI's read-only refusals are courtesy only
+  -- `Pane.in_archive` is by name, and the worker and the engine are the rule.
 - **Rename several is a plan, then one request.** `core/renamer.py` decides
   every new name and refuses the bad ones before anything runs; `plan` sends a
   name that another row is about to take through a temporary name first; and
@@ -837,8 +852,9 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
 2. Dual pane, tabs, navigation.
 3. The copy/move engine with its queue.
 
-Those three beat the current setup on their own. Multi-rename, archives (bundled
-7-Zip binary), compare and sync, and preview panes bolt on cleanly afterwards —
+Those three beat the current setup on their own. Multi-rename, archives (zip and
+tar from the standard library since 0.41; 7-Zip would be a bundled binary),
+compare and sync, and preview panes bolt on cleanly afterwards —
 and are out of scope until step 3 is solid.
 
 ## Packaging and releasing

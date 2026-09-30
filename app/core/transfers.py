@@ -362,6 +362,12 @@ class TransferQueue(QObject):
         """
         return self._start(JobKind.COPY, [source], folder, rename=name)
 
+    def extract(self, source: str, destination: str, name: str) -> int:
+        """0.41: all of an archive into `destination\\name`. `source` ends in a
+        separator, which is how the engine knows to read the archive rather
+        than copy the file; the rename is what makes the folder."""
+        return self._start(JobKind.COPY, [source], destination, rename=name)
+
     def recycle(self, sources: Iterable[str]) -> int:
         """To the Recycle Bin. No destination: the shell knows where that is."""
         return self._start(JobKind.RECYCLE, sources, "")
