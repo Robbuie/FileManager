@@ -327,6 +327,7 @@ Ctrl+Alt+1 .. Ctrl+Alt+9  open a saved workspace (0.38)
 Ctrl+Alt+C  copy the path under the cursor as UNC (0.40)
 Ctrl+M  rename the marked rows by a rule, previewed (0.40)
 Alt+F7  search, and Find duplicates beside it on the Tools menu (0.42)
+Ctrl+Z  undo the last rename, new folder, copy or move (0.44)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
@@ -638,6 +639,13 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   connection worked). It must never reach the settings, a status line, the
   diagnostics ring (`core/diagnostics.py`, which also reports the user's own
   folders and labels by count only) or a log.
+- **Undo only what this application certainly made.** Since 0.44
+  `core/undo.py` records renames, new folders and transfer jobs, and
+  `for_job` refuses any job that skipped, failed, was cancelled, met a
+  conflict (`JobState.conflicts`) or ran under a rule other than ask --
+  after any of those, the names at the destination are not all copies made
+  here, and undoing a copy recycles them. Every undo is an ordinary operation
+  behind a confirmation, and jobs an undo starts are not recorded again.
 - **Rename several is a plan, then one request.** `core/renamer.py` decides
   every new name and refuses the bad ones before anything runs; `plan` sends a
   name that another row is about to take through a temporary name first; and

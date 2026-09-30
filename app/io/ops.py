@@ -412,6 +412,9 @@ class Runner:
             self._emit(job.id, Progress.DONE, {"failed": len(job.sources)},
                        message=archive.READ_ONLY)
             return
+        if job.kind in (JobKind.SPLIT, JobKind.JOIN):
+            self._split_or_join(job)
+            return
         if job.kind is JobKind.RECYCLE:
             self._recycle(job)
             return
@@ -1038,6 +1041,81 @@ class Runner:
             self._checkpoint(job)
             time.sleep(min(0.1, max(0.0, until - time.monotonic())))
 
+    # ------------------------------------------------------ 0.44 split, join
+
+    def _split_or_join(self, job: Job) -> None:
+        """One file into parts, or parts into one file.
+
+        Both keep the copy's two promises: each output is written beside its
+        name and renamed onto it, so a cancel leaves no truncated part or file
+        wearing a real name; and nothing already there is overwritten -- a
+        split whose part names are taken, or a join whose file exists, is
+        refused before anything is written, with the name that is in the way.
+        """
+        totals = Totals()
+        try:
+            if job.kind is JobKind.SPLIT:
+                plan, problem = _split_plan(job)
+            else:
+                plan, problem = _join_plan(job)
+            if problem:
+                totals.failed += 1
+                self._emit(job.id, Progress.FAILED_ITEM,
+                           {"name": _leaf(job.sources[0]) if job.sources else ""},
+                           message=problem)
+            else:
+                total = sum(size for _path, _offset, size, _target in plan)
+                outputs = sorted({target for *_rest, target in plan})
+                self._emit(job.id, Progress.SCANNED, {"files": len(outputs), "bytes": total})
+                self._write_plan(job, plan, totals, total)
+        except _Cancelled:
+            totals.cancelled = True
+            self.cancelled.discard(job.id)
+        except OSError as exc:
+            totals.failed += 1
+            self._emit(job.id, Progress.FAILED_ITEM, {"name": ""}, message=_describe(exc))
+        self._emit(job.id, Progress.DONE, {
+            "copied": totals.copied, "skipped": 0, "failed": totals.failed,
+            "bytes": totals.bytes, "cancelled": totals.cancelled,
+        })
+
+    def _write_plan(self, job: Job, plan, totals: Totals, total: int) -> None:
+        """`plan` is (source, offset, length, target) pieces, in order; each
+        target is written from its pieces to a partial and then renamed."""
+        by_target: dict[str, list] = {}
+        order: list[str] = []
+        for piece in plan:
+            if piece[3] not in by_target:
+                order.append(piece[3])
+            by_target.setdefault(piece[3], []).append(piece)
+        for target in order:
+            partial = _partial_name(target)
+            name = os.path.basename(target)
+            written = 0
+            try:
+                with open(paths.api(partial), "xb") as sink:
+                    for source, offset, length, _target in by_target[target]:
+                        with open(paths.api(source), "rb") as handle:
+                            handle.seek(offset)
+                            left = length
+                            while left > 0:
+                                self._checkpoint(job)
+                                block = handle.read(min(CHUNK, left))
+                                if not block:
+                                    raise OSError(f"{os.path.basename(source)} ended early")
+                                sink.write(block)
+                                left -= len(block)
+                                written += len(block)
+                                totals.bytes += len(block)
+                                self._tick(job, name, written, written + left,
+                                           totals.bytes, total)
+                os.replace(paths.api(partial), paths.api(target))
+            except BaseException:
+                _discard(partial)
+                raise
+            totals.copied += 1
+            self._tick(job, name, written, written, totals.bytes, total, force=True)
+
     def _tick(self, job: Job, name: str, item_done: int, item_total: int,
               done: int, total: int, *, force: bool = False) -> None:
         now = time.monotonic()
@@ -1083,10 +1161,10 @@ class Transfers:
 
     def submit(self, kind: JobKind, sources: Iterable[str], destination: str = "", *,
                conflict: Conflict = Conflict.ASK, rename: str = "",
-               into: Iterable[str] = ()) -> int:
+               into: Iterable[str] = (), part_size: int = 0) -> int:
         job = Job(id=next(self._ids), kind=kind, sources=tuple(sources),
                   destination=destination, conflict=conflict, rename=rename,
-                  into=tuple(into))
+                  into=tuple(into), part_size=int(part_size))
         with self._lock:
             self._ensure()
             self._inbox.put(("enqueue", job))
@@ -1259,6 +1337,55 @@ def _target_name(job: Job, source: str) -> str:
     so its last part is found with both separators in mind.
     """
     return job.rename or _leaf(source)
+
+
+def _split_plan(job: Job):
+    """The pieces of a split, or why it cannot run."""
+    if len(job.sources) != 1 or job.part_size <= 0:
+        return [], "a split is one file and a part size"
+    source = job.sources[0]
+    if os.path.isdir(paths.api(source)):
+        return [], "folders are not split -- pack them into a zip first"
+    size = os.path.getsize(paths.api(source))
+    if size <= job.part_size:
+        return [], "the file is no larger than one part"
+    count = -(-size // job.part_size)
+    width = max(3, len(str(count)))
+    name = _leaf(source)
+    plan = []
+    for index in range(count):
+        target = os.path.join(job.destination, f"{name}.{index + 1:0{width}d}")
+        if os.path.lexists(paths.api(target)):
+            return [], f"{os.path.basename(target)} is already there"
+        offset = index * job.part_size
+        plan.append((source, offset, min(job.part_size, size - offset), target))
+    return plan, ""
+
+
+def _join_plan(job: Job):
+    """The pieces of a join: every numbered part after the first one given,
+    in order, until one is missing."""
+    if len(job.sources) != 1:
+        return [], "a join starts from one part"
+    first = job.sources[0]
+    stem, dot, number = first.rpartition(".")
+    if not dot or not number.isdigit() or int(number) != 1:
+        return [], "start from the first part, the one ending in .001"
+    width = len(number)
+    parts = []
+    index = 1
+    while True:
+        candidate = f"{stem}.{index:0{width}d}"
+        if not os.path.isfile(paths.api(candidate)):
+            break
+        parts.append(candidate)
+        index += 1
+    if len(parts) < 2:
+        return [], "there is only one part"
+    target = os.path.join(job.destination, job.rename or _leaf(stem))
+    if os.path.lexists(paths.api(target)):
+        return [], f"{os.path.basename(target)} is already there"
+    return [(part, 0, os.path.getsize(paths.api(part)), target) for part in parts], ""
 
 
 def _leaf(path: str) -> str:

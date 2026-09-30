@@ -386,6 +386,8 @@ class PaneWidget(QFrame):
     #: keystroke because the pane is where a key is safe to act on; what to do
     #: with the id is the window's business.
     commandRequested = Signal(str)
+    #: 0.44: Ctrl+Z, past the guard that leaves it to the path bar and filter.
+    undoRequested = Signal()
     #: Rows dropped onto this pane: their full paths, the folder they were
     #: dropped into, and whether Ctrl made it a move. The window confirms it
     #: with the transfer prompt; nothing is written from here.
@@ -1884,6 +1886,9 @@ class PaneWidget(QFrame):
                 return
             if key == Qt.Key_V:
                 self.clipboardRequested.emit("paste")
+                return
+            if key == Qt.Key_Z:
+                self.undoRequested.emit()
                 return
 
         # The external commands, before the built-in function keys and after

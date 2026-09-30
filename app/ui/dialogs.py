@@ -819,6 +819,44 @@ def confirm_delete(parent: QWidget, *, names: list[str], folder: str,
     return dialog.exec() == QDialog.Accepted
 
 
+class Confirm(Dialog):
+    """0.44: a plain question with the action on the button -- "Move back",
+    not "OK" -- for undo, whose forward operations each had a dialog too."""
+
+    def __init__(self, parent: QWidget | None, *, title: str, text: str, action: str,
+                 names: list[str] | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setMinimumWidth(440)
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+        headline = QLabel(text)
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
+        if names:
+            listing = QListWidget()
+            listing.setSelectionMode(QListWidget.NoSelection)
+            listing.setFocusPolicy(Qt.NoFocus)
+            listing.addItems(names[:NAMES_SHOWN])
+            if len(names) > NAMES_SHOWN:
+                listing.addItem(f"and {len(names) - NAMES_SHOWN:,} more")
+            row = listing.sizeHintForRow(0) if listing.count() else 18
+            listing.setFixedHeight(listing.count() * row + 8)
+            layout.addWidget(listing)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText(action)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+
+def confirm(parent: QWidget, *, title: str, text: str, action: str,
+            names: list[str] | None = None) -> bool:
+    return Confirm(parent, title=title, text=text, action=action,
+                   names=names).exec() == QDialog.Accepted
+
+
 def confirm_stop(parent: QWidget, names: list[str]) -> bool:
     """True when the user is willing to lose what is still running."""
     return StopConfirm(parent, names=names).exec() == QDialog.Accepted

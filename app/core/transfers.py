@@ -54,6 +54,8 @@ VERBS: dict[JobKind, tuple[str, str]] = {
     JobKind.MOVE: ("Moving", "Move"),
     JobKind.RECYCLE: ("Recycling", "Recycle"),
     JobKind.ERASE: ("Erasing", "Erase"),
+    JobKind.SPLIT: ("Splitting", "Split"),
+    JobKind.JOIN: ("Joining", "Join"),
 }
 
 
@@ -118,6 +120,12 @@ class JobState:
     #: to be worth a notification.
     started_at: float = 0.0
     ended_at: float = 0.0
+    #: 0.44: what undo needs to know it is safe -- the rule for names already
+    #: taken, how many times one was met, and where each source was going.
+    conflict: str = "ask"
+    conflicts: int = 0
+    rename: str = ""
+    into: tuple[str, ...] = ()
 
     @property
     def speed(self) -> float:
@@ -352,6 +360,12 @@ class TransferQueue(QObject):
         return self._start(JobKind.COPY, sources, destination,
                            conflict=conflict, into=tuple(into))
 
+    def move_into(self, sources: Iterable[str], destination: str,
+                  into: Iterable[str]) -> int:
+        """0.44: a move whose sources each go to their own folder -- undo of a
+        move, putting each item back where it came from."""
+        return self._start(JobKind.MOVE, sources, destination, into=tuple(into))
+
     def duplicate(self, source: str, folder: str, name: str) -> int:
         """A copy of one item beside itself, under a new name.
 
@@ -367,6 +381,14 @@ class TransferQueue(QObject):
         separator, which is how the engine knows to read the archive rather
         than copy the file; the rename is what makes the folder."""
         return self._start(JobKind.COPY, [source], destination, rename=name)
+
+    def split(self, source: str, destination: str, part_size: int) -> int:
+        """0.44: one file into numbered parts in `destination`."""
+        return self._start(JobKind.SPLIT, [source], destination, part_size=part_size)
+
+    def join(self, first_part: str, destination: str, name: str = "") -> int:
+        """0.44: `name.001` and the parts after it, back into one file."""
+        return self._start(JobKind.JOIN, [first_part], destination, rename=name)
 
     def recycle(self, sources: Iterable[str]) -> int:
         """To the Recycle Bin. No destination: the shell knows where that is."""
@@ -588,7 +610,7 @@ class TransferQueue(QObject):
 
     def _start(self, kind: JobKind, sources: Iterable[str], destination: str, *,
                conflict: Conflict = Conflict.ASK, rename: str = "",
-               into: Iterable[str] = ()) -> int:
+               into: Iterable[str] = (), part_size: int = 0) -> int:
         """Start a job. `conflict` is the rule the process applies without
         asking; `ASK` is the default and the only one that stops.
 
@@ -603,11 +625,15 @@ class TransferQueue(QObject):
         extra = {"rename": rename} if rename else {}
         if into:
             extra["into"] = tuple(into)
+        if part_size:
+            extra["part_size"] = int(part_size)
         job_id = self._transfers.submit(kind, sources, destination,
                                         conflict=conflict, **extra)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
                                      sources=sources, files=len(sources),
-                                     total=len(sources) if kind.removes else 0)
+                                     total=len(sources) if kind.removes else 0,
+                                     conflict=Conflict(conflict).value, rename=rename,
+                                     into=tuple(into))
         self.order.append(job_id)
         self.changed.emit()
         return job_id
@@ -668,6 +694,7 @@ class TransferQueue(QObject):
             if event.payload.get("total"):
                 job.total = max(job.total, int(event.payload["total"]))
         elif event.kind is Progress.CONFLICT:
+            job.conflicts += 1
             job.state = "waiting"
             self.changed.emit()
             self.conflict.emit(job.id, dict(event.payload))

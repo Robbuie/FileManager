@@ -154,6 +154,14 @@ class MainWindow(QMainWindow):
         for side, pane in (("left", left), ("right", right)):
             pane.statusChanged.connect(
                 lambda text, state, s=side: self._events.add(s, text) if state == "bad" else None)
+        # 0.44: undo, for both panes and the queue.
+        from app.core.undo import UndoStack
+        self._undo = UndoStack(self)
+        #: Jobs started by an undo, which are not themselves recorded -- an
+        #: undo that could be undone would be a redo, and there is none.
+        self._undo_jobs: set[int] = set()
+        for pane in (left, right):
+            pane.undoable.connect(self._undo.push)
         #: 0.43: set once settings have been restored, so closing does not
         #: write the old panes' tabs over the restored ones.
         self._restored = False
@@ -253,6 +261,7 @@ class MainWindow(QMainWindow):
                 lambda sources, destination, move, w=widget:
                 self._on_drop_requested(w, sources, destination, move))
             widget.clipboardRequested.connect(self._on_clipboard_requested)
+            widget.undoRequested.connect(self._undo_last)
             widget.extractRequested.connect(
                 lambda name, w=widget: self._on_extract_requested(w, name))
             widget.addFavoriteRequested.connect(self._add_favorite)
@@ -454,6 +463,10 @@ class MainWindow(QMainWindow):
         self._hint(files, "Rename\tF2", lambda: self._current_widget().rename_current())
         self._action(files, "Rename several...", "Ctrl+M",
                      lambda: self._current_widget().rename_several())
+        self._undo_action = self._hint(files, "Undo\tCtrl+Z", self._undo_last)
+        self._undo_action.setEnabled(False)
+        self._undo.changed.connect(self._sync_undo)
+        files.addSeparator()
         self._hint(files, "Checksums...", lambda: self._current_widget().checksums())
         self._hint(files, "Attributes and dates...",
                    lambda: self._current_widget().attributes())
@@ -887,6 +900,14 @@ class MainWindow(QMainWindow):
             "nested as the folders are, coloured by the kind of file.")
         self._map_action.triggered.connect(self._open_map)
         self._map_action.setEnabled(self._folder_map is not None)
+        self._split_action = QAction("Split file...", self)
+        self._split_action.setToolTip("The file under the cursor into numbered parts "
+                                      "(.001, .002 ...) in the other pane's folder.")
+        self._split_action.triggered.connect(lambda: self._split_or_join(joining=False))
+        self._join_action = QAction("Join files...", self)
+        self._join_action.setToolTip("Put a file split into .001, .002 ... back together: "
+                                     "run it on the .001 part.")
+        self._join_action.triggered.connect(lambda: self._split_or_join(joining=True))
         self._edit_commands_action = QAction("Commands", self)
         self._edit_commands_action.setToolTip(
             "The programs on the Tools menu and the keys that reach them.")
@@ -1233,6 +1254,8 @@ class MainWindow(QMainWindow):
         menu.addAction(self._search_action)
         menu.addAction(self._duplicates_action)
         menu.addAction(self._map_action)
+        menu.addAction(self._split_action)
+        menu.addAction(self._join_action)
         menu.addSeparator()
         menu.addAction(self._compare_action)
         menu.addAction(self._sync_action)
@@ -2003,6 +2026,91 @@ class MainWindow(QMainWindow):
         if target and pane.search(target, spec, duplicates=dup):
             self._current_widget().focus_listing()
 
+    def _split_or_join(self, *, joining: bool) -> None:
+        """0.44: the file under the cursor, into parts or from them, as a job."""
+        from app.ui.split import SplitDialog
+
+        pane, widget = self._current_pane(), self._current_widget()
+        other = self._panes[1 - self._active]
+        row = widget.current_row()
+        entry = pane.current.model.entry(row) if row >= 0 else None
+        if entry is None or entry.is_dir:
+            pane.say("put the cursor on a file first", "bad")
+            return
+        if joining and not entry.name.endswith((".001", ".0001")):
+            pane.say("run Join on the first part, the one ending in .001", "bad")
+            return
+        if self._transfers is None:
+            return
+        dialog = SplitDialog(self, name=entry.name, size=int(entry.size),
+                             destination=other.display(), joining=joining)
+        if dialog.exec() != SplitDialog.Accepted:
+            return
+        target = pane.as_path(dialog.destination())
+        source = pane.row_path(pane.current.model.row_of(entry.name))
+        if not target or source is None:
+            return
+        if other.in_archive and target == other.current.path:
+            pane.say("the other pane is inside an archive, which is read-only here", "bad")
+            return
+        if joining:
+            self._transfers.join(source, target)
+        else:
+            self._transfers.split(source, target, dialog.part_size())
+
+    def _sync_undo(self) -> None:
+        action = self._undo.peek()
+        self._undo_action.setText(f"Undo {action.label}\tCtrl+Z" if action else "Undo\tCtrl+Z")
+        self._undo_action.setEnabled(action is not None)
+
+    def _undo_last(self) -> None:
+        """0.44: take back the last thing done, behind a confirmation.
+
+        Every undo is an ordinary operation -- a rename plan, a recycle, a
+        move -- so it goes through the same worker or queue, and a folder that
+        changed meanwhile fails the way it would have anyway, with a reason.
+        """
+        from app.core import undo
+        from app.core.renamer import Preview, Row, plan
+
+        action = self._undo.peek()
+        pane = self._current_pane()
+        if action is None:
+            pane.say("nothing to undo", "idle")
+            return
+        if action.kind == undo.RENAME:
+            back = [(new, old) for old, new in action.moves]
+            if not dialogs.confirm(self, title="Undo", action="Rename back",
+                                   text=f"Undo the {action.label} in {action.folder}?",
+                                   names=[f"{new}  ->  {old}" for new, old in back]):
+                return
+            steps = plan(Preview(rows=[Row(new, old) for new, old in back]))
+            self._undo.pop()
+            pane.rename_many(steps, back, folder=action.folder, record=False)
+            return
+        if self._transfers is None:
+            return
+        if action.kind in (undo.MKDIR, undo.COPY):
+            targets = ([paths.join(action.folder, action.name)] if action.kind == undo.MKDIR
+                       else list(action.targets))
+            if not dialogs.confirm_delete(self, names=[undo.leaf(t) for t in targets],
+                                          folder=undo.parent(targets[0]), permanent=False):
+                return
+            self._undo.pop()
+            self._undo_jobs.add(self._transfers.recycle(targets))
+            return
+        if action.kind == undo.MOVE:
+            now = [where for _came, where in action.moves]
+            homes = [undo.parent(came) for came, _where in action.moves]
+            if not dialogs.confirm(self, title="Undo", action="Move back",
+                                   text=f"Undo the {action.label}: move "
+                                        f"{'it' if len(now) == 1 else 'them'} back to "
+                                        f"{homes[0]}{' and elsewhere' if len(set(homes)) > 1 else ''}?",
+                                   names=[undo.leaf(where) for where in now]):
+                return
+            self._undo.pop()
+            self._undo_jobs.add(self._transfers.move_into(now, homes[0], homes))
+
     def _open_map(self) -> None:
         """0.43: the folder map for the folder the active pane is in."""
         from app.ui.foldermap import FolderMapWindow
@@ -2119,6 +2227,13 @@ class MainWindow(QMainWindow):
         from -- so a delete refreshes the folder it emptied without this method
         having to know that a delete has no destination.
         """
+        # 0.44: a job that finished whole can be undone; one an undo started
+        # cannot be undone again.
+        if job.id in self._undo_jobs:
+            self._undo_jobs.discard(job.id)
+        else:
+            from app.core import undo
+            self._undo.push(undo.for_job(job))
         touched = job.folders
         for pane in self._panes:
             if pane.current.path in touched and not pane.busy:
@@ -2176,7 +2291,8 @@ class MainWindow(QMainWindow):
             self._tray_timer.setInterval(20000)
             self._tray_timer.timeout.connect(self._tray.hide)
         what = {JobKind.COPY: "Copy", JobKind.MOVE: "Move",
-                JobKind.RECYCLE: "Recycle", JobKind.ERASE: "Erase"}.get(job.kind, "Job")
+                JobKind.RECYCLE: "Recycle", JobKind.ERASE: "Erase",
+                JobKind.SPLIT: "Split", JobKind.JOIN: "Join"}.get(job.kind, "Job")
         failed = bool(job.failed or job.refused)
         title = f"{what} finished" + (" with problems" if failed else "")
         icon = QSystemTrayIcon.Warning if failed else QSystemTrayIcon.Information

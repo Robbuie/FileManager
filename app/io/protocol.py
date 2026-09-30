@@ -558,6 +558,12 @@ class JobKind(str, Enum):
     MOVE = "move"
     RECYCLE = "recycle"      # to the Recycle Bin, through the shell
     ERASE = "erase"          # permanently, item by item
+    #: 0.44: one file into numbered parts (`name.ext.001`, `.002`, ...) of
+    #: `Job.part_size` bytes in the destination, and the parts back into the
+    #: file. Queue jobs because a 4 GB file is minutes of writing, with the
+    #: same progress, cancel and write-beside-and-rename as a copy.
+    SPLIT = "split"
+    JOIN = "join"
 
     @property
     def removes(self) -> bool:
@@ -612,6 +618,8 @@ class Job:
     #: which puts everything in `destination`. The folders are ones the first
     #: run created, so the rule above still holds: nothing here invents one.
     into: tuple[str, ...] = ()
+    #: 0.44: the size of each part, for a split.
+    part_size: int = 0
 
 
 def destination_of(job: Job, source: str) -> str:

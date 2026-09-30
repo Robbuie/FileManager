@@ -25,6 +25,7 @@ from app.core import naming
 from app.core.clipboard import refusal
 from app.core.listing import Column, ListingModel, format_size
 from app.core.remembered import Remembered
+from app.core import undo
 from app.core.sorts import SortMemory
 from app.io.archive import SUFFIXES as ARCHIVE_SUFFIXES, is_archive_name
 from app.io.archive import split as archive_split
@@ -164,6 +165,8 @@ class Pane(QObject):
     #: 0.31: the tab in front started or stopped showing rows that are out of
     #: date because its share stopped answering. `current.stale` says which.
     staleChanged = Signal()
+    #: 0.44: something done here that undo can take back (`core.undo.Action`).
+    undoable = Signal(object)
 
     def __init__(self, bridge, config, side: str, icons=None, overlays=None,
                  menu=None, sizes=None, siblings=None, parent=None,
@@ -911,9 +914,11 @@ class Pane(QObject):
     def make_folder(self, name: str) -> None:
         tab = self.current
         self._set_status(tab, f"creating {name}", BUSY)
+        folder = tab.path
         self._mutate(tab, Op.MKDIR, paths.join(tab.path, name),
                      timeout=float(self._config.get("timeout.mkdir")),
-                     reveal=name, failed=f"could not create {name}")
+                     reveal=name, failed=f"could not create {name}",
+                     done=lambda: self.undoable.emit(undo.for_mkdir(folder, name)))
 
     def rename(self, row: int, name: str) -> None:
         tab = self.current
@@ -928,6 +933,7 @@ class Pane(QObject):
             # 0.38: a label is kept by path, so a rename made here takes it along.
             if self.labels is not None:
                 self.labels.moved(folder, old, folder, name)
+            self.undoable.emit(undo.for_rename(folder, [(old, name)]))
 
         self._mutate(tab, Op.RENAME, source,
                      timeout=float(self._config.get("timeout.rename")),
@@ -946,7 +952,8 @@ class Pane(QObject):
                 items.append(Item(entry.name, float(entry.mtime or 0.0), bool(entry.is_dir)))
         return items
 
-    def rename_many(self, steps: list[tuple[str, str]], moves: list[tuple[str, str]]) -> None:
+    def rename_many(self, steps: list[tuple[str, str]], moves: list[tuple[str, str]],
+                    folder: str | None = None, *, record: bool = True) -> None:
         """0.41: run a rename plan in this folder as one request.
 
         `steps` is the plan, temporary names and all; `moves` is old name to
@@ -957,7 +964,7 @@ class Pane(QObject):
         tab = self.current
         if not steps:
             return
-        folder = tab.path
+        folder = folder or tab.path
         count = len(moves)
         self._set_status(tab, f"renaming {count} item{'s' if count != 1 else ''}", BUSY)
 
@@ -970,7 +977,10 @@ class Pane(QObject):
         def handle(reply: Reply) -> None:
             if reply.status is Status.OK:
                 carry()
-                tab.reveal_name = moves[0][1] if moves else None
+                if record:
+                    self.undoable.emit(undo.for_rename(folder, list(moves)))
+                if paths.normalize(folder).lower() == tab.path.lower():
+                    tab.reveal_name = moves[0][1] if moves else None
             else:
                 payload = reply.payload or {}
                 note = "" if not payload.get("done") else (

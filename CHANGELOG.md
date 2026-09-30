@@ -5,6 +5,28 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.44.0]
+
+### Added
+- **Undo** (Ctrl+Z, and the File menu, which names what it will undo). The
+  last rename or Rename several is renamed back; a new folder, or the copies
+  a copy, paste, drop, duplicate or extraction made, go to the Recycle Bin; a
+  move is moved back to where each item came from. Each undo asks first, the
+  way the operation it reverses did, and the last twenty are kept for this
+  window. Only a copy or move that finished whole is offered -- nothing
+  skipped, failed or cancelled, and no file already at the destination --
+  because otherwise the names there are not all copies this application
+  made. A delete is undone from the Recycle Bin, as before; attribute changes
+  are not undone. Ctrl+Z in the path bar or the filter box still undoes
+  typing.
+- **Split file / Join files** (Tools menu). The file under the cursor into
+  numbered parts -- name.001, name.002 and so on, the form 7-Zip and Total
+  Commander use -- of 20 MB, 100 MB, 700 MB, 1 GB, just under 4 GB for a FAT32
+  stick, or any size, in the other pane's folder; and Join on a .001 part puts
+  them back together. Both are jobs in the queue with progress and cancel,
+  write each part beside its name before renaming it, and refuse to
+  overwrite anything already there.
+
 ## [0.43.0]
 
 ### Added
