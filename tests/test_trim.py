@@ -36,7 +36,8 @@ import trim  # noqa: E402
     "PySide6/Qt6VirtualKeyboard.dll",
     "PySide6/plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
     "PySide6/Qt6OpenGL.dll",
-    "PySide6/Qt6Network.dll",
+    "PySide6/Qt6QmlMeta.dll",
+    "PySide6/Qt6QmlWorkerScript.dll",
     "PySide6/QtNetwork.pyd",
     "PySide6/plugins/tls/qopensslbackend.dll",
     "PySide6/plugins/tls/qschannelbackend.dll",
@@ -68,6 +69,8 @@ def test_what_the_application_never_loads_is_dropped(destination):
     # and the plugin is what does the work -- which is why reading the spec's
     # exclusion list and stopping there gets this one wrong.
     ("PySide6/Qt6Pdf.dll", "pdf previews"),
+    # 0.45.1: Qt6Pdf links to it, so without it the PDF plugin cannot load.
+    ("PySide6/Qt6Network.dll", "pdf previews"),
     ("PySide6/plugins/imageformats/qpdf.dll", "pdf previews"),
     # `.svg` and `.svgz` are previewable kinds. `ui/glyphs.py` saying it needs
     # no QtSvg is about the chrome, not about what the previewer reads.

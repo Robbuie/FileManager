@@ -78,20 +78,29 @@ EXCLUDE_FILES = frozenset({
     # spec's module exclusions; this is the library they would have used.
     "pyside6/qt6opengl.dll",
 
-    # Qt's networking, which this application does not do. The one network call
-    # it makes is `app/core/updates.py`, and that is `urllib` on a thread --
-    # chosen there for reasons of its own, and the reason this is droppable.
+    # Qt's networking from Python, which this application does not do: the
+    # one network call it makes is `app/core/updates.py`, and that is `urllib`
+    # on a thread. The binding goes; **the library stays** (0.45.1). Qt6Pdf
+    # links to Qt6Network.dll, so dropping the library -- as this list did from
+    # 0.29.12 -- left the PDF image plugin unable to load, and page one of a
+    # drawing set quietly stopped previewing. The link check added in 0.39 is
+    # what caught it, on the first release built with it.
     #
     # `libcrypto-3.dll` and `libssl-3.dll` are NOT here and must not be: they
     # sit at the root of `_internal` beside `_ssl.pyd` and `_hashlib.pyd`
     # rather than in `PySide6/`, because they are *Python's* OpenSSL. They are
     # what the update check's HTTPS and its SHA-256 verification run on.
     "pyside6/qtnetwork.pyd",
-    "pyside6/qt6network.dll",
     "pyside6/plugins/tls/qcertonlybackend.dll",
     "pyside6/plugins/tls/qopensslbackend.dll",
     "pyside6/plugins/tls/qschannelbackend.dll",
     "pyside6/plugins/networkinformation/qnetworklistmanager.dll",
+
+    # 0.45.1: two more pieces of the QML runtime, which only Qt6Quick and QML
+    # plugins link to -- both already gone. The link check in build.py found
+    # them: they were being shipped with nothing able to load them.
+    "pyside6/qt6qmlmeta.dll",
+    "pyside6/qt6qmlworkerscript.dll",
 
     # 0.39: Qt's copy of OpenSSL. PyInstaller's QtNetwork hook goes looking
     # for `libssl-3-x64.dll` on the build machine's PATH and puts what it finds

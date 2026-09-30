@@ -5,6 +5,20 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.45.1]
+
+### Fixed
+- **PDF previews work again**, in the preview pane, the viewer and the
+  thumbnail grid. Qt's PDF reader needs Qt's networking library, and the
+  build had been leaving that library out since 0.29.12 -- so the PDF plugin
+  could not load, and a PDF showed as an icon instead of its first page, with
+  no error anywhere. The link check added to the build in 0.39 caught it and
+  refused the 0.45.0 build, which is why 0.45.0 was never released: this is
+  0.45.0 plus the fix, and everything from 0.39 on arrives with it. The
+  library is about 1.7 MB back in the install.
+- Two leftover pieces of the QML runtime that nothing could load are no
+  longer shipped.
+
 ## [0.45.0]
 
 ### Added
