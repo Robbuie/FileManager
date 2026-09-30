@@ -183,13 +183,15 @@ def main() -> int:
     from app.core.accent import AccentSource
     from app.core.health import ShareHealth
     from app.core.gitmarks import GitMarks
+    from app.core.foldermap import FolderMap
 
     window = MainWindow(config, left, right, volumes, transfers, updates,
                         favorites, capacity, commands, network, backdrop=backdrop,
                         ejector=ejector, sync=SyncScan(bridge, config),
                         accent_source=AccentSource(bridge, config),
                         health=ShareHealth(bridge, config),
-                        git=GitMarks(bridge, config))
+                        git=GitMarks(bridge, config),
+                        folder_map=FolderMap(bridge, config))
     window.show()
 
     if listener_handle is not None:

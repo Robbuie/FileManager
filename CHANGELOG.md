@@ -5,6 +5,44 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.42.0]
+
+### Added
+- **Search** (Tools menu, Alt+F7). Look in a folder and everything under it
+  for files by name -- wildcards, several separated by `;` or `,`, and a bare
+  word matching any part of a name -- by text inside them, by when they were
+  modified and by size. Text is found whether the file is UTF-8 or UTF-16,
+  without regard to case unless asked, or as a regular expression. Folders
+  whose names match can be included. The results open in a new tab and
+  arrive as they are found; Esc stops the search and keeps what it found.
+  They are rows like any other -- marked, copied, moved, deleted, previewed,
+  opened -- with the Location column (or the folder headings) saying where
+  each one is, and a double click on a location goes there. Leaving the
+  folder or Ctrl+B ends the search; refresh runs it again. It works inside
+  archives too. Files over 64 MB are not read for text.
+- **Find duplicates** (Tools menu, or the same dialog with *Only files with an
+  identical copy* ticked). Files of the same size are compared by their
+  contents -- the first 64 KB first, then all of it only where that
+  matches -- and only real twins are listed, largest first, so each set sits
+  together. The status line says how many sets there are and how much room
+  the extra copies take. Name, date and size limits apply; empty files are
+  left out.
+- The dialog remembers the last search's fields.
+- **Folder map** (Tools menu). Where the space under a folder has gone:
+  blocks sized by bytes, nested as the folders are, and coloured by the kind
+  of file taking most of each -- the same colours as the badges in the
+  listing, with a legend of the shares underneath. Hover for the path, size
+  and file count; click a folder to go into it and Up or Backspace to come
+  back out; double click, or Go there, to take the pane to that folder or
+  file. It is one walk of the folder, in its own worker, stopped at 250,000
+  files; closing the window stops it.
+- **Checksums** (File menu, and the right-click menu on files). SHA-256,
+  SHA-1 or MD5 of the marked files, read by the folder's worker. Paste a
+  checksum you were given and the file it matches is marked, or it says none
+  does; with two or more files it says whether they are all identical. Copy
+  puts them on the clipboard as `checksum *name` lines, the form checksum
+  tools read. Works on files inside archives and in search results.
+
 ## [0.41.0]
 
 ### Added

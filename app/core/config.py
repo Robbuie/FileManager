@@ -294,6 +294,15 @@ DEFAULTS: dict[str, Any] = {
     # 0.41: Enter on a .zip or a tar goes into it like a folder, read-only,
     # rather than handing it to Windows.
     "archives.browse": True,
+    # 0.42: the most results a search or the duplicate finder keeps -- files
+    # walked, for the duplicate finder -- and the last search, as its dialog
+    # left it.
+    "search.limit": 20000,
+    # 0.43: the most files the folder map walks before drawing what it has.
+    "map.limit": 250000,
+    # 0.43: the checksum the Checksums dialog opens on.
+    "checksum.algorithm": "sha256",
+    "search.last": {},
     # 0.41: the last rule Rename several was used with, as `renamer.Rule`'s
     # fields. Empty for the plain [N].[E].
     "rename.last": {},

@@ -1296,6 +1296,24 @@ class PaneWidget(QFrame):
         if name and name != names[0] and row >= 0:
             self._pane.rename(row, name)
 
+    def checksums(self) -> None:
+        """0.43: checksums of the marked files, or the one under the cursor."""
+        from app.ui.checksums import ChecksumDialog
+
+        model = self._pane.current.model
+        names = [name for name in self.selected_names()
+                 if (entry := model.entry(model.row_of(name))) is not None and not entry.is_dir]
+        if not names:
+            self._pane.say("checksums are of files -- mark one or more", "bad")
+            return
+        pane = self._pane
+        dialog = ChecksumDialog(
+            self.window(), names=names, algorithm=str(pane.config.get("checksum.algorithm")),
+            ask=lambda algorithm, done: pane.checksums(names, algorithm, done))
+        dialog.exec()
+        pane.config.set("checksum.algorithm", dialog.algorithm)
+        pane.cancel_request(dialog.request_id)
+
     def _archive_verbs(self, menu: QMenu, name: str) -> None:
         """0.41: on an archive row -- open it as a folder, or extract it all."""
         menu.addSeparator()
@@ -1492,6 +1510,8 @@ class PaneWidget(QFrame):
                 # photograph this is the entry somebody wants and Open hands the
                 # file to whatever Windows has associated with it.
                 menu.addAction("View\tF3", self.view_current)
+            if entry is not None and not entry.is_dir:
+                menu.addAction("Checksums...", self.checksums)
             if self._pane.in_archive:
                 # 0.41: inside an archive, the things that read and nothing
                 # that writes. F5 is extraction.
@@ -1894,7 +1914,10 @@ class PaneWidget(QFrame):
     def _header_title(self) -> str:
         shown = self._pane.display(self._pane.current.path)
         name = paths.leaf(shown) or shown
-        return f"{name}  (flat)" if self._pane.current.flat else name
+        tab = self._pane.current
+        if tab.search is not None or tab.duplicates:
+            return tab.label
+        return f"{name}  (flat)" if tab.flat else name
 
     def _fill_history(self, menu, direction: int) -> None:
         """The steps behind or ahead of this tab, nearest first."""
@@ -2038,7 +2061,9 @@ class PaneWidget(QFrame):
                 # Brackets rather than an icon for the lock. Status in this
                 # application is text and colour, and a bracketed name reads as
                 # held in place at any density without a bitmap to scale.
-                label = f"{tab.label} (flat)" if tab.flat else tab.label
+                label = (f"{tab.label} (flat)"
+                         if tab.flat and tab.search is None and not tab.duplicates
+                         else tab.label)
                 self._tabs.setTabText(index,
                                       f"[{label}]" if tab.locked else label)
                 tip = self._pane.display(tab.path)

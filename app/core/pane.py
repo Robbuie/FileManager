@@ -23,7 +23,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from app.core import naming
 from app.core.clipboard import refusal
-from app.core.listing import ListingModel, format_size
+from app.core.listing import Column, ListingModel, format_size
 from app.core.remembered import Remembered
 from app.core.sorts import SortMemory
 from app.io.archive import SUFFIXES as ARCHIVE_SUFFIXES, is_archive_name
@@ -120,9 +120,20 @@ class Tab:
         #: folder with no remembered order of its own is listed in. None until
         #: a heading is clicked: the model's own order stands.
         self.free_sort: tuple[int, int] | None = None
+        #: 0.42: a search tab is a flat view with a filter: the search's
+        #: fields as `app/io/search.py` reads them, or None. `duplicates`
+        #: makes it the duplicate finder. Both end with the flat view.
+        self.search: dict | None = None
+        self.duplicates = False
 
     @property
     def label(self) -> str:
+        if self.duplicates:
+            return f"Duplicates in {paths.leaf(self.path)}"
+        if self.search is not None:
+            what = (self.search.get("names") or "").strip() \
+                or (f'"{self.search.get("text")}"' if self.search.get("text") else "")
+            return f"Search: {what or 'everything'}"
         return paths.leaf(self.path)
 
     @property
@@ -466,7 +477,8 @@ class Pane(QObject):
         if tab.flat and target != tab.path:
             # Flat view belongs to the folder it was asked for. Going somewhere
             # else -- a location clicked, Backspace, a favourite -- is a normal
-            # listing of that place.
+            # listing of that place. A search ends the same way.
+            tab.search, tab.duplicates = None, False
             tab.flat = False
             tab.model.set_flat(False)
             self.flatChanged.emit()
@@ -536,11 +548,17 @@ class Pane(QObject):
 
         tab.started = time.monotonic()
         if tab.flat:
+            args: dict = {"limit": int(self._config.get("flat.limit"))}
+            if tab.search is not None or tab.duplicates:
+                args = {"limit": int(self._config.get("search.limit")),
+                        "search": dict(tab.search or {})}
+                if tab.duplicates:
+                    args["duplicates"] = True
             tab.request_id = self._bridge.submit(
                 Op.WALK, tab.path,
                 timeout=float(self._config.get("timeout.listing")),
                 on_reply=self._replier(tab),
-                args={"limit": int(self._config.get("flat.limit"))},
+                args=args,
             )
             return
         tab.request_id = self._bridge.submit(
@@ -573,6 +591,8 @@ class Pane(QObject):
         if on == tab.flat:
             return
         tab.flat = on
+        if not on:
+            tab.search, tab.duplicates = None, False
         tab.model.set_flat(on, grouped=self.flat_layout == "groups")
         self.flatChanged.emit()
         self.tabsChanged.emit()
@@ -591,6 +611,35 @@ class Pane(QObject):
             self.set_flat(False)
         else:
             self.navigate(target)
+
+    def search(self, folder: str, spec: dict, *, duplicates: bool = False) -> bool:
+        """0.42: a new tab listing what matches under `folder`.
+
+        A flat view with a filter, so the results are rows like any other --
+        marked, copied, deleted, previewed, opened -- and the Location column
+        (or the folder headings) says where each one is. Leaving the folder,
+        or Ctrl+B, ends it; F5-refresh runs it again. The duplicate finder is
+        the same tab laid out by size, so each set of twins sits together.
+        """
+        if len(self.tabs) >= MAX_TABS:
+            self.say("too many tabs open to start a search", BAD)
+            return False
+        tab = Tab(folder, self.icons, self.overlays, self.sizes,
+                  file_icons=self.file_icons, clipboard=self.clipboard)
+        self._apply_rules(tab)
+        tab.flat = True
+        tab.search = dict(spec)
+        tab.duplicates = bool(duplicates)
+        tab.model.set_flat(True, grouped=self.flat_layout == "groups" and not duplicates)
+        if duplicates:
+            tab.model.set_sort(int(Column.SIZE), Qt.DescendingOrder)
+        self.tabs.append(tab)
+        self.index = len(self.tabs) - 1
+        self.tabsChanged.emit()
+        self.currentChanged.emit()
+        self.flatChanged.emit()
+        self._list(tab, announce=True)
+        return True
 
     def toggle_flat(self) -> None:
         self.set_flat(not self.current.flat)
@@ -935,6 +984,36 @@ class Pane(QObject):
         timeout = float(self._config.get("timeout.rename")) + 0.5 * len(steps)
         self._bridge.submit(Op.RENAME_MANY, folder, timeout=timeout, on_reply=handle,
                             args={"steps": [list(step) for step in steps]})
+
+    def checksums(self, names: list[str], algorithm: str, on_done) -> int | None:
+        """0.43: checksums of named rows in this folder, from its worker.
+
+        `on_done(payload_or_None, message)` is called once, on this thread.
+        Returns the request id, for cancelling when the dialog is closed.
+        """
+        if not names:
+            return None
+        count = sum(1 for name in names)
+
+        def handle(reply: Reply) -> None:
+            if reply.status is Status.PARTIAL:
+                return
+            if reply.status is Status.OK:
+                on_done(reply.payload, "")
+            else:
+                on_done(None, _explain(reply))
+
+        timeout = float(self._config.get("timeout.listing"))
+        self._set_status(self.current, f"reading {count} file{'s' if count != 1 else ''} "
+                                       f"for {algorithm.upper()}", BUSY)
+        return self._bridge.submit(Op.HASH, self.current.path, timeout=timeout,
+                                   on_reply=handle,
+                                   args={"names": list(names), "algorithm": algorithm})
+
+    def cancel_request(self, request_id: int | None) -> None:
+        if request_id is not None:
+            self._bridge.cancel(request_id)
+        self._set_status(self.current, self.current.model.summary(), IDLE)
 
     def duplicate_suggestion(self, row: int, today: datetime.date | None = None) -> str | None:
         """The name a duplicate of this row is offered, or None for no row.
@@ -1351,8 +1430,11 @@ class Pane(QObject):
                 return
             tab.model.add(reply.payload or [])
             if tab.flat:
+                verb = ("finding duplicates" if tab.duplicates
+                        else "searching" if tab.search is not None else "walking")
+                noun = "found" if tab.search is not None or tab.duplicates else "files"
                 self._set_status(
-                    tab, f"walking, {tab.model.rowCount():,} files so far  ·  Esc stops",
+                    tab, f"{verb}, {tab.model.rowCount():,} {noun} so far  ·  Esc stops",
                     BUSY)
                 return
             self._set_status(tab, f"listing, {tab.model.rowCount():,} rows", BUSY)
@@ -1498,8 +1580,14 @@ def _walk_note(tab: "Tab", reply: Reply) -> str:
         return ""
     words = (reply.message or "").split()
     notes = []
+    if tab.duplicates:
+        values = dict(word.split("=", 1) for word in words if "=" in word)
+        groups, wasted = int(values.get("groups", 0) or 0), int(values.get("wasted", 0) or 0)
+        notes.append(f"{groups:,} set{'s' if groups != 1 else ''} of identical files"
+                     + (f", {format_size(wasted)} in extra copies" if wasted else ""))
     if "limit" in words:
-        notes.append("stopped at the flat view limit")
+        notes.append("stopped at the search limit" if tab.search is not None
+                     else "stopped at the flat view limit")
     for word in words:
         if word.startswith("skipped="):
             count = int(word.partition("=")[2] or 0)

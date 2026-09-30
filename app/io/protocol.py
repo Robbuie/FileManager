@@ -162,6 +162,12 @@ class Op(str, Enum):
     #: back). One request rather than one per file, because on a share each
     #: request is a round trip and a hundred files is a hundred of them.
     RENAME_MANY = "rename_many"
+    #: 0.43: checksums of `args["names"]` in the folder at `path`, with
+    #: `args["algorithm"]` one of `HASH_ALGORITHMS`. The reply is
+    #: `{"algorithm": ..., "sums": {name: hex}, "failed": {name: reason}}`.
+    #: PARTIALs carry no rows and exist only to keep the watchdog satisfied
+    #: while a large file is read.
+    HASH = "hash"
 
     #: Delete `args["names"]` from the folder at `path`, to the Recycle Bin
     #: unless `args["permanent"]`. Several names in one request rather than one
@@ -375,6 +381,9 @@ class Reply:
 
 #: The longest a WALK goes without sending anything. See `Op.WALK`.
 WALK_HEARTBEAT = 2.0
+
+#: 0.43: the checksums offered, as `hashlib` names them.
+HASH_ALGORITHMS = ("sha256", "sha1", "md5")
 
 #: Rows per streamed batch. Large enough that the queue is not the bottleneck,
 #: small enough that the first rows paint while the rest are still arriving.

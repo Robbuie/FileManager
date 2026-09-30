@@ -32,9 +32,10 @@ import time
 from dataclasses import replace
 from typing import Any
 
-from app.io import archive, decode, elevate, gdi, gitstatus, holders, paths
+from app.io import archive, decode, elevate, gdi, gitstatus, holders, paths, search
 from app.io.protocol import (
     BATCH_SIZE,
+    HASH_ALGORITHMS,
     WALK_HEARTBEAT,
     ICON_FILE,
     ICON_FOLDER,
@@ -219,6 +220,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _rename(request, outbox)
     elif request.op is Op.RENAME_MANY:
         _rename_many(request, outbox)
+    elif request.op is Op.HASH:
+        _hash(request, outbox, control, cancelled)
     elif request.op is Op.DELETE:
         _delete(request, outbox)
     elif request.op is Op.PING:
@@ -308,8 +311,19 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
     the middle of a 50,000-file folder. This is `_list`'s loop, run once per
     folder. See `Op.WALK` for the contract.
     """
+    if request.args.get("duplicates"):
+        _duplicates(request, outbox, control, cancelled)
+        return
     limit = max(1, int(request.args.get("limit", 50_000)))
     with_folders = bool(request.args.get("folders"))
+    # 0.42: a search is this walk with a filter. `keep` is None for a plain
+    # walk, which is then exactly what it was.
+    spec = search.spec_from(request.args.get("search"))
+    if spec is not None and search.check(spec):
+        outbox.put(Reply(request.id, Status.ERROR, message=search.check(spec)))
+        return
+    keep = search.matcher(spec) if spec is not None else None
+    folder_results = with_folders or bool(spec is not None and spec.folders)
     batch: list[Entry] = []
     seq = 0
     seen = 0
@@ -325,6 +339,17 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
         seq += 1
         batch = []
         last_sent = time.monotonic()
+
+    def beat() -> None:
+        """Between blocks of a file being read for its contents: a cancel
+        reaches the middle of a large file, and the watchdog hears that the
+        worker is busy rather than stuck."""
+        _drain_control(control, cancelled)
+        if request.id in cancelled:
+            raise _WalkCancelled
+        if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+            send(Status.PARTIAL)
+
 
     while stack:
         folder, relative = stack.pop()
@@ -361,7 +386,7 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                     continue
                 name = entry.name if not relative else relative + "\\" + entry.name
                 if row.is_dir:
-                    if with_folders:
+                    if folder_results and (keep is None or keep(name, row, None)):
                         if not row.is_link and _is_junction(entry):
                             row = replace(row, is_link=True)
                         batch.append(replace(row, name=name))
@@ -374,6 +399,18 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                         # UI sees. `entry.path` is already joined by the OS.
                         subfolders.append((entry.path, name))
                     continue
+                if keep is not None:
+                    try:
+                        wanted = keep(name, row, lambda p=entry.path: open(paths.api(p), "rb"),
+                                      beat)
+                    except _WalkCancelled:
+                        cancelled.discard(request.id)
+                        outbox.put(Reply(request.id, Status.CANCELLED, seq=seq))
+                        return
+                    if not wanted:
+                        if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+                            send(Status.PARTIAL)
+                        continue
                 batch.append(replace(row, name=name))
                 files += 1
                 if files >= limit:
@@ -1905,13 +1942,22 @@ def _archive_walk(request: Request, outbox: Any, control: Any, cancelled: set[in
     batch: list[Entry] = []
     seq = 0
     count = 0
+    spec = search.spec_from(request.args.get("search"))
+    if spec is not None and search.check(spec):
+        outbox.put(Reply(request.id, Status.ERROR, message=search.check(spec)))
+        return
     matcher = _walk_matcher(request)
+    folder_results = with_folders or bool(spec is not None and spec.folders)
     for path, entry in index.files_under(inner):
         relative = path[len(prefix):].lstrip("\\") if prefix else path
-        if entry.is_dir and not with_folders:
+        if entry.is_dir and not folder_results:
             continue
-        if matcher is not None and not matcher(relative, entry, None):
-            continue
+        if matcher is not None:
+            member = index.member(path)
+            opener = None if entry.is_dir or member is None else (
+                lambda m=member: archive._open_member(arc, index.kind, m))  # noqa: SLF001
+            if not matcher(relative, entry, opener):
+                continue
         batch.append(replace(entry, name=relative))
         count += 1
         if count >= limit:
@@ -2002,7 +2048,24 @@ def _archive_stat(request: Request, outbox: Any, control: Any, cancelled: set[in
     outbox.put(Reply(request.id, Status.OK, payload=entry))
 
 
+def _archive_hash(request: Request, outbox: Any, control: Any, cancelled: set[int],
+                  arc: str, inner: str) -> None:
+    """Checksums of members, read through the archive."""
+    index = _archive_index(request, outbox, (arc, inner), time.monotonic() + request.timeout)
+    if index is None:
+        return
+
+    def opener(name: str):
+        member = index.member(f"{inner}\\{name}" if inner else name)
+        if member is None or member.is_dir:
+            raise FileNotFoundError(f"{name} is not a file in the archive")
+        return archive._open_member(arc, index.kind, member)  # noqa: SLF001
+
+    _hash(request, outbox, control, cancelled, opener=opener)
+
+
 _ARCHIVE_READS = {
+    Op.HASH: _archive_hash,
     Op.LIST: _archive_list,
     Op.FOLDERS: _archive_folders,
     Op.DIR_SIZE: _archive_size,
@@ -2014,6 +2077,197 @@ _ARCHIVE_READS = {
 }
 
 
+class _WalkCancelled(Exception):
+    """Raised by a walk's heartbeat when its request has been cancelled."""
+
+
 def _walk_matcher(request: Request):
-    """What a walk keeps: None for everything. 0.42's search fills this in."""
-    return None
+    """0.42: the search filter for an archive walk, or None for everything.
+    Contents are read through the archive; see `_archive_walk`."""
+    spec = search.spec_from(request.args.get("search"))
+    return search.matcher(spec) if spec is not None else None
+
+
+def _duplicates(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:
+    """0.42: the files under a folder that have an identical twin somewhere
+    under it, as a walk's rows -- `Op.WALK` with `args["duplicates"]`.
+
+    Three passes, each cheaper to fail than the next. Every file is listed
+    (the search's name, date and size filters apply; empty files and links are
+    left out); only files that share a size with another go on; of those, the
+    first 64 KB are hashed, and only files whose first 64 KB match are read
+    whole. So a folder of a thousand drawings of different sizes costs one
+    walk, and reading is spent only where there is a real chance of a match.
+
+    Each confirmed group goes out as soon as it is known, largest first. The
+    final message is `duplicates groups=N wasted=BYTES skipped=K`: the room
+    the extra copies take is the number somebody running this wants.
+    """
+    limit = max(1, int(request.args.get("limit", 50_000)))
+    spec = search.spec_from(request.args.get("search")) or search.Spec()
+    seq = 0
+    last_sent = time.monotonic()
+    skipped = 0
+
+    def send(status: Status, rows: list[Entry], message: str = "") -> None:
+        nonlocal seq, last_sent
+        outbox.put(Reply(request.id, status, payload=rows, seq=seq, message=message))
+        seq += 1
+        last_sent = time.monotonic()
+
+    def beat() -> None:
+        _drain_control(control, cancelled)
+        if request.id in cancelled:
+            raise _WalkCancelled
+        if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+            send(Status.PARTIAL, [])
+
+    by_size: dict[int, list[tuple[str, Entry]]] = {}
+    count = 0
+    stack: list[tuple[str, str]] = [(request.path, "")]
+    first = True
+    try:
+        while stack:
+            folder, relative = stack.pop()
+            try:
+                scanner = os.scandir(paths.api(folder))
+            except OSError as exc:
+                if first:
+                    outbox.put(_failure(request, exc))
+                    return
+                skipped += 1
+                continue
+            first = False
+            with scanner:
+                for entry in scanner:
+                    if count % CHECK_INTERVAL == 0:
+                        beat()
+                    row = _row(entry)
+                    if row is None or row.is_link:
+                        continue
+                    name = entry.name if not relative else relative + "\\" + entry.name
+                    if row.is_dir:
+                        if not _is_junction(entry):
+                            stack.append((os.path.join(folder, entry.name), name))
+                        continue
+                    if row.size == 0 or not search.cheap_matches(
+                            replace(spec, text=""), entry.name, False, row.size, row.mtime):
+                        continue
+                    by_size.setdefault(row.size, []).append(
+                        (os.path.join(folder, entry.name), replace(row, name=name)))
+                    count += 1
+                    if count >= limit:
+                        stack.clear()
+                        break
+
+        groups = 0
+        wasted = 0
+        for size in sorted((s for s, rows in by_size.items() if len(rows) > 1), reverse=True):
+            candidates = by_size[size]
+            for twins in _same_content(candidates, beat):
+                groups += 1
+                wasted += size * (len(twins) - 1)
+                send(Status.PARTIAL, [row for _path, row in twins])
+        send(Status.OK, [], f"duplicates groups={groups} wasted={wasted} skipped={skipped}"
+                            + (" limit" if count >= limit else ""))
+    except _WalkCancelled:
+        cancelled.discard(request.id)
+        outbox.put(Reply(request.id, Status.CANCELLED, seq=seq))
+
+
+def _digest(path: str, beat, *, head: int | None = None) -> str | None:
+    hasher = hashlib.sha256()
+    try:
+        with open(paths.api(path), "rb") as handle:
+            if head is not None:
+                hasher.update(handle.read(head))
+            else:
+                while True:
+                    beat()
+                    block = handle.read(1 << 20)
+                    if not block:
+                        break
+                    hasher.update(block)
+    except OSError:
+        return None
+    return hasher.hexdigest()
+
+
+def _same_content(candidates: list[tuple[str, Entry]], beat) -> list[list[tuple[str, Entry]]]:
+    """The groups of two or more among same-sized files whose bytes match."""
+    by_head: dict[str, list[tuple[str, Entry]]] = {}
+    for path, row in candidates:
+        beat()
+        key = _digest(path, beat, head=64 * 1024)
+        if key is not None:
+            by_head.setdefault(key, []).append((path, row))
+    groups = []
+    for rows in by_head.values():
+        if len(rows) < 2:
+            continue
+        if rows[0][1].size <= 64 * 1024:
+            groups.append(rows)          # the head was the whole file
+            continue
+        by_whole: dict[str, list[tuple[str, Entry]]] = {}
+        for path, row in rows:
+            key = _digest(path, beat)
+            if key is not None:
+                by_whole.setdefault(key, []).append((path, row))
+        groups.extend(group for group in by_whole.values() if len(group) > 1)
+    return groups
+
+
+def _hash(request: Request, outbox: Any, control: Any, cancelled: set[int], *,
+          opener=None) -> None:
+    """0.43: checksums of named files in one folder. See `Op.HASH`.
+
+    Read in 1 MB blocks with the walk's heartbeat between them, so a 4 GB
+    image on a share neither trips the watchdog nor ignores a cancel. A file
+    that cannot be read is reported by name and the rest go on.
+    """
+    algorithm = str(request.args.get("algorithm") or "sha256").lower()
+    if algorithm not in HASH_ALGORITHMS:
+        outbox.put(Reply(request.id, Status.ERROR, message=f"unknown checksum {algorithm}"))
+        return
+    names = [str(name) for name in (request.args.get("names") or [])]
+    sums: dict[str, str] = {}
+    failed: dict[str, str] = {}
+    last_sent = time.monotonic()
+    seq = 0
+
+    def beat() -> None:
+        nonlocal last_sent, seq
+        _drain_control(control, cancelled)
+        if request.id in cancelled:
+            raise _WalkCancelled
+        if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+            outbox.put(Reply(request.id, Status.PARTIAL, payload=None, seq=seq))
+            seq += 1
+            last_sent = time.monotonic()
+
+    try:
+        for name in names:
+            if not paths.is_bare_name(name.replace("\\", "/").split("/")[-1]) or ".." in name:
+                failed[name] = "not a name in this folder"
+                continue
+            hasher = hashlib.new(algorithm)
+            try:
+                stream = opener(name) if opener is not None else \
+                    open(paths.api(os.path.join(request.path, name)), "rb")
+                with stream:
+                    while True:
+                        beat()
+                        block = stream.read(1 << 20)
+                        if not block:
+                            break
+                        hasher.update(block)
+            except OSError as exc:
+                failed[name] = _describe(exc)
+                continue
+            sums[name] = hasher.hexdigest()
+    except _WalkCancelled:
+        cancelled.discard(request.id)
+        outbox.put(Reply(request.id, Status.CANCELLED, seq=seq))
+        return
+    outbox.put(Reply(request.id, Status.OK, seq=seq,
+                     payload={"algorithm": algorithm, "sums": sums, "failed": failed}))

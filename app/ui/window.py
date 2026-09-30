@@ -102,9 +102,12 @@ class MainWindow(QMainWindow):
                  favorites=None, capacity=None, commands=None, network=None,
                  parent: QWidget | None = None, *, backdrop: str = "solid",
                  frame: str | None = None, ejector=None, sync=None,
-                 accent_source=None, health=None, git=None) -> None:
+                 accent_source=None, health=None, git=None, folder_map=None) -> None:
         super().__init__(parent)
         self._config = config
+        #: 0.43: the folder map's walk, and its window while one is open.
+        self._folder_map = folder_map
+        self._map_window = None
         #: 0.35: where a Windows or wallpaper accent comes from, and the
         #: triple it gave, or None to use the named accent.
         self._accent_source = accent_source
@@ -441,6 +444,7 @@ class MainWindow(QMainWindow):
         self._hint(files, "Rename\tF2", lambda: self._current_widget().rename_current())
         self._action(files, "Rename several...", "Ctrl+M",
                      lambda: self._current_widget().rename_several())
+        self._hint(files, "Checksums...", lambda: self._current_widget().checksums())
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
@@ -850,6 +854,27 @@ class MainWindow(QMainWindow):
             "removed. Shows everything it would do before doing any of it.")
         self._sync_action.triggered.connect(self._synchronize)
         self._sync_action.setEnabled(self._sync is not None)
+        # 0.42: search, and the duplicate finder that shares its dialog.
+        self._search_action = QAction("Search...", self)
+        self._search_action.setShortcut(QKeySequence("Alt+F7"))
+        self._search_action.setShortcutContext(Qt.WindowShortcut)
+        self._search_action.setToolTip(
+            "Find files by name, contents, date and size under a folder. The "
+            "results open in a new tab, where they can be marked, copied and "
+            "deleted like any other rows.")
+        self._search_action.triggered.connect(lambda: self._search(duplicates=False))
+        self.addAction(self._search_action)
+        self._duplicates_action = QAction("Find duplicates...", self)
+        self._duplicates_action.setToolTip(
+            "Files under a folder that have an identical copy somewhere else "
+            "under it, compared by content, in a new tab.")
+        self._duplicates_action.triggered.connect(lambda: self._search(duplicates=True))
+        self._map_action = QAction("Folder map...", self)
+        self._map_action.setToolTip(
+            "Where the space under this folder has gone: blocks sized by bytes, "
+            "nested as the folders are, coloured by the kind of file.")
+        self._map_action.triggered.connect(self._open_map)
+        self._map_action.setEnabled(self._folder_map is not None)
         self._edit_commands_action = QAction("Commands", self)
         self._edit_commands_action.setToolTip(
             "The programs on the Tools menu and the keys that reach them.")
@@ -1158,6 +1183,10 @@ class MainWindow(QMainWindow):
         """
         menu = self._tools_menu
         menu.clear()
+        menu.addAction(self._search_action)
+        menu.addAction(self._duplicates_action)
+        menu.addAction(self._map_action)
+        menu.addSeparator()
         menu.addAction(self._compare_action)
         menu.addAction(self._sync_action)
         menu.addSeparator()
@@ -1910,6 +1939,73 @@ class MainWindow(QMainWindow):
             self._transfers.copy(list(sources), target)
         else:
             self._transfers.move(list(sources), target)
+
+    def _search(self, *, duplicates: bool) -> None:
+        """0.42: Alt+F7. The dialog, then a results tab in the active pane."""
+        from app.ui import search as search_dialog
+
+        pane = self._current_pane()
+        answer = search_dialog.ask(self, folder=pane.display(),
+                                   last=self._config.get("search.last"),
+                                   duplicates=duplicates)
+        if answer is None:
+            return
+        folder, spec, dup, remembered = answer
+        self._config.set("search.last", remembered)
+        target = pane.as_path(folder)
+        if target and pane.search(target, spec, duplicates=dup):
+            self._current_widget().focus_listing()
+
+    def _open_map(self) -> None:
+        """0.43: the folder map for the folder the active pane is in."""
+        from app.ui.foldermap import FolderMapWindow
+
+        if self._folder_map is None:
+            return
+        pane = self._current_pane()
+        folder = pane.current.path
+        if self._map_window is not None:
+            self._map_window.close()
+        window = FolderMapWindow(
+            self, folder_label=pane.display(folder),
+            on_go=lambda where, zoomed, p=pane, f=folder: self._map_go(p, f, where),
+            on_refresh=lambda f=folder: self._folder_map.start(f))
+        window.set_tokens(self._tokens)
+        self._folder_map.progress.connect(window.walking)
+        self._folder_map.ready.connect(window.show_tree)
+        self._folder_map.failed.connect(window.failed)
+        window.finished.connect(lambda _code, w=window: self._map_closed(w))
+        self._map_window = window
+        window.show()
+        self._folder_map.start(folder)
+
+    def _map_closed(self, window) -> None:
+        for signal, slot in ((self._folder_map.progress, window.walking),
+                             (self._folder_map.ready, window.show_tree),
+                             (self._folder_map.failed, window.failed)):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+        if self._map_window is window:
+            self._folder_map.cancel()
+            self._map_window = None
+
+    def _map_go(self, pane, folder: str, where: tuple) -> None:
+        """A double click, or Go there: the pane goes to that folder, or to the
+        folder a file is in with the file under the cursor."""
+        if not where:
+            pane.navigate(folder)
+            return
+        node = None
+        if self._map_window is not None and self._map_window._root is not None:  # noqa: SLF001
+            node = self._map_window._root.find(list(where))  # noqa: SLF001
+        target = folder
+        for part in (where if node is None or node.is_dir else where[:-1]):
+            target = paths.join(target, part)
+        if node is not None and not node.is_dir:
+            pane.current.reveal_name = where[-1]
+        pane.navigate(target)
 
     def _on_extract_requested(self, widget: PaneWidget, name: str) -> None:
         """0.41: all of an archive, into a folder named for it in the other

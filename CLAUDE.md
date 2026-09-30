@@ -326,6 +326,7 @@ Alt+Ins  the marked files into the basket (0.38)
 Ctrl+Alt+1 .. Ctrl+Alt+9  open a saved workspace (0.38)
 Ctrl+Alt+C  copy the path under the cursor as UNC (0.40)
 Ctrl+M  rename the marked rows by a rule, previewed (0.40)
+Alt+F7  search, and Find duplicates beside it on the Tools menu (0.42)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
@@ -613,6 +614,23 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   `a.zip\` is its contents** (`archive.inside`), which is how F5 on the zip
   row still copies the zip; and the UI's read-only refusals are courtesy only
   -- `Pane.in_archive` is by name, and the worker and the engine are the rule.
+- **A search is a walk with a filter, and its results are a flat view.**
+  Since 0.42 `Op.WALK` takes `args["search"]` (`app/io/search.py` reads it)
+  and keeps only what matches, in the worker, so matches stream into a tab
+  that is an ordinary flat view with `Tab.search` set -- which is why every
+  operation already works on the results and no second results model exists.
+  Reading contents keeps the walk's promises: `beat` is called between 1 MB
+  blocks so a cancel reaches the middle of a file and the watchdog hears a
+  busy worker rather than a stuck one, and files over `max_read` are not read.
+  `args["duplicates"]` is the same walk in three passes -- size, the first
+  64 KB, then the whole file only where the first two agree -- and sends each
+  set as soon as it is confirmed.
+- **The folder map is a walk and a layout, nothing else.** Since 0.42
+  `core/foldermap.py` sends one `Op.WALK` to the folder's worker and keeps
+  `(path, size)` per file; `core/treemap.py` (pure, tested) builds the tree
+  once the walk ends and lays it out squarified; `ui/foldermap.py` paints it
+  from the theme's `kind_*` tokens. No second scanner, and nothing in the
+  worker knows the map exists.
 - **Rename several is a plan, then one request.** `core/renamer.py` decides
   every new name and refuses the bad ones before anything runs; `plan` sends a
   name that another row is about to take through a temporary name first; and
