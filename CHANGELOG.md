@@ -5,6 +5,46 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.40.0]
+
+### Added
+- **Rename several** (File menu, Ctrl+M, and the right-click menu when more
+  than one row is marked). Renames the marked rows by a rule: a name mask and
+  an extension mask with [N] the old name ([N2-5] a slice of it), [E] the
+  extension, [C] a counter with its start, step and digits, [D] the modified
+  date as 2026-09-29 and [P] the folder's name; then an optional find and
+  replace, plain or as a regular expression, on the name or the whole name;
+  then a case change. Every row is shown old and new as the rule is typed,
+  and a row that cannot be renamed says why -- a character Windows refuses,
+  two rows given one name, a name already in the folder -- with Rename grey
+  until there are none. Swaps (a to b and b to a) go through a temporary name.
+  The folder's worker does the whole set in one request, and if one rename
+  fails part way the ones already done are put back, and the status line
+  says so. Labels and notes follow the files. The last rule is remembered.
+- **One window, and "Open in File Manager" in Explorer.** Starting File
+  Manager while it is already open -- from the Start menu, a shortcut, or the
+  new *Open in File Manager* entry on a folder, a drive, or the empty part of
+  a folder's window in Explorer -- opens that folder in a new tab of the
+  window already open and brings it forward, instead of a second window with
+  its own set of workers. The Explorer entry is an installer option, on by
+  default, per user; on Windows 11 it is under *Show more options*. Options,
+  General, *One window* turns the single window off (after a restart).
+- **Each folder remembers its sort** (Options, Listing; on). Clicking a
+  column heading keeps that order for that folder, and it comes back the next
+  time the folder is opened -- the day folders newest first, the job folders
+  by name, without re-clicking. A folder never sorted is listed in the order
+  last clicked in that tab, as before. Right-click the header for *Forget
+  this folder's sort order*. The newest 500 folders are kept.
+- **Copy path as UNC** (Go menu, Ctrl+Alt+C). The path under the cursor as
+  \\server\share\..., whether the pane is showing a drive letter or not, for
+  pasting somewhere the letter means nothing. A path on a local disk is
+  copied as it is.
+- **.L5K exports are previewed like .L5X ones.** The preview pane and the
+  viewer show the controller, processor, firmware, what saved it and when,
+  the counts of tags, programs, routines, rungs, AOIs, UDTs and modules, the
+  tasks with their programs, and the I/O tree -- read from the text export
+  the same way the XML one is read, under the same Options switch.
+
 ## [0.39.0]
 
 A footprint pass, and the drafting grid moved to where it can be seen.

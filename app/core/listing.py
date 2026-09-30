@@ -951,6 +951,12 @@ class ListingModel(QAbstractTableModel):
             return format_time(entry.mtime)
         return None
 
+    def set_sort(self, column: int, order=Qt.AscendingOrder) -> None:
+        """Choose the order without sorting now: for a model about to be
+        emptied and refilled, where sorting the old rows would be wasted."""
+        self._sort_column = Column(column)
+        self._sort_order = order
+
     def sort(self, column: int, order=Qt.AscendingOrder) -> None:
         self._sort_column = Column(column)
         self._sort_order = order

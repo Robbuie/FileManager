@@ -571,6 +571,12 @@ class PaneWidget(QFrame):
         # 50,000 files the stock gesture is the exact cost this application is
         # built to avoid, and it is the gesture people already know.
         header.sectionHandleDoubleClicked.connect(self._fit_column)
+        # 0.40: a click on a heading is what a folder's own order is made of.
+        # `sectionClicked` rather than `sortIndicatorChanged`, which also fires
+        # when the order is set from code -- on every tab switch and every
+        # folder with a remembered sort -- and would remember those too. Qt
+        # flips the indicator before it emits this, so it reads the new order.
+        header.sectionClicked.connect(self._on_heading_clicked)
         header.sectionResized.connect(self._on_section_resized)
         # Location is last in the model and belongs beside the name.
         header.moveSection(header.visualIndex(int(Column.LOCATION)), 1)
@@ -1284,6 +1290,43 @@ class PaneWidget(QFrame):
         if name and name != names[0] and row >= 0:
             self._pane.rename(row, name)
 
+    def rename_several(self) -> None:
+        """0.41, Ctrl+M: rename the marked rows by a rule, previewed first.
+
+        The marked rows, or the one under the cursor. Every name is found
+        again once the dialog closes, for `rename_current`'s reason -- and a
+        row that is no longer there is left out of the plan rather than
+        guessed at.
+        """
+        pane = self._pane
+        if pane.current.flat:
+            pane.say("Rename works outside flat view -- Ctrl+B to leave it", "bad")
+            return
+        names = self.selected_names()
+        if not names:
+            return
+        from app.ui import renamer as rename_dialog
+
+        folder = pane.current.path
+        items = pane.rename_items(names)
+        answer = rename_dialog.ask(
+            self.window(), items=items, existing=pane.current.model.names(),
+            folder_name=paths.leaf(folder), last=pane.config.get("rename.last"))
+        if answer is None:
+            return
+        steps, moves, rule = answer
+        pane.config.set("rename.last", rule)
+        if pane.current.path != folder:
+            pane.say("the folder changed while the dialog was open; nothing was renamed",
+                     "bad")
+            return
+        still = {name.lower() for name in pane.current.model.names()}
+        if any(old.lower() not in still for old, _new in moves):
+            pane.say("a file changed while the dialog was open; nothing was renamed",
+                     "bad")
+            return
+        pane.rename_many(steps, moves)
+
     def duplicate_current(self) -> None:
         """Shift+F5: copy the row under the cursor beside itself, renamed.
 
@@ -1421,6 +1464,8 @@ class PaneWidget(QFrame):
             if self._pane.labels is not None and self._pane.config.get("labels.shown"):
                 self._label_menu(menu, names)
             menu.addAction("Rename\tF2", self.rename_current)
+            if len(names) > 1:
+                menu.addAction("Rename several...\tCtrl+M", self.rename_several)
             menu.addAction("Delete\tDel", self.delete_selection)
             menu.addAction("Delete permanently\tShift+Del",
                            lambda: self.delete_selection(permanent=True))
@@ -1858,6 +1903,18 @@ class PaneWidget(QFrame):
         fade.start(QVariantAnimation.DeleteWhenStopped)
 
     def _on_path_changed(self, text: str) -> None:
+        # 0.40: a folder with a remembered order is listed in it, so the
+        # chevron in the header has to say so.
+        model = self._pane.current.model
+        header = self._view.horizontalHeader()
+        if (header.sortIndicatorSection(), header.sortIndicatorOrder()) != \
+                (int(model.sort_column), model.sort_order):
+            # Quietly: the model already has the order, and letting the view
+            # hear this would sort a model that is about to be refilled.
+            header.blockSignals(True)
+            header.setSortIndicator(int(model.sort_column), model.sort_order)
+            header.blockSignals(False)
+            header.viewport().update()
         if text != self._path.text():
             self._arrive()
         self._path.setText(text)
@@ -2245,6 +2302,10 @@ class PaneWidget(QFrame):
                        "On a folder of 50,000 files, measuring every row is the "
                        "cost this application exists to avoid.")
         menu.addAction("Reset column widths", self.reset_columns)
+        if self._pane.has_own_sort():
+            forget = menu.addAction("Forget this folder's sort order", self._forget_sort)
+            forget.setToolTip("The folder goes back to the order last clicked in "
+                              "this tab, from the next time it is opened.")
         menu.addSeparator()
         for column in range(len(HEADERS)):
             if column in (int(Column.NAME), int(Column.LOCATION)):
@@ -2259,6 +2320,16 @@ class PaneWidget(QFrame):
             action.toggled.connect(
                 lambda shown, c=column: self._set_column_shown(c, shown))
         menu.exec(self._view.horizontalHeader().mapToGlobal(point))
+
+    def _on_heading_clicked(self, _section: int) -> None:
+        header = self._view.horizontalHeader()
+        if not header.isSortIndicatorShown():
+            return
+        self._pane.sorted_by_hand(header.sortIndicatorSection(),
+                                  header.sortIndicatorOrder() == Qt.DescendingOrder)
+
+    def _forget_sort(self) -> None:
+        self._pane.forget_sort()
 
     def _watch(self, model) -> None:
         if model not in self._watched:

@@ -18,12 +18,13 @@ import datetime
 import time
 from typing import Callable
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 
 from app.core import naming
 from app.core.clipboard import refusal
 from app.core.listing import ListingModel, format_size
 from app.core.remembered import Remembered
+from app.core.sorts import SortMemory
 from app.io import elevate, paths
 from app.io.protocol import Conflict, Op, Reply, Status
 
@@ -112,6 +113,10 @@ class Tab:
         #: rows are what was there then rather than what is there now.
         self.listed_at = 0.0
         self.stale = False
+        #: 0.40: the order last clicked in this tab, as (column, 0/1), which a
+        #: folder with no remembered order of its own is listed in. None until
+        #: a heading is clicked: the model's own order stands.
+        self.free_sort: tuple[int, int] | None = None
 
     @property
     def label(self) -> str:
@@ -158,6 +163,8 @@ class Pane(QObject):
         self._bridge = bridge
         self._config = config
         self._side = side
+        #: 0.40: per-folder sort orders, kept in the settings both panes share.
+        self.sorts = SortMemory(config)
         self._checks: QTimer | None = None
         self._live = True
         # Shared with the other pane and with every tab either of them opens:
@@ -376,6 +383,32 @@ class Pane(QObject):
                 names.append(entry.name)
         return names
 
+    # ------------------------------------------------------------- 0.40 sort
+
+    def _sort_for(self, tab: Tab, target: str) -> None:
+        """Set the order a folder is about to be listed in, before it is."""
+        chosen = self.sorts.get(target) or tab.free_sort
+        if chosen is None:
+            return
+        column, order = chosen
+        wanted = Qt.DescendingOrder if order else Qt.AscendingOrder
+        if (int(tab.model.sort_column), tab.model.sort_order) != (column, wanted):
+            tab.model.set_sort(column, wanted)
+
+    def sorted_by_hand(self, column: int, descending: bool) -> None:
+        """A heading was clicked: the tab's order, and this folder's."""
+        tab = self.current
+        order = 1 if descending else 0
+        tab.free_sort = (int(column), order)
+        if not tab.flat:
+            self.sorts.put(tab.path, int(column), order)
+
+    def forget_sort(self) -> bool:
+        return self.sorts.forget(self.current.path)
+
+    def has_own_sort(self) -> bool:
+        return self.sorts.has(self.current.path)
+
     # ------------------------------------------------------------- navigation
 
     def navigate(self, path: str, *, record: bool = True) -> None:
@@ -396,6 +429,8 @@ class Pane(QObject):
             tab.flat = False
             tab.model.set_flat(False)
             self.flatChanged.emit()
+        if not same_folder and not tab.flat:
+            self._sort_for(tab, target)
         tab.path = target
         tab.model.set_folder(target)
         if self.overlays is not None:
@@ -803,6 +838,57 @@ class Pane(QObject):
                      timeout=float(self._config.get("timeout.rename")),
                      args={"name": name}, reveal=name,
                      failed=f"could not rename to {name}", done=carry)
+
+    def rename_items(self, names: list[str]) -> list:
+        """0.41: the named rows as `renamer.Item`s, in listing order."""
+        from app.core.renamer import Item
+
+        items = []
+        model = self.current.model
+        for name in names:
+            entry = model.entry(model.row_of(name))
+            if entry is not None:
+                items.append(Item(entry.name, float(entry.mtime or 0.0), bool(entry.is_dir)))
+        return items
+
+    def rename_many(self, steps: list[tuple[str, str]], moves: list[tuple[str, str]]) -> None:
+        """0.41: run a rename plan in this folder as one request.
+
+        `steps` is the plan, temporary names and all; `moves` is old name to
+        final name, which is what the labels follow and which name the cursor
+        goes to. The timeout grows with the plan, because on a share each
+        step is a round trip.
+        """
+        tab = self.current
+        if not steps:
+            return
+        folder = tab.path
+        count = len(moves)
+        self._set_status(tab, f"renaming {count} item{'s' if count != 1 else ''}", BUSY)
+
+        def carry() -> None:
+            if self.labels is not None:
+                for old, new in moves:
+                    self.labels.moved(folder, old, folder, new)
+            self._set_status(tab, f"renamed {count} item{'s' if count != 1 else ''}", IDLE)
+
+        def handle(reply: Reply) -> None:
+            if reply.status is Status.OK:
+                carry()
+                tab.reveal_name = moves[0][1] if moves else None
+            else:
+                payload = reply.payload or {}
+                note = "" if not payload.get("done") else (
+                    " -- every name was put back" if payload.get("undone")
+                    else " -- and some names could not be put back; check the folder")
+                self._set_status(tab, f"rename stopped: {_explain(reply)}{note}", BAD)
+            if tab is self.current:
+                self.refresh()
+            self.folderChanged.emit(tab.path)
+
+        timeout = float(self._config.get("timeout.rename")) + 0.5 * len(steps)
+        self._bridge.submit(Op.RENAME_MANY, folder, timeout=timeout, on_reply=handle,
+                            args={"steps": [list(step) for step in steps]})
 
     def duplicate_suggestion(self, row: int, today: datetime.date | None = None) -> str | None:
         """The name a duplicate of this row is offered, or None for no row.

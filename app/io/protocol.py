@@ -154,6 +154,14 @@ class Op(str, Enum):
     #: Rename in place. `args["name"]` is a bare name, never a path: a rename
     #: that can move is a move, and a move has a destination the user confirms.
     RENAME = "rename"
+    #: 0.41: several renames in one folder, in order -- `args["steps"]` is a
+    #: list of `[old, new]` names, planned by `core/renamer.py` so that a
+    #: swap goes through a temporary name. Stops at the first failure and
+    #: undoes the steps already done, newest first; the reply's payload has
+    #: `done` (how many had run) and `undone` (whether they were all put
+    #: back). One request rather than one per file, because on a share each
+    #: request is a round trip and a hundred files is a hundred of them.
+    RENAME_MANY = "rename_many"
 
     #: Delete `args["names"]` from the folder at `path`, to the Recycle Bin
     #: unless `args["permanent"]`. Several names in one request rather than one

@@ -103,3 +103,121 @@ def test_a_broken_export_falls_back_to_text(tmp_path):
     answer = decode.preview(str(path), box=200, deadline=time.monotonic() + 10,
                             logix=True)
     assert answer.form is PreviewForm.TEXT
+
+
+# 0.40: the same project as an .L5K text export, in the shape Logix Designer
+# writes it -- header comment, controller attributes over several lines,
+# blocks closed by END_ keywords.
+L5K = '''(*********************************************
+
+  Import-Export
+  Version   := RSLogix 5000 v33.01
+  Owner     := Plant Controls,
+  Exported  := Mon Sep 28 14:12:03 2026
+
+  Note:  File encoded in UTF-8.  Only edit file in a program
+         which supports UTF-8 (like Notepad, not Wordpad).
+
+**********************************************)
+IE_VER := 2.29;
+
+CONTROLLER RPS_Main (ProcessorType := "1756-L83E",
+                     Major := 33,
+                     TimeSlice := 20,
+                     ShareUnusedTimeSlice := 1)
+	DATATYPE PumpUDT (FamilyType := NoFamily)
+		DINT Speed;
+	END_DATATYPE
+
+	MODULE Local (Parent := "Local",
+	              ParentModPortId := 1,
+	              CatalogNumber := "1756-L83E",
+	              Vendor := 1)
+	END_MODULE
+
+	MODULE ENET_Plant (Parent := "Local",
+	                   CatalogNumber := "1756-EN2T",
+	                   Vendor := 1)
+	END_MODULE
+
+	MODULE DI_Pumps (CatalogNumber := "1756-IB32", Vendor := 1)
+	END_MODULE
+
+	ADD_ON_INSTRUCTION_DEFINITION Motor (Revision := 1.0)
+		ROUTINE Logic
+		END_ROUTINE
+	END_ADD_ON_INSTRUCTION_DEFINITION
+
+	TAG
+		A : DINT (RADIX := Decimal) := 0;
+		B : BOOL (RADIX := Decimal,
+		          Description := "Pump running") := 0;
+	END_TAG
+
+	PROGRAM MainProgram (MainRoutineName := "Main",
+	                     Disabled := No)
+		TAG
+			C : DINT (RADIX := Decimal) := 0;
+		END_TAG
+
+		ROUTINE Main
+				RC: "First rung";
+				N: XIC(A)OTE(B);
+				N: NOP();
+		END_ROUTINE
+
+	END_PROGRAM
+
+	PROGRAM PID_Loops (MainRoutineName := "Main")
+		ROUTINE Main
+		END_ROUTINE
+	END_PROGRAM
+
+	TASK MainTask (Type := CONTINUOUS,
+	               Priority := 10)
+			MainProgram;
+	END_TASK
+
+	TASK Periodic_100ms (Type := PERIODIC, Rate := 100, Priority := 10)
+			PID_Loops;
+	END_TASK
+
+END_CONTROLLER
+'''
+
+
+@pytest.fixture
+def l5k(tmp_path):
+    path = tmp_path / "RPS_Main.L5K"
+    path.write_text(L5K, encoding="utf-8")
+    return str(path)
+
+
+def test_an_l5k_gives_the_same_summary_as_the_l5x(l5k, export):
+    text = logix.summarise_l5k(l5k, time.monotonic() + 10)
+    xml = logix.summarise(export, time.monotonic() + 10)
+    for key in ("controller", "processor", "tags", "programs", "routines", "aois",
+                "udts", "modules", "rungs"):
+        assert text[key] == xml[key], key
+    assert text["firmware"] == "33"
+    assert text["software"] == "33.01"
+    assert text["exported"] == "Mon Sep 28 14:12:03 2026"
+    assert text["module_list"] == [("Local", "1756-L83E"), ("ENET_Plant", "1756-EN2T"),
+                                   ("DI_Pumps", "1756-IB32")]
+    assert [(t["name"], t["type"], t["rate"], t["programs"]) for t in text["tasks"]] == [
+        ("MainTask", "continuous", "", ["MainProgram"]),
+        ("Periodic_100ms", "periodic", "100", ["PID_Loops"]),
+    ]
+
+
+def test_a_text_file_that_is_not_an_l5k_is_left_alone(tmp_path):
+    path = tmp_path / "notes.l5k"
+    path.write_text("just some notes\nabout a controller\n", encoding="utf-8")
+    assert logix.summarise_l5k(str(path), time.monotonic() + 10) is None
+
+
+def test_the_preview_shows_the_l5k_summary_when_asked(l5k):
+    shown = decode.preview(l5k, box=256, deadline=time.monotonic() + 10, logix=True)
+    assert shown.form == PreviewForm.TEXT
+    assert shown.source == "logix"
+    assert "1756-L83E" in shown.text and "Periodic_100ms" in shown.text

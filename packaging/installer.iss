@@ -76,6 +76,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
+; 0.41. Checked by default, and remembered: an update runs silently with the
+; tasks chosen at the last install, so turning it off once keeps it off.
+Name: "explorermenu"; Description: "Add ""Open in File Manager"" to Explorer's right-click menu"; GroupDescription: "Explorer:"
 
 [InstallDelete]
 ; 0.39. Inno copies files over the top of an existing install and never
@@ -90,6 +93,22 @@ Type: filesandordirs; Name: "{app}\_internal"
 
 [Files]
 Source: "..\dist\FileManager\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+; 0.41. Per user, under HKCU\Software\Classes, like the install itself -- no
+; administrator needed and nobody else's Explorer touched. Three places: on a
+; folder, on the empty part of a folder's window (%V is that folder), and on
+; a drive. The application passes the folder to the window already open;
+; see app/io/instance.py. On Windows 11 these are under "Show more options".
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\FileManager"; ValueType: string; ValueName: ""; ValueData: "Open in File Manager"; Flags: uninsdeletekey; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\FileManager"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#AppExe}"""; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\shell\FileManager\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\FileManager"; ValueType: string; ValueName: ""; ValueData: "Open in File Manager"; Flags: uninsdeletekey; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\FileManager"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#AppExe}"""; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Directory\Background\shell\FileManager\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%V"""; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\FileManager"; ValueType: string; ValueName: ""; ValueData: "Open in File Manager"; Flags: uninsdeletekey; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\FileManager"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\{#AppExe}"""; Tasks: explorermenu
+Root: HKCU; Subkey: "Software\Classes\Drive\shell\FileManager\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: explorermenu
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

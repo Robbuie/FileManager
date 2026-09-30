@@ -324,6 +324,8 @@ the folders here, or a typed path (0.28)
 Ctrl+,  Options: every setting, applied as it is changed (0.33)
 Alt+Ins  the marked files into the basket (0.38)
 Ctrl+Alt+1 .. Ctrl+Alt+9  open a saved workspace (0.38)
+Ctrl+Alt+C  copy the path under the cursor as UNC (0.40)
+Ctrl+M  rename the marked rows by a rule, previewed (0.40)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
@@ -586,6 +588,33 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   bumps the file's modified time on the servers this is used against, which
   would make a labelled drawing newer to sync and to the Age column. A rename
   made here carries the label (`Labels.moved`); one made elsewhere does not.
+- **One window is a named pipe, and the pipe is only a messenger.** Since
+  0.40 the first process owns `\\.\pipe\FileManager.<user>`, claimed with
+  FILE_FLAG_FIRST_PIPE_INSTANCE so exactly one can (`app/io/instance.py`); a
+  later start writes the folder it was given and exits. The pipe is read on a
+  daemon thread that does nothing but decode a message and emit a queued
+  signal: it never touches the window or the filesystem, and the folder goes
+  through `open_tab` like any other. The next pipe instance is created before
+  the current one is closed, so a start arriving in between never finds no
+  pipe and opens a second window. Explorer's command line splits `"C:\"` into
+  `C:"`; `clean_folder` is why a drive right-clicked opens that drive.
+- **Rename several is a plan, then one request.** `core/renamer.py` decides
+  every new name and refuses the bad ones before anything runs; `plan` sends a
+  name that another row is about to take through a temporary name first; and
+  `Op.RENAME_MANY` runs the whole plan in the folder's worker, stopping at the
+  first failure and **reversing what it had done**. Two rules to keep: the
+  worker checks every name with `is_bare_name` before the first rename, so a
+  bad plan is refused whole rather than half run; and nothing here renames by
+  row -- the dialog is given names, and the pane checks they are all still in
+  the folder after it closes.
+- **A folder's sort is remembered from a click, never from code.** Since 0.40
+  `core/sorts.py` keeps an order per folder, and it is recorded only on the
+  header's `sectionClicked` -- `sortIndicatorChanged` also fires when a tab
+  switch or a remembered order sets the indicator, and remembering those would
+  pin every folder visited to whatever the last one was. The order is set on
+  the model *before* the listing starts (`ListingModel.set_sort`), and the
+  indicator is then moved with the header's signals blocked, so a folder is
+  sorted once as its rows arrive rather than again on the way in.
 - **Git is asked, never parsed.** `app/io/gitstatus.py` runs `git status
   --porcelain -z -b` in the volume's side lane, local volumes only, once per
   folder shown and at most every `REFRESH` seconds (`core/gitmarks.py`). The

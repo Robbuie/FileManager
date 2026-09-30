@@ -283,6 +283,17 @@ DEFAULTS: dict[str, Any] = {
     # 0.34: a bar under a folder's size once it has been counted, against the
     # largest counted folder here -- never against the files, see rows.py.
     "listing.folder_bars": True,
+    # 0.40: a folder sorted by clicking a heading keeps that order, and gets it
+    # back the next time it is opened (`core/sorts.py`). `listing.sorts` is the
+    # memory itself, by lower-cased path: [column, 0 ascending / 1 descending].
+    "listing.remember_sort": True,
+    "listing.sorts": {},
+    # 0.41: a second start -- or Explorer's "Open in File Manager" -- hands its
+    # folder to the window already open instead of opening another.
+    "general.single_instance": True,
+    # 0.41: the last rule Rename several was used with, as `renamer.Rule`'s
+    # fields. Empty for the plain [N].[E].
+    "rename.last": {},
 
     # The one network call the application makes, and the two things worth
     # remembering about it: whether to make it at all, and which version the

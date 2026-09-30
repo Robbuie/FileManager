@@ -19,6 +19,11 @@ No Qt here -- this runs in a worker -- and no dependency: `xml.etree` is in
 the standard library. The file is only opened through `paths.api`, like every
 other read in this layer.
 
+0.40: `.L5K` too. It is the same project written as structured text rather
+than XML -- `CONTROLLER Name (...)` down to `END_CONTROLLER`, with `TAG`,
+`PROGRAM`, `ROUTINE`, `TASK` and `MODULE` blocks between -- so it is read a line
+at a time into the same summary, and `render` draws both the same way.
+
 `.ACD` files are the project in Rockwell's own binary format and are not read
 here: their layout is not documented, and a guess that is wrong on the next
 version of the software is worse than the ordinary preview.
@@ -26,6 +31,7 @@ version of the software is worse than the ordinary preview.
 
 from __future__ import annotations
 
+import re
 import time
 import xml.etree.ElementTree as ElementTree
 from typing import Any
@@ -126,6 +132,138 @@ def summarise(path: str, deadline: float) -> dict[str, Any] | None:
                 summary["partial"] = True
                 break
     return summary if root_seen else None
+
+
+def _empty() -> dict[str, Any]:
+    return {
+        "controller": "", "processor": "", "firmware": "", "software": "",
+        "exported": "", "target": "", "target_type": "",
+        "tags": 0, "programs": 0, "routines": 0, "aois": 0, "modules": 0,
+        "udts": 0, "rungs": 0,
+        "tasks": [], "module_list": [], "partial": False,
+    }
+
+
+#: A block keyword at the start of a line, and the name after it.
+_OPEN = re.compile(r"^\s*(CONTROLLER|PROGRAM|ROUTINE|FBD_ROUTINE|SFC_ROUTINE|ST_ROUTINE|"
+                   r"TASK|MODULE|DATATYPE|ADD_ON_INSTRUCTION_DEFINITION|TAG)\b\s*([\w:.\[\]-]*)")
+_CLOSE = re.compile(r"^\s*END_(\w+)")
+#: `Name := value` inside a block's header, with the value unquoted.
+_ATTR = re.compile(r"\b(\w+)\s*:=\s*(\"(?:[^\"$]|\$.)*\"|[^,)\s]+)")
+#: The first line of a tag declaration: `Name : TYPE` or `Name OF alias`.
+_TAG_LINE = re.compile(r"^\s*[A-Za-z_]\w*\s*(?::(?!=)|\bOF\b)")
+#: A ladder rung, and a program named on its own line inside a TASK.
+_RUNG = re.compile(r"^\s*N:")
+_SCHEDULED = re.compile(r"^\s*([A-Za-z_]\w*)\s*;\s*$")
+#: The export header's comment: `Version := RSLogix 5000 v33.00`, `Exported := ...`.
+_HEADER = re.compile(r"^\s*(Version|Exported)\s*:=\s*(.+?)\s*$")
+
+_BLOCK_KEYS = {"FBD_ROUTINE": "ROUTINE", "SFC_ROUTINE": "ROUTINE", "ST_ROUTINE": "ROUTINE"}
+
+
+def _unquote(value: str) -> str:
+    return value[1:-1] if len(value) >= 2 and value[0] == value[-1] == '"' else value
+
+
+def summarise_l5k(path: str, deadline: float) -> dict[str, Any] | None:
+    """The same summary as `summarise`, read from an `.L5K` text export.
+
+    None when no `CONTROLLER` line turns up before the file ends, so a text
+    file that merely ends in `.l5k` is shown as text. Line by line, keeping
+    only counters, and the deadline is checked every few hundred lines.
+    """
+    summary = _empty()
+    stack: list[str] = []
+    #: The block whose header is still being read: attributes arrive over
+    #: several lines until its closing parenthesis.
+    header: tuple[str, dict[str, Any]] | None = None
+    task: dict[str, Any] | None = None
+    seen_controller = False
+    with open(paths.api(path), "r", encoding="utf-8", errors="replace") as handle:
+        for number, line in enumerate(handle):
+            if number % 256 == 0 and time.monotonic() > deadline:
+                summary["partial"] = True
+                break
+            if not seen_controller:
+                found = _HEADER.match(line)
+                if found:
+                    key, value = found.groups()
+                    if key == "Version":
+                        summary["software"] = value.replace("RSLogix 5000", "").strip(" v")
+                    else:
+                        summary["exported"] = value
+            if header is not None:
+                kind, attrs = header
+                for name, value in _ATTR.findall(line):
+                    attrs.setdefault(name, _unquote(value))
+                if ")" in line and not line.strip().startswith("("):
+                    _header_done(summary, kind, attrs, task)
+                    header = None
+                continue
+            closing = _CLOSE.match(line)
+            if closing:
+                kind = _BLOCK_KEYS.get(closing.group(1), closing.group(1))
+                if stack and stack[-1] == kind:
+                    stack.pop()
+                if kind == "TASK" and task is not None:
+                    if len(summary["tasks"]) < NAMED:
+                        summary["tasks"].append(task)
+                    task = None
+                continue
+            opening = _OPEN.match(line)
+            if opening:
+                kind = _BLOCK_KEYS.get(opening.group(1), opening.group(1))
+                name = opening.group(2)
+                stack.append(kind)
+                if kind == "CONTROLLER":
+                    seen_controller = True
+                    summary["controller"] = summary["controller"] or name
+                elif kind == "PROGRAM":
+                    summary["programs"] += 1
+                elif kind == "ROUTINE":
+                    summary["routines"] += 1
+                elif kind == "DATATYPE":
+                    summary["udts"] += 1
+                elif kind == "ADD_ON_INSTRUCTION_DEFINITION":
+                    summary["aois"] += 1
+                elif kind == "MODULE":
+                    summary["modules"] += 1
+                elif kind == "TASK":
+                    task = {"name": name, "type": "", "rate": "", "programs": []}
+                if kind != "TAG":
+                    attrs = {"Name": name}
+                    for key, value in _ATTR.findall(line):
+                        attrs.setdefault(key, _unquote(value))
+                    if "(" in line and ")" not in line[line.index("("):]:
+                        header = (kind, attrs)
+                    else:
+                        _header_done(summary, kind, attrs, task)
+                continue
+            inside = stack[-1] if stack else ""
+            if inside == "TAG" and _TAG_LINE.match(line):
+                summary["tags"] += 1
+            elif inside == "ROUTINE" and _RUNG.match(line):
+                summary["rungs"] += 1
+            elif inside == "TASK" and task is not None:
+                scheduled = _SCHEDULED.match(line)
+                if scheduled:
+                    task["programs"].append(scheduled.group(1))
+    return summary if seen_controller else None
+
+
+def _header_done(summary: dict[str, Any], kind: str, attrs: dict[str, Any],
+                 task: dict[str, Any] | None) -> None:
+    """A block's header has been read whole; keep what the summary shows."""
+    if kind == "CONTROLLER":
+        summary["processor"] = summary["processor"] or attrs.get("ProcessorType", "")
+        major, minor = attrs.get("Major", ""), attrs.get("Minor", "")
+        if major and not summary["firmware"]:
+            summary["firmware"] = f"{major}.{minor}" if minor else major
+    elif kind == "MODULE" and len(summary["module_list"]) < NAMED:
+        summary["module_list"].append((attrs.get("Name", ""), attrs.get("CatalogNumber", "")))
+    elif kind == "TASK" and task is not None:
+        task["type"] = str(attrs.get("Type", "")).lower()
+        task["rate"] = str(attrs.get("Rate", ""))
 
 
 def render(summary: dict[str, Any]) -> str:

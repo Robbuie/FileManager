@@ -223,3 +223,14 @@ def test_the_grid_is_drawn_in_both_listings_of_both_panes(window):
 def test_the_glow_can_be_turned_off(window):
     window.apply_setting("look.pane_glow", False)
     assert window._splitter._glow_on is False
+
+
+def test_a_folder_from_outside_opens_in_a_new_tab_of_the_active_pane(window, tmp_path):
+    """0.41: what a second start or Explorer's menu sends."""
+    pane = window._current_pane()
+    before = len(pane.tabs)
+    window.open_from_outside(f'"{tmp_path}"')
+    assert len(pane.tabs) == before + 1
+    assert pane.current.path.rstrip("\\/") == str(tmp_path).rstrip("\\/")
+    window.open_from_outside("")                 # only brings the window forward
+    assert len(pane.tabs) == before + 1

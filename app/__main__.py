@@ -64,6 +64,21 @@ def main() -> int:
     app.setApplicationName("File Manager")
 
     config = Config.load()
+
+    # 0.41: one window. A folder named on the command line -- which is how
+    # Explorer's "Open in File Manager" arrives -- goes to the window already
+    # running, and this process ends before it has built anything. See
+    # `app/io/instance.py`.
+    from app.io.instance import clean_folder
+
+    folder = clean_folder(next((arg for arg in sys.argv[1:] if not arg.startswith("-")), ""))
+    listener_handle = None
+    if config.get("general.single_instance"):
+        from app.io import instance
+
+        first, listener_handle = instance.claim()
+        if not first and instance.send(folder):
+            return 0
     # First, before anything that could freeze. See `app/core/hangs.py`.
     from app.core.hangs import HangRecorder, default_path as hangs_path
 
@@ -177,6 +192,20 @@ def main() -> int:
                         git=GitMarks(bridge, config))
     window.show()
 
+    if listener_handle is not None:
+        from PySide6.QtCore import QObject, Signal
+
+        from app.io import instance
+
+        class Relay(QObject):
+            #: Emitted on the pipe's thread, received on this one: the
+            #: connection is queued because the window lives here.
+            arrived = Signal(str)
+
+        relay = Relay()
+        relay.arrived.connect(window.open_from_outside)
+        instance.Listener(listener_handle, relay.arrived.emit).start()
+
     # Both panes list only once there is a window to paint into. Nothing has
     # touched a volume before this line.
     left.refresh()
@@ -193,6 +222,8 @@ def main() -> int:
     overlays.start(scale=float(app.devicePixelRatio()))
     file_icons.start(scale=float(app.devicePixelRatio()))
     updates.start_if_wanted()
+    if folder:
+        window.open_from_outside(folder)
 
     try:
         return app.exec()

@@ -178,6 +178,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _mkdir(request, outbox)
     elif request.op is Op.RENAME:
         _rename(request, outbox)
+    elif request.op is Op.RENAME_MANY:
+        _rename_many(request, outbox)
     elif request.op is Op.DELETE:
         _delete(request, outbox)
     elif request.op is Op.PING:
@@ -1384,6 +1386,66 @@ def _rename(request: Request, outbox: Any) -> None:
         outbox.put(_failure(request, exc))
         return
     outbox.put(Reply(request.id, Status.OK, payload={"path": target, "name": name}))
+
+
+def _rename_many(request: Request, outbox: Any) -> None:
+    """0.41: a planned series of renames in one folder, all or nothing.
+
+    Every name is checked before anything moves -- a bare name, and a usable
+    one -- so a bad plan is refused whole rather than half run. Then each step
+    is one `os.rename`, which on Windows refuses to overwrite; a target that
+    exists is refused here first all the same, for the reason `_rename` gives,
+    with the same allowance for a change of case only. On a failure the steps
+    already done are reversed, newest first, and the reply says whether that
+    worked, so a person is never left guessing which files have which names.
+    """
+    folder = request.path
+    raw = request.args.get("steps") or []
+    steps: list[tuple[str, str]] = []
+    for pair in raw:
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            outbox.put(Reply(request.id, Status.ERROR, message="a malformed rename plan"))
+            return
+        old, new = str(pair[0]), str(pair[1])
+        if not paths.is_bare_name(old) or not paths.is_bare_name(new) \
+                or any(ch in new for ch in '\\/:*?"<>|'):
+            outbox.put(Reply(request.id, Status.ERROR,
+                             message=f"{new!r} is not a usable file name"))
+            return
+        steps.append((old, new))
+    if not steps:
+        outbox.put(Reply(request.id, Status.OK, payload={"done": 0, "undone": True}))
+        return
+
+    done: list[tuple[str, str]] = []
+    problem = ""
+    for old, new in steps:
+        source = os.path.join(folder, old)
+        target = os.path.join(folder, new)
+        if (os.path.normcase(source) != os.path.normcase(target)
+                and os.path.exists(paths.api(target))):
+            problem = f"{new} already exists in this folder"
+            break
+        try:
+            os.rename(paths.api(source), paths.api(target))
+        except OSError as exc:
+            problem = f"{old}: {_describe(exc)}"
+            break
+        done.append((old, new))
+    if not problem:
+        outbox.put(Reply(request.id, Status.OK,
+                         payload={"done": len(done), "undone": False}))
+        return
+
+    undone = True
+    for old, new in reversed(done):
+        try:
+            os.rename(paths.api(os.path.join(folder, new)),
+                      paths.api(os.path.join(folder, old)))
+        except OSError:
+            undone = False
+    outbox.put(Reply(request.id, Status.ERROR, message=problem,
+                     payload={"done": len(done), "undone": undone}))
 
 
 def _delete(request: Request, outbox: Any) -> None:

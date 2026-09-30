@@ -159,7 +159,7 @@ def preview(path: str, *, box: int, deadline: float,
     except OSError as exc:
         return Preview(form=PreviewForm.NONE, note=_short(exc))
 
-    if logix and _suffix(path) == ".l5x" and text_bytes > 0:
+    if logix and _suffix(path) in (".l5x", ".l5k") and text_bytes > 0:
         # 0.36: a Logix export says what it is -- controller, firmware,
         # counts -- rather than showing its first screen of XML. Anything
         # that goes wrong falls through to the ordinary ladder, which shows
@@ -168,12 +168,15 @@ def preview(path: str, *, box: int, deadline: float,
         try:
             from app.io import logix as logix_reader
 
-            summary = logix_reader.summarise(path, deadline)
+            reader = logix_reader.summarise_l5k if _suffix(path) == ".l5k" \
+                else logix_reader.summarise
+            summary = reader(path, deadline)
         except Exception:  # noqa: BLE001 - a malformed export is shown as text
             summary = None
         if summary is not None:
             return Preview(form=PreviewForm.TEXT, source="logix", size=size,
-                           text=logix_reader.render(summary), encoding="xml",
+                           text=logix_reader.render(summary),
+                           encoding="xml" if _suffix(path) == ".l5x" else "text",
                            truncated=bool(summary.get("partial")))
 
     family = preview_family(os.path.basename(path))

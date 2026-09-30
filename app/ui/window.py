@@ -437,6 +437,8 @@ class MainWindow(QMainWindow):
         self._hint(files, "Move\tF6", lambda: self._on_transfer_requested("move"))
         self._hint(files, "New folder\tF7", lambda: self._current_widget().new_folder())
         self._hint(files, "Rename\tF2", lambda: self._current_widget().rename_current())
+        self._action(files, "Rename several...", "Ctrl+M",
+                     lambda: self._current_widget().rename_several())
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
@@ -621,6 +623,7 @@ class MainWindow(QMainWindow):
         self._action(go, "Rescan drives", "Ctrl+Shift+D",
                      lambda: self._volumes.refresh(rescan=True))
         self._action(go, "Copy path", "Ctrl+Shift+C", self._copy_path)
+        self._action(go, "Copy path as UNC", "Ctrl+Alt+C", self._copy_unc_path)
 
         view = self.menuBar().addMenu("&View")
         view.setToolTipsVisible(True)
@@ -2077,6 +2080,38 @@ class MainWindow(QMainWindow):
         path = pane.row_path(self._current_widget().current_row()) or pane.current.path
         QApplication.clipboard().setText(pane.display(path))
         self.statusBar().showMessage(f"copied {pane.display(path)}", 4000)
+
+    def open_from_outside(self, folder: str) -> None:
+        """0.41: a folder sent from Explorer, or from a second start.
+
+        Opened in a new tab in the pane that has the keyboard, so nothing on
+        screen is lost; an empty message only brings the window forward. The
+        folder is not checked here -- that is a filesystem question -- and a
+        path that is not there fails in its tab the way a typed one does.
+        """
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        folder = (folder or "").strip().strip('"')
+        if folder:
+            self._current_pane().open_tab(folder)
+
+    def _copy_unc_path(self) -> None:
+        """0.40: the same path, as \\\\server\\share\\... whatever the pane shows.
+
+        A mapped letter means nothing to somebody without that mapping, and
+        pasting `S:\\Jobs\\...` into an email is how a link arrives dead. The
+        letter is looked up in this session's own connection table, which
+        touches no server. A path on a local disk has no UNC form and is
+        copied as it is.
+        """
+        pane = self._current_pane()
+        path = pane.row_path(self._current_widget().current_row()) or pane.current.path
+        text = pane.resolved(path)
+        QApplication.clipboard().setText(text)
+        self.statusBar().showMessage(f"copied {text}", 4000)
 
     def _set_show_unc(self, checked: bool) -> None:
         for pane in self._panes:

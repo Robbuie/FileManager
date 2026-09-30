@@ -165,6 +165,12 @@ OPTIONS: tuple[Option, ...] = (
            "Ticks on the scrollbar for marked rows, today's rows and the "
            "rows matching a quick search -- the ones not on screen.",
            heading="Extras", new=True),
+    Option("listing.remember_sort", "listing", "Remember each folder's sort",
+           "Clicking a column heading keeps that order for that folder, and "
+           "it comes back the next time the folder is opened. Folders never "
+           "sorted keep the order last clicked in the tab. Right-click the "
+           "header to forget one.",
+           new=True, words=("order", "column", "per folder")),
     Option("listing.folder_bars", "listing", "Bars on counted folders",
            "Once Space has counted folders, each gets a bar against the "
            "largest of them, in a colour of its own.", new=True),
@@ -253,6 +259,11 @@ OPTIONS: tuple[Option, ...] = (
     Option("menu.shell", "general", "Explorer context menu",
            "The shell's own entries after this application's. Off is the "
            "answer when an extension misbehaves.", heading="Shell"),
+    Option("general.single_instance", "general", "One window",
+           "Starting File Manager again -- or Open in File Manager from "
+           "Explorer -- opens the folder in a new tab of the window already "
+           "open, rather than a second window.", heading="Starting",
+           restart=True, new=True, words=("instance", "explorer")),
     Option("updates.check_on_launch", "general", "Check for updates on launch",
            "One request to this application's release feed, shortly after "
            "start. Nothing is downloaded without asking.", heading="Updates"),
