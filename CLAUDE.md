@@ -849,6 +849,21 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   with a mirror: **a walk that did not see everything never removes anything**
   (`Scan.complete`), and **links and junctions are never walked, copied or
   removed**. Anything added to the planner keeps both.
+- **Another application's jobs are checked here, then are ordinary jobs.**
+  Since 0.46 File Compare hands its folder sync to this queue rather than
+  carrying a second copy engine: it writes a request file and starts
+  `FileManager.exe --queue <file>`, which reaches a running window over the
+  single-instance pipe as `{"queue": path}`. The path crosses the pipe, not
+  the jobs -- a plan of ten thousand files is bigger than one message, and
+  a window not yet running needs a file anyway. `core/handoff.py` reads the
+  file off the UI thread (the pipe's own thread, or one started for a
+  command line) and refuses the whole request unless every part is a copy or
+  a recycle of full paths, each copy landing under its job's destination.
+  Nothing is added to the job kinds for it; a request never asks for a move
+  or an erase. The preview somebody saw is File Compare's, which is why no
+  second dialog appears here. The outcome is written beside the request as
+  `<name>.result.json` once its last job ends -- never at a path the request
+  names.
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.

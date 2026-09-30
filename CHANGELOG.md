@@ -5,6 +5,28 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.46.0]
+
+### Added
+- **File Compare can hand its folder sync to this queue.** Its folder view
+  (File Compare 1.0) works out what would make one tree match the other,
+  shows every action with a box beside it, and then asks File Manager to do
+  the copying and removing -- so there is still one copy engine, and a sync
+  started there gets this queue's pause, cancel, conflict rule, retry and
+  history like a copy made with F5. `FileManager.exe --queue <file>` is how
+  it asks: a running window receives the request over the single-instance
+  pipe, and if none is running one starts and takes it.
+- The queue panel opens and the status bar says what arrived. When every
+  job from the request has finished, the outcome is written beside the
+  request file so File Compare can walk the two folders again by itself.
+- A request is checked before anything is queued, and refused whole if any
+  part of it is not what File Compare's preview could have produced: only
+  copies and Recycle Bin removals (never a move or a permanent erase), full
+  paths only, every copy landing under the destination it names. A refusal
+  says why in the status bar.
+- Jobs from File Compare are not offered to Ctrl+Z: they were planned
+  somewhere else.
+
 ## [0.45.1]
 
 ### Fixed

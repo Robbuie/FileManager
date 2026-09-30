@@ -71,14 +71,20 @@ def main() -> int:
     # `app/io/instance.py`.
     from app.io.instance import clean_folder
 
-    folder = clean_folder(next((arg for arg in sys.argv[1:] if not arg.startswith("-")), ""))
+    # 0.46: `--queue <file>` is File Compare handing over jobs for the queue
+    # (`core/handoff.py`). It is taken out of the arguments first, so the
+    # file's path is never mistaken for a folder to open.
+    arguments, queue_file = _queue_argument(sys.argv[1:])
+    folder = clean_folder(next((arg for arg in arguments if not arg.startswith("-")), ""))
     listener_handle = None
     if config.get("general.single_instance"):
         from app.io import instance
 
         first, listener_handle = instance.claim()
-        if not first and instance.send(folder):
-            return 0
+        if not first:
+            message = instance.encode_queue(queue_file) if queue_file else None
+            if instance.send(folder, message=message):
+                return 0
     # First, before anything that could freeze. See `app/core/hangs.py`.
     from app.core.hangs import HangRecorder, default_path as hangs_path
 
@@ -194,19 +200,39 @@ def main() -> int:
                         folder_map=FolderMap(bridge, config))
     window.show()
 
-    if listener_handle is not None:
-        from PySide6.QtCore import QObject, Signal
+    from PySide6.QtCore import QObject, Signal
 
+    class Relay(QObject):
+        #: Emitted on the pipe's thread (or the request reader's), received
+        #: on this one: the connection is queued because the window lives
+        #: here.
+        arrived = Signal(str)
+        queued = Signal(object)          # a handoff.Request, or a Refused
+
+    relay = Relay()
+    relay.arrived.connect(window.open_from_outside)
+    relay.queued.connect(window.queue_from_outside)
+
+    def read_request(path: str) -> None:
+        """On a thread of its own: the request is a file, and reading a file
+        is never the UI thread's job, however small and local it is."""
+        from app.core import handoff
+
+        try:
+            relay.queued.emit(handoff.read(path))
+        except handoff.Refused as refusal:
+            relay.queued.emit(refusal)
+
+    def deliver(message: dict) -> None:
+        if "queue" in message:
+            read_request(message["queue"])      # already off the UI thread
+        else:
+            relay.arrived.emit(message.get("open", ""))
+
+    if listener_handle is not None:
         from app.io import instance
 
-        class Relay(QObject):
-            #: Emitted on the pipe's thread, received on this one: the
-            #: connection is queued because the window lives here.
-            arrived = Signal(str)
-
-        relay = Relay()
-        relay.arrived.connect(window.open_from_outside)
-        instance.Listener(listener_handle, relay.arrived.emit).start()
+        instance.Listener(listener_handle, deliver).start()
 
     # Both panes list only once there is a window to paint into. Nothing has
     # touched a volume before this line.
@@ -226,6 +252,11 @@ def main() -> int:
     updates.start_if_wanted()
     if folder:
         window.open_from_outside(folder)
+    if queue_file:
+        import threading
+
+        threading.Thread(target=read_request, args=(queue_file,),
+                         name="handoff-read", daemon=True).start()
 
     try:
         return app.exec()
@@ -234,6 +265,21 @@ def main() -> int:
         transfers.shutdown()
         pool.shutdown()
         updates.install_staged()
+
+
+def _queue_argument(arguments: list[str]) -> tuple[list[str], str]:
+    """The arguments without `--queue <file>`, and the file ("" for none)."""
+    rest: list[str] = []
+    found = ""
+    items = iter(arguments)
+    for argument in items:
+        if argument == "--queue":
+            found = next(items, "") or ""
+        elif argument.startswith("--queue="):
+            found = argument.partition("=")[2]
+        else:
+            rest.append(argument)
+    return rest, found.strip().strip('"')
 
 
 if __name__ == "__main__":

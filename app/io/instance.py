@@ -9,7 +9,7 @@ The first process owns a named pipe, `\\\\.\\pipe\\FileManager.<user>`, created
 with FILE_FLAG_FIRST_PIPE_INSTANCE so that exactly one process can: a second
 one asking for the same name is refused, and that refusal is how it knows it
 is second. It then connects, writes one short JSON message -- which folder to
-open, if any -- and exits. The first process reads messages on a daemon
+open, if any, or (0.46) which request file of queue jobs to run -- and exits. The first process reads messages on a daemon
 thread and hands each to the window through a queued Qt signal; the thread
 never touches the window or the filesystem itself.
 
@@ -55,13 +55,34 @@ def encode(folder: str | None) -> bytes:
     return json.dumps({"open": folder or ""}).encode("utf-8")
 
 
-def decode(data: bytes) -> str | None:
-    """The folder a message asks for, "" for none, or None if it is not one."""
+def encode_queue(request_path: str) -> bytes:
+    """0.46: a file of jobs for the queue, from File Compare. The path goes
+    over the pipe rather than the jobs: a plan of ten thousand files is
+    larger than one message, and the same file serves a window that has to
+    be started first. See `core/handoff.py`."""
+    return json.dumps({"queue": request_path}).encode("utf-8")
+
+
+def decode_message(data: bytes) -> dict | None:
+    """`{"open": folder}` or `{"queue": path}`, or None if it is neither."""
     try:
         message = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
         return None
-    if not isinstance(message, dict) or not isinstance(message.get("open", ""), str):
+    if not isinstance(message, dict):
+        return None
+    queue = message.get("queue")
+    if queue is not None:
+        return {"queue": queue} if isinstance(queue, str) and queue else None
+    if not isinstance(message.get("open", ""), str):
+        return None
+    return {"open": message.get("open", "")}
+
+
+def decode(data: bytes) -> str | None:
+    """The folder a message asks for, "" for none, or None if it is not one."""
+    message = decode_message(data)
+    if message is None:
         return None
     return message.get("open", "")
 
@@ -97,7 +118,7 @@ def _create(first: bool):
 class Listener(threading.Thread):
     """Reads what later starts send, for as long as the process runs."""
 
-    def __init__(self, first_handle, deliver: Callable[[str], None]) -> None:
+    def __init__(self, first_handle, deliver: Callable[[dict], None]) -> None:
         super().__init__(name="instance-pipe", daemon=True)
         self._handle = first_handle
         self._deliver = deliver
@@ -105,7 +126,7 @@ class Listener(threading.Thread):
     def run(self) -> None:  # pragma: no cover - needs Windows
         handle = self._handle
         while handle is not None:
-            folder = None
+            message = None
             try:
                 try:
                     win32pipe.ConnectNamedPipe(handle, None)
@@ -115,7 +136,7 @@ class Listener(threading.Thread):
                     if exc.winerror != 535:
                         raise
                 _hr, data = win32file.ReadFile(handle, LIMIT)
-                folder = decode(bytes(data))
+                message = decode_message(bytes(data))
             except pywintypes.error:
                 pass
             # The next instance of the pipe exists before this one is closed,
@@ -131,8 +152,8 @@ class Listener(threading.Thread):
                     close(handle)
                 except pywintypes.error:
                     pass
-            if folder is not None:
-                self._deliver(folder)
+            if message is not None:
+                self._deliver(message)
             handle = following
 
 
@@ -154,8 +175,10 @@ def claim() -> tuple[bool, object | None]:
         return True, None
 
 
-def send(folder: str | None, *, wait_ms: int = 2000) -> bool:  # pragma: no cover
-    """Hand `folder` to the window that owns the pipe. False if it could not.
+def send(folder: str | None, *, wait_ms: int = 2000,
+         message: bytes | None = None) -> bool:  # pragma: no cover
+    """Hand `folder` -- or a whole encoded `message` -- to the window that
+    owns the pipe. False if it could not.
 
     Allows that process to come to the front before writing, because Windows
     only lets the process the user is interacting with -- this one, just
@@ -175,7 +198,7 @@ def send(folder: str | None, *, wait_ms: int = 2000) -> bool:  # pragma: no cove
     except pywintypes.error:
         return False
     try:
-        win32file.WriteFile(handle, encode(folder))
+        win32file.WriteFile(handle, message if message is not None else encode(folder))
         return True
     except pywintypes.error:
         return False

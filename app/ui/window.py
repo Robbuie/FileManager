@@ -173,6 +173,13 @@ class MainWindow(QMainWindow):
         self._transfers = transfers
         self._queue_dialog: QueueDialog | None = None
         self._history_dialog: HistoryDialog | None = None
+        #: 0.46: jobs queued for another application (`core/handoff.py`),
+        #: job id -> the request they came from, and each request's jobs
+        #: still running and those finished. When the last one ends the
+        #: outcome is written beside the request for the sender to read.
+        self._handoff_jobs: dict[int, object] = {}
+        self._handoff_open: dict[int, set[int]] = {}
+        self._handoff_done: dict[int, list] = {}
         self._previews = left.previews
         self._thumbnails = left.thumbnails
         #: The viewer, built the first time F3 is pressed and kept afterwards.
@@ -2242,6 +2249,64 @@ class MainWindow(QMainWindow):
             return
         self._transfers.answer(job_id, dialog.action, apply_to_all=dialog.apply_to_all)
 
+    def queue_from_outside(self, request) -> None:
+        """0.46: jobs File Compare asked the queue to run.
+
+        `request` is a `handoff.Request` already read and checked off the UI
+        thread, or the `handoff.Refused` saying why it was not. Somebody saw
+        these jobs in File Compare's preview before they were written, so
+        they go into the queue as they are, as ordinary jobs; the queue panel
+        opens so the person who pressed the button watches them run.
+        """
+        from app.core import handoff
+
+        if self.isMinimized():
+            self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        if isinstance(request, handoff.Refused) or not isinstance(request, handoff.Request):
+            self.statusBar().showMessage(f"A request for the queue was refused: {request}",
+                                         15000)
+            return
+        ids: set[int] = set()
+        for job in request.jobs:
+            if job.kind == handoff.COPY:
+                job_id = self._transfers.copy_into(job.sources, job.destination,
+                                                   job.into, conflict=job.conflict)
+            else:
+                job_id = self._transfers.recycle(job.sources)
+            ids.add(job_id)
+            # An undo of a job another application planned is an undo nobody
+            # here decided on; the job is recorded as not undoable.
+            self._undo_jobs.add(job_id)
+        key = id(request)
+        self._handoff_open[key] = ids
+        self._handoff_done[key] = []
+        for job_id in ids:
+            self._handoff_jobs[job_id] = request
+        self.statusBar().showMessage(request.summary(), 10000)
+        self._show_queue()
+
+    def _handoff_finished(self, job) -> None:
+        request = self._handoff_jobs.pop(job.id, None)
+        if request is None:
+            return
+        key = id(request)
+        self._handoff_open.get(key, set()).discard(job.id)
+        self._handoff_done.setdefault(key, []).append(job)
+        if self._handoff_open.get(key):
+            return
+        from app.core import handoff
+        import threading
+
+        states = self._handoff_done.pop(key, [])
+        self._handoff_open.pop(key, None)
+        result = handoff.outcome(request, states)
+        # A file, so not on this thread -- however small and local it is.
+        threading.Thread(target=handoff.write_result, args=(request.path, result),
+                         name="handoff-result", daemon=True).start()
+
     def _on_transfer_finished(self, job) -> None:
         """Re-list the folders a job touched, say how it went, and offer to
         retry what Windows refused.
@@ -2252,6 +2317,7 @@ class MainWindow(QMainWindow):
         from -- so a delete refreshes the folder it emptied without this method
         having to know that a delete has no destination.
         """
+        self._handoff_finished(job)
         # 0.44: a job that finished whole can be undone; one an undo started
         # cannot be undone again.
         if job.id in self._undo_jobs:
