@@ -298,6 +298,13 @@ class MainWindow(QMainWindow):
         self._splitter.set_glow_colour(tokens["accent"])
         self._splitter.set_motion(bool(config.get("look.motion")))
         self._splitter.set_glow_enabled(bool(config.get("look.pane_glow")))
+        # 0.39: the drafting grid lives in the listings, not on the Deck
+        # behind them -- see app/ui/drafting.py for why.
+        from app.ui.drafting import DraftingGrid
+        self._drafting = DraftingGrid(self)
+        for widget in self._widgets:
+            for view in widget.listing_views():
+                self._drafting.attach(view)
         self._apply_grid(tokens)
 
         self.setWindowTitle(TITLE)
@@ -1682,10 +1689,10 @@ class MainWindow(QMainWindow):
 
         if tokens.get("theme_name") == "blueprint" \
                 and bool(self._config.get("look.blueprint_grid")):
-            self._splitter.set_grid(parse_colour(tokens.get("grid_minor")),
-                                    parse_colour(tokens.get("grid_major")))
+            self._drafting.set_colours(parse_colour(tokens.get("grid_minor")),
+                                       parse_colour(tokens.get("grid_major")))
         else:
-            self._splitter.set_grid(None)
+            self._drafting.set_colours(None)
 
     def _resolve_accent(self) -> None:
         """Work the accent out again from its source, then re-render.

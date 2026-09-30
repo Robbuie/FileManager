@@ -32,7 +32,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
-from app.io import decode, elevate, gitstatus, holders, paths
+from app.io import decode, elevate, gdi, gitstatus, holders, paths
 from app.io.protocol import (
     BATCH_SIZE,
     WALK_HEARTBEAT,
@@ -62,7 +62,6 @@ try:
     import win32event
     import win32gui
     import win32process
-    import win32ui
     from win32com.shell import shell as win32shell, shellcon
 except Exception:  # noqa: BLE001 - reported by _open, like paths.win32_problem
     pythoncom = None
@@ -70,7 +69,6 @@ except Exception:  # noqa: BLE001 - reported by _open, like paths.win32_problem
     win32event = None
     win32gui = None
     win32process = None
-    win32ui = None
     win32shell = None
     shellcon = None
 
@@ -851,7 +849,7 @@ def _icon(request: Request, outbox: Any) -> None:
     if not keys:
         outbox.put(Reply(request.id, Status.OK, payload={"size": size, "icons": {}}))
         return
-    if win32shell is None or win32gui is None or win32ui is None or shellcon is None:
+    if win32shell is None or win32gui is None or not gdi.available() or shellcon is None:
         outbox.put(Reply(request.id, Status.ERROR, payload={"size": size, "icons": {}},
                          message="shell icons need pywin32 on Windows"))
         return
@@ -903,7 +901,7 @@ def _file_icons(request: Request, outbox: Any) -> None:
     if not names:
         outbox.put(Reply(request.id, Status.OK, payload=empty))
         return
-    if win32shell is None or win32gui is None or win32ui is None or shellcon is None:
+    if win32shell is None or win32gui is None or not gdi.available() or shellcon is None:
         outbox.put(Reply(request.id, Status.ERROR, payload=empty,
                          message="file icons need pywin32 on Windows"))
         return
@@ -1332,43 +1330,12 @@ def _draw_icon(hicon: int, size: int, fill: int,
                problems: list[str] | None = None) -> bytes | None:
     """Draw one icon onto a solid background and read the pixels back.
 
-    Every handle taken here is given back in the same call. A worker that
-    draws a few thousand icons over an afternoon and leaks one GDI object
-    each time stops being able to draw anything at all, and the way that
-    presents is a window that goes blank rather than an error anybody can
-    trace back to here.
+    Every handle taken is given back in the same call -- a worker that leaks
+    one GDI object per icon stops being able to draw anything after a few
+    thousand, and presents as a window gone blank. 0.39: the drawing itself
+    is `io/gdi.py`, plain ctypes, rather than pywin32's MFC wrapper.
     """
-    screen = win32gui.GetDC(0)
-    surface = memory = bitmap = None
-    try:
-        surface = win32ui.CreateDCFromHandle(screen)
-        memory = surface.CreateCompatibleDC()
-        bitmap = win32ui.CreateBitmap()
-        bitmap.CreateCompatibleBitmap(surface, size, size)
-        memory.SelectObject(bitmap)
-        memory.FillSolidRect((0, 0, size, size), fill)
-        win32gui.DrawIconEx(memory.GetSafeHdc(), 0, 0, hicon, size, size,
-                            0, None, win32con.DI_NORMAL)
-        return bytes(bitmap.GetBitmapBits(True))
-    except Exception as exc:  # noqa: BLE001 - a drawing failure is one missing icon
-        if problems is not None:
-            problems.append(f"drawing the icon failed: {_describe(exc)}")
-        return None
-    finally:
-        if bitmap is not None:
-            try:
-                win32gui.DeleteObject(bitmap.GetHandle())
-            except Exception:  # noqa: BLE001
-                pass
-        if memory is not None:
-            try:
-                memory.DeleteDC()
-            except Exception:  # noqa: BLE001
-                pass
-        # `surface` wraps the desktop's own DC and is deliberately not deleted:
-        # the handle belongs to the desktop, pywin32 does not own it, and
-        # releasing it below is the whole of the cleanup it needs.
-        win32gui.ReleaseDC(0, screen)
+    return gdi.draw_icon(hicon, size, fill, problems)
 
 
 # --------------------------------------------------------------------------

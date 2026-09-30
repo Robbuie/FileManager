@@ -26,8 +26,6 @@ SPREAD = 10
 #: The card's corner, which the glow's rings follow outwards.
 RADIUS = 12.0
 DURATION_MS = 180
-#: 0.35: the drafting grid's cell, in logical pixels.
-GRID = 24
 
 
 class Deck(QSplitter):
@@ -47,10 +45,9 @@ class Deck(QSplitter):
         self._motion.setEndValue(1.0)
         self._motion.setEasingCurve(QEasingCurve.OutCubic)
         self._motion.valueChanged.connect(self._step)
-        #: 0.35: the glow can be turned off, and a grid can be drawn behind
-        #: the cards. `None` colours mean no grid.
+        #: 0.35: the glow can be turned off. (The drafting grid that was also
+        #: drawn here moved into the listings in 0.39: app/ui/drafting.py.)
         self._glow_on = True
-        self._grid: tuple[QColor, QColor] | None = None
 
     def set_motion(self, on: bool) -> None:
         self._motion.setDuration(DURATION_MS if on else 0)
@@ -62,14 +59,6 @@ class Deck(QSplitter):
 
     def set_glow_enabled(self, on: bool) -> None:
         self._glow_on = bool(on)
-        self.update()
-
-    def set_grid(self, minor: QColor | None, major: QColor | None = None) -> None:
-        """The drafting grid, or None for none. Painted here for the glow's
-        reason: the gaps around the cards are the only place it shows, and
-        the splitter is what owns them."""
-        self._grid = None if minor is None or not minor.isValid() \
-            else (minor, major if major is not None and major.isValid() else minor)
         self.update()
 
     def glow_on(self, widget: QWidget | None, animate: bool = True) -> None:
@@ -109,20 +98,8 @@ class Deck(QSplitter):
             self._source = None
         self.update()
 
-    def _paint_grid(self) -> None:
-        minor, major = self._grid
-        painter = QPainter(self)
-        width, height = self.width(), self.height()
-        for step, x in enumerate(range(0, width, GRID)):
-            painter.fillRect(x, 0, 1, height, major if step % 5 == 0 else minor)
-        for step, y in enumerate(range(0, height, GRID)):
-            painter.fillRect(0, y, width, 1, major if step % 5 == 0 else minor)
-        painter.end()
-
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().paintEvent(event)
-        if self._grid is not None:
-            self._paint_grid()
         rect = self.glow_rect()
         if rect is None or self._colour.alpha() == 0 or not self._glow_on:
             return

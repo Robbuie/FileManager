@@ -31,11 +31,11 @@ the application actually does, which is the rate to expect:
     previews like a photograph. `PySide6.QtPdf` is excluded as a *module* and
     the plugin is what is used, which is exactly why reading the exclusion
     list and stopping there gets this wrong.
-  * **Qt6Svg, `imageformats/qsvg.dll` and `pythonwin` stay.** `.svg` and
-    `.svgz` are previewable kinds; `app/ui/glyphs.py` saying it needs no QtSvg
-    is a statement about the chrome, not about what the previewer reads. And
-    `win32ui` is imported by both `io/menu.py` and `io/worker.py`, which is
-    how an `HBITMAP` from the shell becomes pixels.
+  * **Qt6Svg and `imageformats/qsvg.dll` stay.** `.svg` and `.svgz` are
+    previewable kinds; `app/ui/glyphs.py` saying it needs no QtSvg is a
+    statement about the chrome, not about what the previewer reads. (`win32ui`
+    was on this side of the list until 0.39, when `io/gdi.py` took over the
+    two jobs it was imported for.)
 
 The saving is around 46 MB of a 115 MB folder. `opengl32sw.dll` is more than
 half of it and is the one entry here worth confirming by hand rather than by
@@ -93,6 +93,43 @@ EXCLUDE_FILES = frozenset({
     "pyside6/plugins/tls/qschannelbackend.dll",
     "pyside6/plugins/networkinformation/qnetworklistmanager.dll",
 
+    # 0.39: Qt's copy of OpenSSL. PyInstaller's QtNetwork hook goes looking
+    # for `libssl-3-x64.dll` on the build machine's PATH and puts what it finds
+    # at the root of `_internal`, for the TLS plugin above -- which is dropped,
+    # so these are 8.5 MB that nothing loads. Python's own OpenSSL is the pair
+    # *without* `-x64` in the name, which is what `_ssl.pyd` and `_hashlib.pyd`
+    # link to and what the update check runs on; those stay, and
+    # `test_trim.py` pins them. `build.py` also reads every kept binary's
+    # import table after the freeze and refuses a build in which anything
+    # links to a DLL that is not there, so a wrong guess here fails the build
+    # rather than the update check.
+    "libcrypto-3-x64.dll",
+    "libssl-3-x64.dll",
+
+    # 0.39: Direct2D and the two headless platform plugins. The window runs
+    # on `qwindows.dll`; nothing sets QT_QPA_PLATFORM in a shipped build, and
+    # the offscreen renderer is for `tools/preview.py`, which runs from source.
+    "pyside6/plugins/platforms/qdirect2d.dll",
+    "pyside6/plugins/platforms/qminimal.dll",
+    "pyside6/plugins/platforms/qoffscreen.dll",
+
+    # 0.39: pywin32's MFC wrapper and MFC itself. `io/gdi.py` now does the
+    # two things `win32ui` was imported for with plain ctypes, and nothing
+    # imports it any more; these entries are for the pywin32 hook, which can
+    # collect it anyway.
+    "pythonwin/win32ui.pyd",
+    "pythonwin/win32uiole.pyd",
+    "pythonwin/mfc140u.dll",
+    "mfc140u.dll",
+
+    # 0.39: Pillow's FreeType binding. Pillow draws text only when asked to
+    # through ImageFont, and nothing here asks: the previews are decoded, not
+    # annotated.
+    "pil/_imagingft.pyd",
+
+    # Lottie animations drawn as vector images. Nothing here plays one.
+    "pyside6/plugins/vectorimageformats/qlottievectorimage.dll",
+
     # TUIO is a protocol for tracking fingers on a table-sized touch surface,
     # delivered over UDP. It is collected because it lives in `plugins/generic`.
     "pyside6/plugins/generic/qtuiotouchplugin.dll",
@@ -106,6 +143,16 @@ EXCLUDE_FILES = frozenset({
 #: This is not the application's own text; there is none to translate. If this
 #: ever grows a UI language, the folder comes back.
 EXCLUDE_FOLDERS = ("pyside6/translations/",)
+
+
+#: Pillow names its extensions with the interpreter's tag in them --
+#: `_imagingft.cp312-win_amd64.pyd` -- and the tag changes with every Python.
+#: Matched with the tag taken out, so the list above can name the module.
+def _untagged(path: str) -> str:
+    head, _sep, tail = path.rpartition("/")
+    if tail.endswith(".pyd") and tail.count(".") >= 2:
+        tail = tail.split(".", 1)[0] + ".pyd"
+    return f"{head}/{tail}" if head else tail
 
 
 def normalise(destination: str) -> str:
@@ -128,7 +175,7 @@ def keep(destination: str) -> bool:
     something out -- the failure that does not announce itself.
     """
     path = normalise(destination)
-    if path in EXCLUDE_FILES:
+    if path in EXCLUDE_FILES or _untagged(path) in EXCLUDE_FILES:
         return False
     return not any(path.startswith(folder) for folder in EXCLUDE_FOLDERS)
 
@@ -150,3 +197,35 @@ def apply(analysis) -> list[tuple[str, int]]:
         report.append((name, len(entries) - len(kept)))
         setattr(analysis, name, kept)
     return report
+
+
+#: DLLs Windows supplies itself, which a build is right not to carry. The
+#: api-set names are contracts rather than files and are never on disk under
+#: that name; the others are what every Windows 10 and 11 install has in
+#: System32. `build.py` also asks the build machine's System32, so this list
+#: only has to cover the api sets and anything a CI image might lack.
+SYSTEM_PREFIXES = ("api-ms-win-", "ext-ms-win-")
+
+
+def missing_links(imports: dict[str, list[str]], present: set[str],
+                  system: set[str]) -> dict[str, list[str]]:
+    """Which binaries link to a DLL the build does not contain.
+
+    `imports` maps each binary in the frozen folder to the DLL names its
+    import table asks for; `present` is every file name in the folder and
+    `system` every name in the build machine's System32, all compared without
+    case. What comes back is the list a trim got wrong: a DLL that was
+    dropped while something kept still needs it. That is the failure this
+    whole module exists to prevent, and it is found here, at build time,
+    rather than as a feature that silently stops working on the user's
+    machine.
+    """
+    have = {name.lower() for name in present} | {name.lower() for name in system}
+    problems: dict[str, list[str]] = {}
+    for binary, names in imports.items():
+        gone = sorted({name for name in names
+                       if name.lower() not in have
+                       and not name.lower().startswith(SYSTEM_PREFIXES)})
+        if gone:
+            problems[binary] = gone
+    return problems

@@ -869,6 +869,10 @@ class PaneWidget(QFrame):
         header.setDefaultSectionSize(metrics["row_h"])
         header.setMinimumSectionSize(metrics["row_h"])
 
+    def listing_views(self) -> tuple:
+        """The two views of this pane's rows, for things drawn behind them."""
+        return (self._view, self._grid)
+
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         """Take the colours the sheet was just rendered from.
 

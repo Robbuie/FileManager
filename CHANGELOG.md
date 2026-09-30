@@ -5,6 +5,40 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.39.0]
+
+A footprint pass, and the drafting grid moved to where it can be seen.
+
+### Fixed
+- **An update now replaces the program folder instead of adding to it.** The
+  installer copied new files over the old ones and never removed a file a
+  newer build had stopped shipping, so everything trimmed since 0.29.12 --
+  about 46 MB of software OpenGL, the QML runtime and Qt's translations -- was
+  still on disk on any machine that had been updating since before then, and
+  an early install carried a second Python runtime as well. The `_internal`
+  folder is now cleared before each install. Settings, job history, labels,
+  notes and workspaces are in %APPDATA% and are not touched.
+- **The Blueprint drafting grid is drawn behind the rows.** It was drawn on
+  the area behind the two panes, which the panes cover, so it only showed in
+  the thin gaps around them. It is now drawn in each listing and in the
+  thumbnail grid, moves with the content when it scrolls, and is a little
+  stronger than before. Rows that paint their own band -- hover, selection,
+  the recency glow -- still cover it.
+
+### Changed
+- **About 21 MB smaller installed**, from roughly 105 MB, on top of the
+  leftovers above. Left out of the build: Qt's own copy of OpenSSL (8.5 MB --
+  only Qt's networking used it, and that was already gone; Python's copy,
+  which the update check uses, stays), pywin32's MFC wrapper and MFC itself
+  (6.6 MB), Pillow's font renderer, and three Qt display plugins the window
+  never loads. Shell icons, menu icons and Windows thumbnails are now read
+  through a few direct Windows calls (`app/io/gdi.py`) instead of through the
+  MFC wrapper -- the same calls, made without it.
+- **A build that is missing a DLL fails.** After freezing, `build.py` reads
+  every binary's import table and refuses the build if anything links to a
+  file that is not there, and prints the folder's size so growth shows in the
+  build log.
+
 ## [0.38.0]
 
 ### Added

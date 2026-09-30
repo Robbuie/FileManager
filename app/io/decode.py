@@ -521,7 +521,6 @@ def _shell(path: str, size: int, box: int, deadline: float,
         import pythoncom                                       # noqa: PLC0415
         from win32com.shell import shell, shellcon              # noqa: PLC0415
         import win32gui                                         # noqa: PLC0415
-        import win32ui                                          # noqa: PLC0415
     except ImportError:
         return None
 
@@ -540,7 +539,7 @@ def _shell(path: str, size: int, box: int, deadline: float,
     bitmap = item.GetImage((wanted, wanted),
                            siigbf_thumbnailonly | siigbf_biggersizeok)
     try:
-        return _from_hbitmap(bitmap, size, win32gui, win32ui)
+        return _from_hbitmap(bitmap, size)
     finally:
         try:
             win32gui.DeleteObject(bitmap)
@@ -621,8 +620,7 @@ def _png(image: Any, buffer_class: Any, array_class: Any) -> bytes | None:
     return bytes(store.data())
 
 
-def _from_hbitmap(bitmap: int, size: int, win32gui: Any,
-                  win32ui: Any) -> Preview | None:
+def _from_hbitmap(bitmap: int, size: int) -> Preview | None:
     """A Windows `HBITMAP` as a PNG preview.
 
     The shell hands back a GDI bitmap handle, which is neither picklable nor
@@ -635,12 +633,14 @@ def _from_hbitmap(bitmap: int, size: int, win32gui: Any,
     from PySide6.QtCore import QBuffer, QByteArray                # noqa: PLC0415
     from PySide6.QtGui import QImage                              # noqa: PLC0415
 
-    info = win32gui.GetObject(bitmap)
-    width, height = int(info.bmWidth), int(info.bmHeight)
+    from app.io import gdi                                        # noqa: PLC0415
+
+    read = gdi.bitmap_pixels(int(bitmap))
+    if read is None:
+        return None
+    pixels, width, height, _depth = read
     if width <= 0 or height <= 0:
         return None
-    handle = win32ui.CreateBitmapFromHandle(bitmap)
-    pixels = handle.GetBitmapBits(True)
     if not pixels or len(pixels) < width * height * 4:
         return None
     image = QImage(bytes(pixels), width, height, width * 4,

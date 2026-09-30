@@ -107,7 +107,7 @@ def shell(monkeypatch):
     gui = FakeGui()
     monkeypatch.setattr(worker, "win32shell", fake)
     monkeypatch.setattr(worker, "win32gui", gui)
-    monkeypatch.setattr(worker, "win32ui", object())
+    monkeypatch.setattr(worker.gdi, "available", lambda: True)
     monkeypatch.setattr(worker, "shellcon", FakeConst)
     monkeypatch.setattr(worker, "win32con", FakeConst)
     monkeypatch.setattr(worker, "_icon_pixels",
@@ -152,7 +152,7 @@ def test_a_call_that_is_not_there_says_so_rather_than_going_quiet(monkeypatch):
 
     monkeypatch.setattr(worker, "win32shell", object())   # no SHGetFileInfo
     monkeypatch.setattr(worker, "win32gui", FakeGui())
-    monkeypatch.setattr(worker, "win32ui", object())
+    monkeypatch.setattr(worker.gdi, "available", lambda: True)
     monkeypatch.setattr(worker, "shellcon", FakeConst)
     monkeypatch.setattr(worker, "win32con", FakeConst)
 

@@ -44,6 +44,18 @@ import trim  # noqa: E402
     "PySide6/plugins/generic/qtuiotouchplugin.dll",
     "PySide6/translations/qt_de.qm",
     "PySide6/translations/qtbase_fr.qm",
+    # 0.39
+    "libcrypto-3-x64.dll",
+    "libssl-3-x64.dll",
+    "PySide6/plugins/platforms/qdirect2d.dll",
+    "PySide6/plugins/platforms/qminimal.dll",
+    "PySide6/plugins/platforms/qoffscreen.dll",
+    "pythonwin/win32ui.pyd",
+    "pythonwin/mfc140u.dll",
+    "mfc140u.dll",
+    "PIL/_imagingft.cp312-win_amd64.pyd",
+    "PIL/_imagingft.cp314-win_amd64.pyd",
+    "PySide6/plugins/vectorimageformats/qlottievectorimage.dll",
 ])
 def test_what_the_application_never_loads_is_dropped(destination):
     assert not trim.keep(destination)
@@ -62,9 +74,13 @@ def test_what_the_application_never_loads_is_dropped(destination):
     ("PySide6/Qt6Svg.dll", "svg previews"),
     ("PySide6/plugins/imageformats/qsvg.dll", "svg previews"),
     ("PySide6/plugins/iconengines/qsvgicon.dll", "svg previews"),
-    # win32ui is imported by io/menu.py and io/worker.py, and is how an
-    # HBITMAP from the shell becomes pixels.
-    ("pythonwin/win32ui.pyd", "shell icons and menu bitmaps"),
+    # pywin32 proper, which everything on the Windows side is built on. Only
+    # `win32ui` (MFC) left, in 0.39.
+    ("win32/win32gui.pyd", "shell icons, menus, the window list"),
+    ("pywin32_system32/pywintypes312.dll", "all of pywin32"),
+    # Pillow's core and the AVIF reader, which is a feature kept on purpose.
+    ("PIL/_imaging.cp312-win_amd64.pyd", "image decoding"),
+    ("PIL/_avif.cp312-win_amd64.pyd", "avif previews"),
     # Python's own OpenSSL, at the root of _internal rather than in PySide6/,
     # beside _ssl.pyd and _hashlib.pyd. The update check's HTTPS and its
     # SHA-256 verification both run on it.
@@ -133,3 +149,22 @@ def test_the_list_refuses_rather_than_allows():
     """
     assert trim.keep("PySide6/Qt6SomethingNew.dll")
     assert trim.keep("PySide6/plugins/imageformats/qbrandnew.dll")
+
+
+def test_a_dropped_dll_that_something_still_links_to_is_named():
+    imports = {
+        "_ssl.pyd": ["libssl-3.dll", "libcrypto-3.dll", "KERNEL32.dll",
+                     "api-ms-win-crt-runtime-l1-1-0.dll"],
+        "PySide6/Qt6Gui.dll": ["Qt6Core.dll", "d3d11.dll"],
+        "pythonwin/dde.pyd": ["win32ui.pyd", "MFC140U.dll"],
+    }
+    present = {"_ssl.pyd", "libssl-3.dll", "libcrypto-3.dll", "Qt6Gui.dll", "Qt6Core.dll",
+               "dde.pyd"}
+    system = {"kernel32.dll", "D3D11.dll"}
+    assert trim.missing_links(imports, present, system) == {
+        "pythonwin/dde.pyd": ["MFC140U.dll", "win32ui.pyd"],
+    }
+
+
+def test_a_complete_build_has_nothing_missing():
+    assert trim.missing_links({"a.pyd": ["B.DLL"]}, {"b.dll"}, set()) == {}

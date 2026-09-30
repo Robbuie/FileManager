@@ -39,7 +39,7 @@ import signal
 import time
 from typing import Any
 
-from app.io import paths
+from app.io import gdi, paths
 from app.io.protocol import (
     MENU_COMMAND,
     MENU_SEPARATOR,
@@ -58,7 +58,6 @@ try:
     import win32gui
     import win32gui_struct
     import win32process
-    import win32ui
     from win32com.shell import shell as win32shell, shellcon
 except Exception:  # noqa: BLE001 - reported in the reply, never raised at import
     pythoncom = None
@@ -67,7 +66,6 @@ except Exception:  # noqa: BLE001 - reported in the reply, never raised at impor
     win32gui = None
     win32gui_struct = None
     win32process = None
-    win32ui = None
     win32shell = None
     shellcon = None
 
@@ -707,18 +705,13 @@ def _bitmap(handle: Any) -> tuple[bytes, int] | None:
     somebody's "Delete" command.
     """
     handle = int(handle or 0)
-    if handle <= 0 or win32ui is None:
+    if handle <= 0:
         return None
-    try:
-        bitmap = win32ui.CreateBitmapFromHandle(handle)
-        info = bitmap.GetInfo()
-        width = int(info.get("bmWidth") or 0)
-        height = int(info.get("bmHeight") or 0)
-        depth = int(info.get("bmBitsPixel") or 0)
-        if width != height or not 8 <= width <= 64 or depth != 32:
-            return None
-        pixels = bytes(bitmap.GetBitmapBits(True))
-    except Exception:  # noqa: BLE001
+    read = gdi.bitmap_pixels(handle)
+    if read is None:
+        return None
+    pixels, width, height, depth = read
+    if width != height or not 8 <= width <= 64 or depth != 32:
         return None
     if len(pixels) != width * height * 4:
         return None

@@ -133,8 +133,10 @@ def build(
     # info blue. Two weights, a line every cell and a heavier one every fifth,
     # which is what makes it read as graph paper rather than as a texture.
     info = unhex(out["info"])
-    out["grid_minor"] = rgba(info, 0.06)
-    out["grid_major"] = rgba(info, 0.13)
+    # 0.39: stronger, now that it sits behind the rows rather than in the gaps
+    # between panes. Still well under the text: the listing is read through it.
+    out["grid_minor"] = rgba(info, 0.10)
+    out["grid_major"] = rgba(info, 0.20)
 
     for key, value in DENSITIES[density_name].items():
         out[key] = f"{value:g}px" if key == "ui_font" else f"{int(value)}px"

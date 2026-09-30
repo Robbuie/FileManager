@@ -134,6 +134,65 @@ def freeze(clean: bool) -> None:
     produced = os.path.join(DIST, "FileManager", "FileManager.exe")
     if not os.path.isfile(produced):
         raise SystemExit(f"PyInstaller did not write {produced}")
+    check_links(os.path.join(DIST, "FileManager"))
+
+
+def check_links(folder: str) -> None:
+    """Refuse a build in which a kept binary links to a DLL that is not there.
+
+    0.39. `trim.py` removes files by name, and a name removed while something
+    kept still links to it does not fail the freeze -- it fails on the user's
+    machine, the first time that module is imported, as a feature that has
+    quietly stopped working. Every `.pyd`, `.dll` and `.exe` in the folder is
+    read with pefile (PyInstaller's own dependency, so nothing new) and its
+    import table compared against the folder and this machine's System32.
+
+    It cannot see what Qt loads by name at run time -- plugins, and OpenSSL
+    for Qt's TLS -- which is why those entries in `trim.py` each carry their
+    own argument. It does see every static link, which is the kind of mistake
+    that reads as right in a list.
+
+    The folder's size is printed too, so a release that grew is noticed in
+    the build log rather than on somebody's disk.
+    """
+    import pefile  # noqa: PLC0415 - build-time only, and PyInstaller brings it
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import trim  # noqa: PLC0415
+
+    present: set[str] = set()
+    binaries: list[str] = []
+    total = 0
+    for base, _dirs, files in os.walk(folder):
+        for name in files:
+            path = os.path.join(base, name)
+            present.add(name)
+            total += os.path.getsize(path)
+            if name.lower().endswith((".pyd", ".dll", ".exe")):
+                binaries.append(path)
+    system_root = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32")
+    system = set(os.listdir(system_root)) if os.path.isdir(system_root) else set()
+
+    imports: dict[str, list[str]] = {}
+    for path in binaries:
+        try:
+            image = pefile.PE(path, fast_load=True)
+            image.parse_data_directories(directories=[
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]])
+        except pefile.PEFormatError:
+            continue
+        names = [entry.dll.decode("ascii", "replace")
+                 for entry in getattr(image, "DIRECTORY_ENTRY_IMPORT", [])]
+        image.close()
+        imports[os.path.relpath(path, folder)] = names
+
+    problems = trim.missing_links(imports, present, system)
+    if problems:
+        lines = [f"  {binary}: {', '.join(names)}" for binary, names in sorted(problems.items())]
+        raise SystemExit("these link to DLLs the build does not contain -- "
+                         "check packaging/trim.py:\n" + "\n".join(lines))
+    print(f"links checked: {len(imports)} binaries, none missing a DLL")
+    print(f"frozen folder: {total / 1e6:.1f} MB in {len(present)} files")
 
 
 def package(release: str) -> str:

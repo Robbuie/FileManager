@@ -205,12 +205,19 @@ def test_a_found_accent_replaces_the_named_one(window):
 
 def test_the_grid_follows_the_theme_and_its_switch(window):
     window.apply_setting("theme", "blueprint")
-    assert window._splitter._grid is not None
+    assert window._drafting.shown
     window.apply_setting("look.blueprint_grid", False)
-    assert window._splitter._grid is None
+    assert not window._drafting.shown
     window.apply_setting("look.blueprint_grid", True)
     window.apply_setting("theme", "dark")
-    assert window._splitter._grid is None
+    assert not window._drafting.shown
+
+
+def test_the_grid_is_drawn_in_both_listings_of_both_panes(window):
+    """0.39: on the Deck it only showed in the gaps between the panes."""
+    views = [view for widget in window._widgets for view in widget.listing_views()]
+    assert len(views) == 4
+    assert all(view in window._drafting._views for view in views)
 
 
 def test_the_glow_can_be_turned_off(window):

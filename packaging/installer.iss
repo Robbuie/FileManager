@@ -77,6 +77,17 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"
 
+[InstallDelete]
+; 0.39. Inno copies files over the top of an existing install and never
+; removes one the new build no longer ships, so every file a release stopped
+; carrying -- the 46 MB trimmed in 0.29.12, a whole Python 3.14 runtime from
+; an early build -- stayed on disk through every update after it. The frozen
+; folder is replaced whole instead. Nothing the user made lives in {app}:
+; settings, history and labels are in %APPDATA%, the staged update in
+; %LOCALAPPDATA%. CloseApplications above has already waited for the old
+; process to exit, so nothing in the folder is held open when this runs.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
 Source: "..\dist\FileManager\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
