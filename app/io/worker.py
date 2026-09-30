@@ -150,7 +150,7 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
 
 #: 0.41: what may not happen inside an archive, which is read-only here.
 _ARCHIVE_WRITES = frozenset({Op.MKDIR, Op.RENAME, Op.RENAME_MANY, Op.DELETE,
-                             Op.ATTRIBUTES})
+                             Op.ATTRIBUTES, Op.LINK})
 #: Reads that ask Windows about a real file, which a name inside an archive is
 #: not. Answered with a plain refusal; the callers already treat a failure as
 #: "no badge", "no icon", "no marks".
@@ -232,6 +232,10 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _hash(request, outbox, control, cancelled)
     elif request.op is Op.ATTRIBUTES:
         _attributes(request, outbox, control, cancelled)
+    elif request.op is Op.LINK:
+        _link(request, outbox)
+    elif request.op is Op.LINK_TARGET:
+        _link_target(request, outbox)
     elif request.op is Op.DELETE:
         _delete(request, outbox)
     elif request.op is Op.PING:
@@ -2400,3 +2404,73 @@ def _set_times(path: str, mtime, ctime) -> None:
     if mtime is not None:
         stat = os.stat(target)
         os.utime(target, (stat.st_atime, float(mtime)))
+
+
+#: Windows' "a required privilege is not held" -- what a symbolic link without
+#: Developer Mode or elevation comes back with.
+_NO_PRIVILEGE = 1314
+
+
+def _link(request: Request, outbox: Any) -> None:
+    """0.45: make a junction, symbolic link or hard link. See `Op.LINK`.
+
+    The name is checked like every other name that lands in a folder, and a
+    name already there is refused rather than replaced -- a link is not worth
+    losing a file over.
+    """
+    name = str(request.args.get("name") or "")
+    target = str(request.args.get("target") or "")
+    kind = str(request.args.get("kind") or "")
+    if not paths.is_bare_name(name) or any(ch in name for ch in '\\/:*?"<>|'):
+        outbox.put(Reply(request.id, Status.ERROR, message=f"{name!r} is not a usable name"))
+        return
+    if not target:
+        outbox.put(Reply(request.id, Status.ERROR, message="the link has nothing to point to"))
+        return
+    link = os.path.join(request.path, name)
+    if os.path.lexists(paths.api(link)):
+        outbox.put(Reply(request.id, Status.ERROR, message=f"{name} already exists here"))
+        return
+    try:
+        if kind == "junction":
+            import _winapi  # noqa: PLC0415 - Windows only, and only here
+
+            if not os.path.isdir(paths.api(target)):
+                raise OSError(f"a junction points at a folder, and {target} is not one")
+            _winapi.CreateJunction(target, link)
+        elif kind == "symbolic":
+            os.symlink(target, link, target_is_directory=os.path.isdir(paths.api(target)))
+        elif kind == "hard":
+            if os.path.isdir(paths.api(target)):
+                raise OSError("a hard link is to a file -- use a junction for a folder")
+            os.link(paths.api(target), paths.api(link))
+        else:
+            raise OSError(f"unknown kind of link {kind!r}")
+    except ImportError:
+        outbox.put(Reply(request.id, Status.ERROR, message="junctions are made on Windows only"))
+        return
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == _NO_PRIVILEGE:
+            outbox.put(Reply(request.id, Status.DENIED,
+                             message="Windows allows symbolic links only in Developer "
+                                     "Mode or as administrator -- a junction needs neither"))
+            return
+        outbox.put(_failure(request, exc))
+        return
+    outbox.put(Reply(request.id, Status.OK, payload={"path": link}))
+
+
+def _link_target(request: Request, outbox: Any) -> None:
+    """0.45: where a link or junction points, read from the link itself."""
+    try:
+        target = os.readlink(paths.api(request.path))
+    except (OSError, ValueError) as exc:
+        outbox.put(_failure(request, exc if isinstance(exc, OSError) else OSError(str(exc))))
+        return
+    if target.startswith("\\\\?\\UNC\\"):
+        target = "\\\\" + target[8:]
+    elif target.startswith("\\\\?\\") or target.startswith("\\??\\"):
+        target = target[4:]
+    if not os.path.isabs(target):
+        target = os.path.normpath(os.path.join(os.path.dirname(request.path), target))
+    outbox.put(Reply(request.id, Status.OK, payload={"target": target}))

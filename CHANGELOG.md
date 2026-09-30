@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.45.0]
+
+### Added
+- **New link in other pane** (File menu). A link in the other pane's folder
+  to the item under the cursor: a junction (folders on this machine, no
+  special rights needed -- what `mklink /J` makes), a symbolic link (files or
+  folders anywhere; Windows allows these only in Developer Mode or as
+  administrator, and says so), or a hard link (a second name for a file on the
+  same drive). A name already there is never replaced.
+- **Go to link target** on the right-click menu of a link or junction: into
+  the folder it points at, or to the folder a linked file is in with the file
+  under the cursor.
+
 ## [0.44.0]
 
 ### Added

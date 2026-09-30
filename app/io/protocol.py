@@ -174,6 +174,12 @@ class Op(str, Enum):
     #: `args["recursive"]` also changes everything inside named folders. The
     #: reply is `{"changed": n, "failed": {name: reason}}`.
     ATTRIBUTES = "attributes"
+    #: 0.45: make a link named `args["name"]` in the folder at `path`,
+    #: pointing at `args["target"]`, of `args["kind"]`: "junction",
+    #: "symbolic" or "hard". The reply is `{"path": the link}`.
+    LINK = "link"
+    #: 0.45: where the link or junction at `path` points. `{"target": path}`.
+    LINK_TARGET = "link_target"
 
     #: Delete `args["names"]` from the folder at `path`, to the Recycle Bin
     #: unless `args["permanent"]`. Several names in one request rather than one

@@ -470,6 +470,7 @@ class MainWindow(QMainWindow):
         self._hint(files, "Checksums...", lambda: self._current_widget().checksums())
         self._hint(files, "Attributes and dates...",
                    lambda: self._current_widget().attributes())
+        self._hint(files, "New link in other pane...", self._new_link)
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
@@ -2057,6 +2058,30 @@ class MainWindow(QMainWindow):
             self._transfers.join(source, target)
         else:
             self._transfers.split(source, target, dialog.part_size())
+
+    def _new_link(self) -> None:
+        """0.45: a link in the other pane's folder to the item under the cursor
+        here -- Double Commander's direction, and the one that needs no typing."""
+        from app.ui.links import LinkDialog
+
+        pane, widget = self._current_pane(), self._current_widget()
+        other = self._panes[1 - self._active]
+        row = widget.current_row()
+        entry = pane.current.model.entry(row) if row >= 0 else None
+        target = pane.row_path(row) if entry is not None else pane.current.path
+        if other.in_archive or pane.in_archive:
+            pane.say("links cannot be made into or out of an archive", "bad")
+            return
+        dialog = LinkDialog(self, folder=other.display(), target=pane.resolved(target),
+                            target_is_dir=entry is None or entry.is_dir,
+                            name=paths.leaf(target) if entry is not None else paths.leaf(target))
+        if dialog.exec() != LinkDialog.Accepted:
+            return
+        name, where, kind = dialog.answer()
+        if other.name_taken(name):
+            pane.say(f"{name} already exists in the other pane", "bad")
+            return
+        pane.make_link(other.current.path, name, pane.as_path(where), kind)
 
     def _sync_undo(self) -> None:
         action = self._undo.peek()

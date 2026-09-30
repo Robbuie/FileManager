@@ -1538,6 +1538,10 @@ class PaneWidget(QFrame):
                 # photograph this is the entry somebody wants and Open hands the
                 # file to whatever Windows has associated with it.
                 menu.addAction("View\tF3", self.view_current)
+            if entry is not None and entry.is_link:
+                menu.addAction("Go to link target",
+                               lambda name=entry.name: self._pane.follow_link(
+                                   self._pane.current.model.row_of(name)))
             if entry is not None and not entry.is_dir:
                 menu.addAction("Checksums...", self.checksums)
             if self._pane.in_archive:

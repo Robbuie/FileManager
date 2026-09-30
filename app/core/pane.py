@@ -1047,6 +1047,48 @@ class Pane(QObject):
         self._bridge.submit(Op.ATTRIBUTES, tab.path, timeout=timeout, on_reply=handle,
                             args={"names": list(names), **change})
 
+    def make_link(self, folder: str, name: str, target: str, kind: str) -> None:
+        """0.45: a link in `folder` -- this pane's or the other's -- pointing
+        at `target`, made by that folder's worker."""
+        tab = self.current
+
+        def handle(reply: Reply) -> None:
+            if reply.status is Status.OK:
+                self._set_status(tab, f"made {name}", IDLE)
+                self.folderChanged.emit(folder)
+            else:
+                self._set_status(tab, f"could not make {name}: {_explain(reply)}", BAD)
+
+        self._bridge.submit(Op.LINK, folder, timeout=float(self._config.get("timeout.rename")),
+                            on_reply=handle, args={"name": name, "target": target, "kind": kind})
+
+    def follow_link(self, row: int) -> None:
+        """0.45: go where the link on a row points: into it for a folder, to
+        the folder it is in, cursor on it, for a file."""
+        tab = self.current
+        entry = tab.model.entry(row)
+        source = self.row_path(row)
+        if entry is None or source is None:
+            return
+
+        def handle(reply: Reply) -> None:
+            if reply.status is not Status.OK:
+                self._set_status(tab, f"{entry.name}: {_explain(reply)}", BAD)
+                return
+            target = paths.normalize(str((reply.payload or {}).get("target") or ""))
+            if not target:
+                return
+            if entry.is_dir:
+                self.navigate(target)
+                return
+            where = paths.parent(target)
+            if where:
+                tab.reveal_name = paths.leaf(target)
+                self.navigate(where)
+
+        self._bridge.submit(Op.LINK_TARGET, source, timeout=float(self._config.get("timeout.rename")),
+                            on_reply=handle)
+
     def cancel_request(self, request_id: int | None) -> None:
         if request_id is not None:
             self._bridge.cancel(request_id)
