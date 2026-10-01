@@ -13,22 +13,32 @@ copy made with F5.
 Somebody has already seen the plan: File Compare shows every action with a
 box beside it before it writes the file, the way the sync dialog does here.
 This module's job is to refuse anything that is not what that preview could
-have produced:
+have produced (0.46.1 tightened every one of these after a review showed a
+request could recycle any path at all):
 
+  * **Only from File Compare's own folder.** The request file has to be in
+    `%LOCALAPPDATA%\\FileCompare\\handoff`; a path anywhere else is refused
+    before it is opened.
+  * **Two roots, and nothing outside them.** A request names the folder it
+    copies from and the folder it changes. Every copy source is strictly
+    inside the first, every copy lands inside the second, and every removal
+    is strictly inside the second -- never a root itself, never a drive or a
+    share. Neither root may be inside the other.
   * **Only copy and recycle.** No move, no permanent erase: a request that
     asks for either is refused whole, not trimmed.
-  * **Absolute Windows paths only**, a drive or a UNC share. A relative path
-    would be relative to wherever this process happened to start.
-  * **Every copy source goes into a folder under the job's destination**, so
-    a request cannot spray files across a disk while the queue reports one
-    destination.
+  * **Absolute Windows paths only**, a drive or a UNC share, with no `..`.
   * **Conflict rules are the queue's own**, spelled the way `Conflict` spells
     them.
 
-When every job from one request has finished, the outcome is written beside
-the request file as `<name>.result.json`. File Compare waits for that file and
-walks the two folders again, so its tree shows what the queue did rather than
-what it planned.
+And the window asks once more itself before a request that removes or
+replaces anything (`MainWindow.queue_from_outside`): the preview was File
+Compare's, and this is the application that does the removing.
+
+Every request is answered with a file beside it: `<name>.taken.json` when it
+is queued, then `<name>.result.json` when the last of its jobs ends -- or at
+once, saying why, when it is refused, and when the window closes with its
+jobs unfinished. File Compare waits for that file and walks the two folders
+again, so its tree shows what the queue did rather than what it planned.
 
 Pure apart from `read` and `write_result`, which touch one small local file
 each and are only ever called off the UI thread.
@@ -73,6 +83,14 @@ class Request:
     sender: str = ""           # "File Compare"
     title: str = ""            # what to call it in the status bar
     jobs: list[Job] = field(default_factory=list)
+    source_root: str = ""      # the folder copies come from
+    target_root: str = ""      # the folder the request changes
+
+    @property
+    def replaces(self) -> bool:
+        """Whether any copy overwrites whatever is there, newer or not."""
+        return any(job.kind == COPY and job.conflict == Conflict.OVERWRITE
+                   for job in self.jobs)
 
     @property
     def copies(self) -> int:
@@ -99,6 +117,34 @@ def result_path(request_path: str) -> str:
     return root + ".result.json"
 
 
+def taken_path(request_path: str) -> str:
+    root, _ext = os.path.splitext(request_path)
+    return root + ".taken.json"
+
+
+def folder() -> str:
+    """Where File Compare writes its requests; the only place one is read."""
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"),
+                                                          ".local", "share")
+    return os.path.join(base, "FileCompare", "handoff")
+
+
+def _same_folder(path: str, where: str) -> bool:
+    parent = os.path.dirname(os.path.normpath(path))
+    return os.path.normcase(parent) == os.path.normcase(os.path.normpath(where))
+
+
+def answerable(path: str) -> bool:
+    """A request path this module will read, and write an answer beside: a
+    `.json` file directly in File Compare's handoff folder."""
+    if not isinstance(path, str) or not path or "\x00" in path:
+        return False
+    lowered = path.lower()
+    if not lowered.endswith(".json") or lowered.endswith((".result.json", ".taken.json")):
+        return False
+    return _same_folder(path, folder())
+
+
 def absolute(path: str) -> bool:
     """A drive path (`C:\\...`) or a UNC path (`\\\\server\\share\\...`)."""
     if not isinstance(path, str) or not path or "\x00" in path:
@@ -111,10 +157,29 @@ def absolute(path: str) -> bool:
     return len(path) >= 3 and path[0].isalpha() and path[1] == ":" and path[2] in "\\/"
 
 
+def _norm(path: str) -> str:
+    return ntpath.normpath(path).rstrip("\\").lower()
+
+
 def _inside(path: str, root: str) -> bool:
-    a = ntpath.normpath(path).rstrip("\\").lower()
-    b = ntpath.normpath(root).rstrip("\\").lower()
+    a, b = _norm(path), _norm(root)
     return a == b or a.startswith(b + "\\")
+
+
+def _strictly_inside(path: str, root: str) -> bool:
+    a, b = _norm(path), _norm(root)
+    return a != b and a.startswith(b + "\\")
+
+
+def _a_root(path: str) -> bool:
+    """A drive (`D:\\`) or a share (`\\\\server\\share`): never removed, never a
+    folder a request may change as a whole."""
+    norm = _norm(path)
+    if len(norm) <= 2 and norm[1:2] == ":":
+        return True
+    if norm.startswith("\\\\"):
+        return len([p for p in norm[2:].split("\\") if p]) <= 2
+    return False
 
 
 def _dotted(path: str) -> bool:
@@ -141,6 +206,14 @@ def parse(data: bytes, path: str) -> Request:
         raise Refused("the request has no jobs")
     request = Request(path=path, sender=str(message.get("from", ""))[:60],
                       title=str(message.get("title", ""))[:200])
+    source_root = message.get("source_root")
+    target_root = message.get("target_root")
+    for name, root in (("source", source_root), ("target", target_root)):
+        if not absolute(root) or _dotted(root):
+            raise Refused(f"the request does not name its {name} folder")
+    if _inside(source_root, target_root) or _inside(target_root, source_root):
+        raise Refused("one folder is inside the other")
+    request.source_root, request.target_root = source_root, target_root
     items = 0
     for number, raw in enumerate(jobs_in, 1):
         if not isinstance(raw, dict):
@@ -158,11 +231,19 @@ def parse(data: bytes, path: str) -> Request:
         if items > MAX_ITEMS:
             raise Refused("the request names more items than one request may")
         if kind == RECYCLE:
+            for source in sources:
+                if not _strictly_inside(source, target_root) or _a_root(source):
+                    raise Refused(f"job {number}: {source} is not inside {target_root}")
             request.jobs.append(Job(RECYCLE, tuple(sources)))
             continue
+        for source in sources:
+            if not _strictly_inside(source, source_root):
+                raise Refused(f"job {number}: {source} is not inside {source_root}")
         destination = raw.get("destination")
         if not absolute(destination) or _dotted(destination):
             raise Refused(f"job {number}: the destination is not a full path")
+        if _norm(destination) != _norm(target_root):
+            raise Refused(f"job {number}: the destination is not {target_root}")
         into = raw.get("into") or [destination] * len(sources)
         if not isinstance(into, list) or len(into) != len(sources):
             raise Refused(f"job {number}: one folder per source is needed")
@@ -184,14 +265,12 @@ def parse(data: bytes, path: str) -> Request:
 def read(path: str) -> Request:
     """Read and check a request file. Off the UI thread: it is a file call.
 
-    The path is checked before it is opened -- it has to be a `.json` file
-    named by a full path -- because it arrives over the pipe from whoever
-    wrote to it.
+    The path is checked before it is opened -- a `.json` file directly in
+    File Compare's handoff folder -- because it arrives over the pipe from
+    whoever wrote to it.
     """
-    if not absolute(path) and not os.path.isabs(path):
-        raise Refused("the request path is not a full path")
-    if not path.lower().endswith(".json") or path.lower().endswith(".result.json"):
-        raise Refused("the request is not a .json file")
+    if not answerable(path):
+        raise Refused("the request is not a .json file in File Compare's handoff folder")
     try:
         with open(path, "rb") as handle:
             data = handle.read(LIMIT + 1)
@@ -222,10 +301,31 @@ def outcome(request: Request, states: list) -> dict:
     }
 
 
+def refused(reason: str) -> dict:
+    return {"version": VERSION, "refused": [reason]}
+
+
+def cancelled() -> dict:
+    return {"version": VERSION, "copied": 0, "cancelled": True,
+            "refused": ["File Manager closed before the jobs finished"]}
+
+
+def write_taken(request_path: str) -> None:
+    """`<name>.taken.json`: the request is in the queue."""
+    if answerable(request_path):
+        _write(taken_path(request_path), {"version": VERSION})
+
+
 def write_result(request_path: str, result: dict) -> None:
     """Beside the request, written whole and then renamed, so a reader never
-    sees half of it. Off the UI thread."""
-    target = result_path(request_path)
+    sees half of it. Off the UI thread -- except at exit, the settings file's
+    exception for the settings file's reason."""
+    if not answerable(request_path):
+        return
+    _write(result_path(request_path), result)
+
+
+def _write(target: str, result: dict) -> None:
     partial = target + ".partial"
     try:
         with open(partial, "w", encoding="utf-8") as handle:

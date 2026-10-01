@@ -2269,6 +2269,33 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"A request for the queue was refused: {request}",
                                          15000)
             return
+        if request.removals or request.replaces:
+            # 0.46.1: this is the application that removes and overwrites, so
+            # it asks itself, once, naming the folder -- File Compare's
+            # preview was the plan; this is the go-ahead.
+            from app.core import sync as core_sync
+
+            lines = []
+            if request.removals:
+                where = ("permanently -- it is a network folder, where Windows skips "
+                         "the Recycle Bin" if core_sync.on_a_share(request.target_root)
+                         else "to the Recycle Bin")
+                lines.append(f"remove {request.removals:,} item"
+                             f"{'s' if request.removals != 1 else ''} {where}")
+            if request.replaces:
+                lines.append(f"copy {request.copies:,} item"
+                             f"{'s' if request.copies != 1 else ''}, replacing what is "
+                             "there whether or not it is newer")
+            names = [path for job in request.jobs if job.kind == handoff.RECYCLE
+                     for path in job.sources]
+            if not dialogs.confirm(
+                    self, title=f"{request.sender or 'Another application'} sync",
+                    text=(f"{request.sender or 'Another application'} asks to "
+                          + " and ".join(lines) + f", in {request.target_root}."),
+                    action="Queue them", names=names or None):
+                self._answer_later(request.path, handoff.refused("declined in File Manager"))
+                self.statusBar().showMessage("The sync was not queued.", 8000)
+                return
         ids: set[int] = set()
         for job in request.jobs:
             if job.kind == handoff.COPY:
@@ -2286,7 +2313,21 @@ class MainWindow(QMainWindow):
         for job_id in ids:
             self._handoff_jobs[job_id] = request
         self.statusBar().showMessage(request.summary(), 10000)
+        self._answer_later(request.path, None)
         self._show_queue()
+
+    def _answer_later(self, path: str, result: dict | None) -> None:
+        """Write an answer beside a request, off this thread: the result
+        when there is one, else the mark that says it was queued."""
+        from app.core import handoff
+        import threading
+
+        if result is None:
+            target, args = handoff.write_taken, (path,)
+        else:
+            target, args = handoff.write_result, (path, result)
+        threading.Thread(target=target, args=args, name="handoff-answer",
+                         daemon=True).start()
 
     def _handoff_finished(self, job) -> None:
         request = self._handoff_jobs.pop(job.id, None)
@@ -2850,6 +2891,17 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._transfers.shutdown()
+        # 0.46.1: a request whose jobs did not all finish is answered, so the
+        # application that sent it stops waiting. On this thread, at exit,
+        # for the settings file's reason: one small local file, and a thread
+        # would not outlive the process to write it.
+        if self._handoff_open:
+            from app.core import handoff
+
+            for request in {id(r): r for r in self._handoff_jobs.values()}.values():
+                handoff.write_result(request.path, handoff.cancelled())
+            self._handoff_jobs.clear()
+            self._handoff_open.clear()
         if self._updates is not None:
             self._updates.shutdown()
         if not self._restored:

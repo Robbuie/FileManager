@@ -857,13 +857,18 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   the jobs -- a plan of ten thousand files is bigger than one message, and
   a window not yet running needs a file anyway. `core/handoff.py` reads the
   file off the UI thread (the pipe's own thread, or one started for a
-  command line) and refuses the whole request unless every part is a copy or
-  a recycle of full paths, each copy landing under its job's destination.
-  Nothing is added to the job kinds for it; a request never asks for a move
-  or an erase. The preview somebody saw is File Compare's, which is why no
-  second dialog appears here. The outcome is written beside the request as
-  `<name>.result.json` once its last job ends -- never at a path the request
-  names.
+  command line) and refuses the whole request unless it is in File Compare's
+  handoff folder, names its `source_root` and `target_root`, and every part
+  is a copy from strictly inside the source landing inside the target, or a
+  recycle strictly inside the target -- never a root, a drive or a share.
+  (0.46.0 had only the full-path check, and a review found a request could
+  recycle anything; keep every one of these.) Nothing is added to the job
+  kinds for it; a request never asks for a move or an erase. A request that
+  removes or replaces is asked about here as well (`dialogs.confirm`),
+  because this is the application doing it. Every request is answered beside
+  itself -- `<name>.taken.json` when queued, `<name>.result.json` when its
+  last job ends, when it is refused or declined, and when the window closes
+  with its jobs unfinished -- and never at a path the request names.
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.

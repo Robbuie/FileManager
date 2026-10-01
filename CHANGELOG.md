@@ -5,6 +5,25 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.46.1]
+
+### Fixed
+- **A sync handed over by File Compare is held to its two folders.** 0.46.0
+  checked that every path in a request was a full path, and no more: a
+  request could have recycled any folder on the machine. A request now has
+  to come from File Compare's own handoff folder, has to name the folder it
+  copies from and the folder it changes, and is refused whole if any copy
+  comes from outside the first or lands outside the second, or if any
+  removal is not strictly inside the second -- never the folder itself, a
+  drive or a share.
+- **File Manager asks before a handed-over sync removes or replaces
+  anything**, naming the folder and listing what goes, and says when the
+  folder is on a network share, where Windows removes permanently.
+- **Every request is answered**, so File Compare never waits on one for
+  good: it is marked as taken when it is queued; a refusal, a "no" to the
+  question, or closing File Manager with its jobs unfinished each write an
+  answer beside it saying so.
+
 ## [0.46.0]
 
 ### Added

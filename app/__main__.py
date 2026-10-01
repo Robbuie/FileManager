@@ -221,6 +221,9 @@ def main() -> int:
         try:
             relay.queued.emit(handoff.read(path))
         except handoff.Refused as refusal:
+            # Answered in writing as well, when the path is one File Compare
+            # could be waiting on, so it stops waiting and says why.
+            handoff.write_result(path, handoff.refused(str(refusal)))
             relay.queued.emit(refusal)
 
     def deliver(message: dict) -> None:
