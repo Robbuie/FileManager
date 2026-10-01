@@ -27,7 +27,7 @@ from typing import Sequence
 
 from PySide6.QtCore import QAbstractTableModel, QMimeData, QModelIndex, Qt, QUrl
 
-from app.core import drops, when
+from app.core import colfilter, drops, when
 from app.io import paths
 from app.io.protocol import Entry
 
@@ -248,6 +248,9 @@ class ListingModel(QAbstractTableModel):
         self._sort_column = Column.NAME
         self._sort_order = Qt.AscendingOrder
         self._filter = ""
+        #: 0.49: `_filter` read for column terms (`ext:`, `size:` ...). See
+        #: `app/core/colfilter.py`.
+        self._spec = colfilter.parse("")
         #: 0.33: whether hidden and system rows are let through. Kept apart
         #: from `_filter` because it outlives a folder: `begin` forgets a typed
         #: filter and must not forget a setting.
@@ -432,6 +435,11 @@ class ListingModel(QAbstractTableModel):
     def filter_text(self) -> str:
         return self._filter
 
+    @property
+    def filter_problems(self) -> tuple[str, ...]:
+        """0.49: column terms in the filter that did not read."""
+        return self._spec.problems
+
     # ------------------------------------------------------------ filling it
 
     def begin(self, *, has_parent: bool) -> None:
@@ -444,6 +452,7 @@ class ListingModel(QAbstractTableModel):
         self._all = []
         self._rows = []
         self._filter = ""
+        self._spec = colfilter.parse("")
         self._has_parent = has_parent
         self._scale = None
         self.endResetModel()
@@ -571,6 +580,7 @@ class ListingModel(QAbstractTableModel):
             return
         self.beginResetModel()
         self._filter = text
+        self._spec = colfilter.parse(text)
         self._apply_filter()
         self.endResetModel()
 
@@ -1030,7 +1040,14 @@ class ListingModel(QAbstractTableModel):
             return False
         if not self._show_system and entry.attributes & ATTRIBUTE_SYSTEM:
             return False
-        return not self._filter or matches(self._leaf(entry), self._filter)
+        if not self._filter:
+            return True
+        spec = self._spec
+        if spec.by_column and not colfilter.passes(
+                spec, is_dir=entry.is_dir, ext=self.split(entry)[1],
+                size=entry.size, mtime=entry.mtime):
+            return False
+        return not spec.name or matches(self._leaf(entry), spec.name)
 
     def _apply_filter(self) -> None:
         """Recompute the visible list. Callers own the reset around it."""

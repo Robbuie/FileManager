@@ -5,6 +5,36 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.49.0]
+
+### Added
+- **Filter by column.** The filter box (Ctrl+F) now takes `ext:acd,l5x`,
+  `size:>10mb` (or `<1k`, `=0`), `modified:today` / `yesterday` / `week` /
+  `month` / `older`, and `kind:folder` or `kind:file`, alongside a name.
+  Right-click a column heading for "Filter by Ext" and the rest, which put
+  the word into the box for you. A filter typed before still means what it
+  did.
+- **A pane says when it is on a share.** A thin amber stripe across the top
+  of the pane and a SERVER tag beside the path. Right-click an empty part of
+  a listing to mark a folder as **live**: it and everything under it get a
+  red stripe and a LIVE tag, so a delete there never feels like one on C:.
+- **Dates in folder names stand out.** The date in a day folder's name is
+  drawn as a chip, with today's in the accent. It reads the same date forms
+  Duplicate does.
+- **Striped rows**, off by default.
+- **A selection pill.** With two or more rows marked, the count and total
+  size float over the bottom of the listing with Copy to other pane and
+  Clear.
+- **Placeholder rows while loading.** A folder that takes more than a
+  quarter of a second shows grey rows and "Reading ..." until the first
+  names arrive, instead of an empty pane that looks stuck.
+- **Progress on the taskbar button.** The app's button on the taskbar fills
+  green during a copy, turns amber when paused or waiting for an answer, and
+  red when something failed (until you come back to the window).
+
+Every one of these is a switch in Options. Dimmed extensions after the name,
+also in the mockups, were already there from 0.24.
+
 ## [0.48.0]
 
 ### Added

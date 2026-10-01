@@ -38,12 +38,13 @@ the model's own `size_scale`, computed once per change and cached there.
 from __future__ import annotations
 
 import time
+from datetime import date as _date
 
 from PySide6.QtCore import QRect, QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
-from app.core import filetypes, when
+from app.core import filetypes, naming, when
 from app.core.listing import ATTRIBUTE_HIDDEN, Column, ListingModel
 from app.io import paths
 from app.ui import glyphs
@@ -260,6 +261,10 @@ class RowDelegate(QStyledItemDelegate):
         self.edges = "header"
         #: 0.47: "behind", "under" or "off" -- see `listing.size_bar`.
         self.size_bar = "behind"
+        #: 0.49: every other row shaded, and a chip behind the date in a
+        #: folder's name. See `listing.stripes` and `listing.date_chips`.
+        self.stripes = False
+        self.date_chips = True
 
     # ------------------------------------------------------------- the state
 
@@ -337,6 +342,10 @@ class RowDelegate(QStyledItemDelegate):
         painter.save()
         place, last = (visible_position(option.widget, index.column())
                        if self.edges in ("banded", "ruled") else (0, False))
+        if self.stripes and index.row() % 2 == 1:
+            shade = parse_colour(self._t.get("stripe"))
+            if shade.isValid():
+                painter.fillRect(option.rect, shade)
         if self.edges == "banded" and place % 2 == 1:
             shade = parse_colour(self._t.get("band"))
             if shade.isValid():
@@ -395,8 +404,21 @@ class RowDelegate(QStyledItemDelegate):
         if index.column() in (Column.SIZE, Column.AGE, Column.MODIFIED):
             opt.font = tabular(opt.font)
         ext = self._inline_ext(opt, index)
+        dated = None
+        if self.date_chips and index.column() == Column.NAME and not ext \
+                and row_entry is not None and row_entry.is_dir and opt.text:
+            dated = naming.date_span(str(opt.text))
         if index.column() == Column.AGE:
             self._age(painter, opt, index)
+        elif dated is not None:
+            stem = opt.text
+            opt.text = ""
+            style = opt.widget.style() if opt.widget is not None else QApplication.style()
+            style.drawControl(QStyle.CE_ItemViewItem, opt, painter, opt.widget)
+            if entry is not None:
+                self._badge(painter, opt, style, entry)
+            opt.text = stem
+            self._dated_name(painter, opt, str(stem), dated)
         elif ext or entry is not None:
             # Not `super().paint`: that runs `initStyleOption` again and puts
             # the text straight back, so the stem is drawn twice, a pixel apart.
@@ -668,6 +690,62 @@ class RowDelegate(QStyledItemDelegate):
         painter.setPen(muted if muted.isValid() else QColor(Qt.gray))
         painter.drawText(rect.adjusted(stem_w, 0, 0, 0),
                          int(Qt.AlignLeft | Qt.AlignVCenter), tail)
+        painter.restore()
+
+    def _dated_name(self, painter: QPainter, opt: QStyleOptionViewItem,
+                    name: str, dated) -> None:
+        """0.49: a folder's name with its date drawn as a chip.
+
+        For the day folders: `Line3_2026-09-30` reads as a prefix and a date
+        rather than as one string to scan for the digits, and today's folder is
+        the one in the accent. A name too long for the chip and its padding is
+        drawn plainly and elided, because a chip cut in half says nothing.
+        """
+        start, end, day = dated
+        style = opt.widget.style() if opt.widget is not None else None
+        if style is None:
+            return
+        rect = style.subElementRect(QStyle.SE_ItemViewItemText, opt, opt.widget)
+        rect = rect.adjusted(3, 0, -2, 0)
+        metrics = QFontMetrics(opt.font)
+        before, chip, after = name[:start], name[start:end], name[end:]
+        pad = 5
+        wide = (metrics.horizontalAdvance(before) + metrics.horizontalAdvance(chip)
+                + 2 * pad + 2 + metrics.horizontalAdvance(after))
+        painter.save()
+        painter.setFont(opt.font)
+        ink = opt.palette.color(QPalette.Text)
+        if wide > rect.width():
+            painter.setPen(ink)
+            painter.drawText(rect, int(Qt.AlignLeft | Qt.AlignVCenter),
+                             metrics.elidedText(name, Qt.ElideRight, rect.width()))
+            painter.restore()
+            return
+        today = day == _date.today()
+        x = rect.left()
+        painter.setPen(ink)
+        if before:
+            painter.drawText(QRect(x, rect.top(), rect.width(), rect.height()),
+                             int(Qt.AlignLeft | Qt.AlignVCenter), before)
+            x += metrics.horizontalAdvance(before) + 1
+        chip_w = metrics.horizontalAdvance(chip) + 2 * pad
+        height = min(rect.height() - 2, metrics.height() + 2)
+        box = QRectF(x, rect.center().y() - height / 2.0 + 0.5, chip_w, height)
+        fill = parse_colour(self._t.get("date_today" if today else "date_chip"))
+        if fill.isValid():
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(fill)
+            painter.drawRoundedRect(box, 4, 4)
+        # The row's own ink on both: the fill is what says "today", and the
+        # accent's light text shade is unreadable on the light themes' chip.
+        painter.setPen(ink)
+        painter.drawText(box, int(Qt.AlignCenter), chip)
+        x = int(box.right()) + 2
+        if after:
+            painter.setPen(ink)
+            painter.drawText(QRect(x, rect.top(), rect.right() - x, rect.height()),
+                             int(Qt.AlignLeft | Qt.AlignVCenter), after)
         painter.restore()
 
     def _band(self, painter: QPainter, option: QStyleOptionViewItem,

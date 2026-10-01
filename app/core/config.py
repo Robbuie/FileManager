@@ -306,6 +306,23 @@ DEFAULTS: dict[str, Any] = {
     # (a soft bar behind the figure), "under" (the 0.11 line under it), "off".
     "listing.column_edges": "header",
     "listing.size_bar": "behind",
+    # 0.49: every other row shaded (off: air and a hover do that job), and a
+    # chip behind the date in a folder's name, today's in the accent.
+    "listing.stripes": False,
+    "listing.date_chips": True,
+    # 0.49: what a pane says about where it is -- a stripe and a tag on the
+    # folder header for a network folder, and a red one for a folder marked
+    # live (`places.live`, a list of folders, each covering what is under it).
+    "listing.location_stripe": True,
+    "places.live": [],
+    # 0.49: a pill over the bottom of the pane while rows are marked, with
+    # the count, the total size and a copy to the other pane.
+    "listing.selection_pill": True,
+    # 0.49: placeholder rows while a folder is still arriving, instead of an
+    # empty pane that looks stuck.
+    "listing.placeholders": True,
+    # 0.49: the app's taskbar button fills while a transfer runs.
+    "transfers.taskbar": True,
     # 0.40: a folder sorted by clicking a heading keeps that order, and gets it
     # back the next time it is opened (`core/sorts.py`). `listing.sorts` is the
     # memory itself, by lower-cased path: [column, 0 ascending / 1 descending].

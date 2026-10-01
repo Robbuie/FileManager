@@ -164,6 +164,11 @@ def build(
     # theme; a counted folder's bar keeps the accent, as it did.
     out["size_fill"] = rgba(unhex(out["txt_1"]), 0.15)
     out["size_fill_dir"] = rgba(a, 0.20)
+    # 0.49: striped rows (off by default), and the chip behind a date in a
+    # day folder's name -- the neutral one, and today's in the accent.
+    out["stripe"] = rgba(unhex(out["txt_1"]), 0.04)
+    out["date_chip"] = rgba(unhex(out["txt_1"]), 0.14)
+    out["date_today"] = rgba(a, 0.30)
     out["grid_major"] = rgba(info, 0.20)
 
     for key, value in DENSITIES[density_name].items():
@@ -201,6 +206,12 @@ def build(
                                      "#46c98b", "#4a91ff", "#a07cff"), start=1):
         out[f"label_{number}"] = colour
     out["close_press"] = "#b22a1b"
+    # 0.49: tags that sit on the pane in the warn amber and the down red, with
+    # text pulled towards the theme's ink so they read on light and dark.
+    for name in ("warn", "down"):
+        hue = unhex(out[name])
+        out[f"{name}_soft"] = rgba(hue, 0.20)
+        out[f"{name}_text"] = mix(hue, ink, 0.55)
 
     out["theme_name"] = theme_name
     out["accent_name"] = accent_name

@@ -175,6 +175,27 @@ OPTIONS: tuple[Option, ...] = (
             "How big each file is against the largest in the folder. Behind "
             "keeps the figure clear of the bar on every theme.",
             new=True, words=("bar", "size")),
+    Option("listing.stripes", "listing", "Striped rows",
+           "Every other row a shade lighter, to keep the eye on one line "
+           "from a long name across to its date.", new=True,
+           words=("zebra", "alternate")),
+    Option("listing.date_chips", "listing", "Dates in folder names",
+           "The date in a day folder's name drawn as a chip, today's in the "
+           "accent. Reads the same date forms Duplicate does.", new=True,
+           words=("day folder", "date")),
+    Option("listing.location_stripe", "listing", "Say when a folder is on a share",
+           "A stripe and a SERVER tag on the folder header for a network "
+           "folder, and a red LIVE one for folders you mark as live from the "
+           "folder header's right-click menu.", new=True,
+           words=("network", "server", "production", "live", "warning")),
+    Option("listing.selection_pill", "listing", "Selection pill",
+           "While rows are marked, their count and total size float over the "
+           "bottom of the pane with a button to copy them across.", new=True,
+           words=("marked", "selected", "total")),
+    Option("listing.placeholders", "listing", "Placeholder rows while loading",
+           "A slow folder shows grey rows and a running count until the first "
+           "names arrive, instead of an empty pane.", new=True,
+           words=("skeleton", "loading", "slow")),
     Option("pane.header", "listing", "Folder header",
            "The folder's name above the listing, and a bar of what it holds "
            "by kind of file."),
@@ -288,6 +309,10 @@ OPTIONS: tuple[Option, ...] = (
            heading="Peek", needs=("listing.space", "peek"), new=True),
 
     # ------------------------------------------------------- transfers
+    Option("transfers.taskbar", "transfers", "Progress on the taskbar button",
+           "The application's button on the taskbar fills during a copy, "
+           "turns amber when one is waiting on you and red when one failed.",
+           new=True, words=("taskbar", "progress")),
     Option("transfers.speedline", "transfers", "Speed line in the pill",
            "The running job's speed as a line beside its readout. Click the "
            "pill for the last minute in full.", heading="The pill", new=True),

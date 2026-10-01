@@ -570,6 +570,10 @@ class PaneWidget(QFrame):
     dropRequested = Signal(list, str, bool)
     #: 0.41: extract the named archive row into the other pane's folder.
     extractRequested = Signal(str)
+    #: 0.49: a setting changed from inside the pane (marking a folder live),
+    #: for the window's `apply_setting`, which is the one place a change is
+    #: applied.
+    settingRequested = Signal(str, object)
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
                  favorites=None, parent: QWidget | None = None):
@@ -676,7 +680,8 @@ class PaneWidget(QFrame):
         # that looks empty for a reason nobody can see is worse than no filter.
         self._filter = QLineEdit()
         self._filter.setProperty("role", "filter")
-        self._filter.setPlaceholderText("Filter this folder  (Esc to clear)")
+        self._filter.setPlaceholderText(
+            "Filter this folder -- a name, or ext:dwg  size:>10mb  modified:week  (Esc clears)")
         self._filter.textChanged.connect(self._pane.set_filter)
         self._filter.hide()
 
@@ -713,6 +718,8 @@ class PaneWidget(QFrame):
         # 0.47: column edges and the size bar, from the settings.
         self._rows.edges = str(pane.config.get("listing.column_edges"))
         self._rows.size_bar = str(pane.config.get("listing.size_bar"))
+        self._rows.stripes = bool(pane.config.get("listing.stripes"))
+        self._rows.date_chips = bool(pane.config.get("listing.date_chips"))
         self._header.set_edges(self._rows.edges)
         # The line down the listing at the edge being hovered or dragged, and
         # the width while dragging. Children of the view rather than painted
@@ -727,6 +734,12 @@ class PaneWidget(QFrame):
         self._readout.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._readout.hide()
         self._header.guideMoved.connect(self._on_guide)
+        # 0.49: the count of what is marked over the bottom of the listing,
+        # and grey rows while a slow folder is still arriving.
+        from app.ui.floaters import Placeholders
+
+        self._placeholders = Placeholders(self._view.viewport())
+        self._placeholders.set_motion(bool(pane.config.get("look.motion")))
         # 0.34: the scrollbar map. A scrollbar of this application's own, set
         # before any model, so the view never draws with the stock one.
         self._map = MapScrollBar(self._view)
@@ -800,6 +813,12 @@ class PaneWidget(QFrame):
         self._views = QStackedWidget()
         self._views.addWidget(self._view)
         self._views.addWidget(self._grid)
+        from app.ui.floaters import SelectionPill
+
+        self._pill = SelectionPill(self._views)
+        self._pill.used.connect(self._claim)
+        self._pill.copyRequested.connect(lambda: self.transferRequested.emit("copy"))
+        self._pill.clearRequested.connect(lambda: self.select_all(on=False))
         if self._pane.thumbnails is not None:
             self._grid.set_cell(int(pane.config.get("preview.thumb_size")))
             self._pane.thumbnails.changed.connect(self._grid.viewport().update)
@@ -916,9 +935,23 @@ class PaneWidget(QFrame):
         strip.setSpacing(0)
         strip.addWidget(self._tabs, 1, Qt.AlignBottom)
 
+        # 0.49: the stripe across the top of a pane on a share or in a folder
+        # marked live, and the tag beside the path saying which.
+        self._stripe = QFrame()
+        self._stripe.setProperty("role", "location-stripe")
+        self._stripe.setFixedHeight(3)
+        self._stripe.hide()
+        self._location_tag = QLabel("")
+        self._location_tag.setProperty("role", "location-tag")
+        self._location_tag.hide()
+        self._location_tag.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        controls.insertWidget(controls.indexOf(self._crumbs), self._location_tag,
+                              0, Qt.AlignVCenter)
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        outer.addWidget(self._stripe)
         outer.addWidget(self._strip)
         layout = QVBoxLayout()
         layout.setContentsMargins(6, 6, 6, 4)
@@ -944,6 +977,7 @@ class PaneWidget(QFrame):
             self._pane.staleChanged.connect(self._sync_stale)
             self._pane.currentChanged.connect(self._sync_stale)
         self._pane.pathChanged.connect(self._on_path_changed)
+        self.update_location()
         self._pane.spaceChanged.connect(self._space.setText)
         self._pane.revealRequested.connect(self._reveal)
         self._volumes.changed.connect(self._sync_drives)
@@ -1071,6 +1105,7 @@ class PaneWidget(QFrame):
         header = self._view.verticalHeader()
         header.setDefaultSectionSize(metrics["row_h"])
         header.setMinimumSectionSize(metrics["row_h"])
+        self._placeholders.set_row_height(metrics["row_h"])
 
     def listing_views(self) -> tuple:
         """The two views of this pane's rows, for things drawn behind them."""
@@ -1098,6 +1133,7 @@ class PaneWidget(QFrame):
             self._tabs.setTabIcon(index, self._tab_icon)
         self._header.apply_tokens(tokens)
         self._rows.apply_tokens(tokens)
+        self._placeholders.apply_tokens(tokens)
         self._map.apply_tokens(tokens)
         self._folder_header.apply_tokens(tokens)
         self._grid.apply_tokens(tokens)
@@ -1443,6 +1479,27 @@ class PaneWidget(QFrame):
         self._filter.show()
         self._filter.setFocus(Qt.ShortcutFocusReason)
         self._filter.selectAll()
+
+    def filter_by(self, word: str) -> None:
+        """0.49: the filter box with a column's word typed into it, `size:`
+        and so on, ready for the value. A term for that column already in the
+        box is kept, with the cursor at its end, rather than added twice."""
+        from app.core.colfilter import FIELDS
+
+        self._filter.show()
+        text = self._filter.text()
+        found = None
+        for part in text.split():
+            head = part.partition(":")[0].lower()
+            if ":" in part and FIELDS.get(head) == word:
+                found = part
+        if found is None:
+            text = (text + " " if text.strip() else "") + f"{word}:"
+            self._filter.setText(text)
+            self._filter.setCursorPosition(len(text))
+        else:
+            self._filter.setCursorPosition(text.index(found) + len(found))
+        self._filter.setFocus(Qt.ShortcutFocusReason)
 
     def current_row(self) -> int:
         index = self._view.currentIndex()
@@ -1802,6 +1859,15 @@ class PaneWidget(QFrame):
             menu.addSeparator()
         menu.addAction("New folder\tF7", self.new_folder)
         menu.addAction("Refresh\tCtrl+R", self._pane.refresh)
+        if not on_row and self._pane.config.get("listing.location_stripe"):
+            from app.core import location
+
+            live = location.live_root(self._pane.current.path,
+                                      list(self._pane.config.get("places.live") or []))
+            mark = menu.addAction("Unmark as live folder" if live else
+                                  "Mark as live folder", self.toggle_live)
+            mark.setToolTip("A red stripe and a LIVE tag on this folder and "
+                            "everything under it, so nobody forgets where they are.")
 
     def _on_shell_items(self, token: int, items) -> None:
         """Put Explorer's entries into a menu that is already open.
@@ -2225,6 +2291,37 @@ class PaneWidget(QFrame):
         fade.finished.connect(lambda: self._views.setGraphicsEffect(None))
         fade.start(QVariantAnimation.DeleteWhenStopped)
 
+    def update_location(self) -> None:
+        """0.49: the stripe and tag for where this pane is standing."""
+        from app.core import location
+
+        kind = location.LOCAL
+        if self._pane.config.get("listing.location_stripe"):
+            path = self._pane.current.path
+            kind = location.kind_of(path, self._pane.resolved(path),
+                                    list(self._pane.config.get("places.live") or []))
+        for widget in (self._stripe, self._location_tag):
+            if widget.property("kind") != kind:
+                widget.setProperty("kind", kind)
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+        self._location_tag.setText({location.SERVER: "SERVER",
+                                    location.LIVE: "LIVE"}.get(kind, ""))
+        self._location_tag.setToolTip(
+            "A folder you marked as live. Right-click an empty part of the "
+            "listing to unmark it." if kind == location.LIVE else
+            "This folder is on a network share." if kind == location.SERVER else "")
+        self._stripe.setVisible(bool(kind))
+        self._location_tag.setVisible(bool(kind))
+
+    def toggle_live(self) -> None:
+        """0.49: mark this folder as live, or take the mark covering it off."""
+        from app.core import location
+
+        live = list(self._pane.config.get("places.live") or [])
+        self.settingRequested.emit("places.live",
+                                   location.toggled(self._pane.current.path, live))
+
     def _on_path_changed(self, text: str) -> None:
         # 0.40: a folder with a remembered order is listed in it, so the
         # chevron in the header has to say so.
@@ -2243,6 +2340,7 @@ class PaneWidget(QFrame):
         self._path.setText(text)
         self._folder_header.set_title(self._header_title())
         self._sync_crumbs(text)
+        self.update_location()
         # Navigating from anywhere else -- a crumb, a favourite, a double
         # click -- puts the bar back, so the field is never left open showing
         # somewhere the pane has already left.
@@ -2631,6 +2729,19 @@ class PaneWidget(QFrame):
             forget = menu.addAction("Forget this folder's sort order", self._forget_sort)
             forget.setToolTip("The folder goes back to the order last clicked in "
                               "this tab, from the next time it is opened.")
+        # 0.49: a column narrows the listing through the filter box.
+        from app.core.colfilter import HEADING_FIELDS
+
+        heading = HEADERS[self._view.horizontalHeader().logicalIndexAt(point)] \
+            if self._view.horizontalHeader().logicalIndexAt(point) >= 0 else ""
+        word = HEADING_FIELDS.get(heading)
+        if word:
+            hint = {"ext": "ext:acd,l5x", "size": "size:>10mb",
+                    "modified": "modified:week"}[word]
+            narrow = menu.addAction(f"Filter by {heading}...",
+                                    lambda w=word: self.filter_by(w))
+            narrow.setToolTip(f"Puts {word}: into the filter box, for example "
+                              f"{hint}. Esc clears it.")
         menu.addSeparator()
         for column in range(len(HEADERS)):
             if column in (int(Column.NAME), int(Column.LOCATION)):
@@ -2665,6 +2776,7 @@ class PaneWidget(QFrame):
             model.layoutChanged.connect(self._on_rows_settled)
             for signal in (model.modelReset, model.layoutChanged, model.rowsInserted):
                 signal.connect(self._schedule_map)
+                signal.connect(self.update_placeholders)
             self._watched.add(model)
 
     def _watch_selection(self) -> None:
@@ -2673,6 +2785,7 @@ class PaneWidget(QFrame):
         if picker is not None:
             picker.selectionChanged.connect(self._render_status)
             picker.selectionChanged.connect(self._schedule_map)
+            picker.selectionChanged.connect(self.update_selection_pill)
             # The cursor, not the selection. A preview follows where the
             # keyboard is, which is `currentChanged` -- `selectionChanged` does
             # not fire when the cursor moves without marking anything, which is
@@ -2722,6 +2835,9 @@ class PaneWidget(QFrame):
         self._regroup()
         self._folder_header.follow(model, self._header_title())
         self._schedule_map()
+        self.update_placeholders()
+        self.update_selection_pill()
+        self.update_location()
 
     # ------------------------------------------------------------ 0.34 rows
 
@@ -2757,7 +2873,9 @@ class PaneWidget(QFrame):
     def set_row_style(self, *, recency: str | None = None,
                       fade_days: float | None = None,
                       edges: str | None = None,
-                      size_bar: str | None = None) -> None:
+                      size_bar: str | None = None,
+                      stripes: bool | None = None,
+                      date_chips: bool | None = None) -> None:
         """How recent and old rows are drawn, where the columns end and how
         sizes compare. Both panes get the same answer from the window; a
         repaint is all it costs."""
@@ -2770,6 +2888,10 @@ class PaneWidget(QFrame):
             self._header.set_edges(str(edges))
         if size_bar is not None:
             self._rows.size_bar = str(size_bar)
+        if stripes is not None:
+            self._rows.stripes = bool(stripes)
+        if date_chips is not None:
+            self._rows.date_chips = bool(date_chips)
         self._view.viewport().update()
 
     def _on_guide(self, x: int, column: int, dragging: bool) -> None:
@@ -2870,8 +2992,37 @@ class PaneWidget(QFrame):
                 "to them may fail until it is back.")
         self._stale_bar.setVisible(stale)
 
+    def update_selection_pill(self) -> None:
+        """0.49: the pill, for two or more marked rows. One row is just where
+        the cursor is -- every click selects one -- so it says nothing new."""
+        if not self._pane.config.get("listing.selection_pill"):
+            self._pill.hide()
+            return
+        picker = self._view.selectionModel()
+        rows = {index.row() for index in picker.selectedRows()} if picker else set()
+        if len(rows) < 2:
+            self._pill.hide()
+            return
+        folders, files, total = self._pane.current.model.selection(rows)
+        parts = [count_of(folders, "folder"), count_of(files, "file")]
+        marked = ", ".join(part for part in parts if part)
+        text = f"{marked} selected" + (f"  ·  {format_size(total)}" if total else "")
+        self._pill.show_selection(text)
+
+    def set_placeholder_motion(self, on: bool) -> None:
+        self._placeholders.set_motion(on)
+
+    def update_placeholders(self) -> None:
+        """0.49: grey rows while the folder in front is empty and arriving."""
+        model = self._pane.current.model
+        waiting = (bool(self._pane.config.get("listing.placeholders"))
+                   and self._pane.busy and model.rowCount() == 0
+                   and not self.showing_grid)
+        self._placeholders.want(waiting, f"Reading {self._pane.display()}")
+
     def _sync_status(self, text: str, state: str) -> None:
         self._summary = (text, state)
+        self.update_placeholders()
         self._render_status()
         self._back.setEnabled(self._pane.current.can_go_back)
         self._forward.setEnabled(self._pane.current.can_go_forward)

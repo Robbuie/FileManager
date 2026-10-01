@@ -83,6 +83,19 @@ def _first_date(name: str):
     return None
 
 
+def date_span(name: str) -> tuple[int, int, _dt.date] | None:
+    """0.49: where the date in a name is, and which day it says, or None.
+
+    The same reading Duplicate uses, so a name the listing draws a date chip
+    in is exactly a name Duplicate would move to today.
+    """
+    found = _first_date(name)
+    if found is None:
+        return None
+    match, day, _form = found
+    return match.start(), match.end(), day
+
+
 def with_date(name: str, day: _dt.date) -> str | None:
     """The name with its date replaced by `day`, in the same form, or None
     when the name carries no date."""

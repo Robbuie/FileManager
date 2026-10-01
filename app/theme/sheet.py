@@ -516,6 +516,35 @@ QFrame[pane="true"][active="true"] {{
 /* And the other pane steps back: its rows are faded by the delegates (see
    IDLE_OPACITY in app/ui/rows.py) and its header labels go one grey quieter. */
 QFrame[pane="true"][active="false"] QHeaderView::section {{ color: {line}; }}
+/* 0.49: where the pane is standing -- a share, or a folder marked live. The
+   warn amber and the semantic "down" red, not the accent: these have to mean
+   the same thing whatever colour somebody picked. */
+QFrame[role="location-stripe"][kind="server"] {{ background: {warn}; border: none; }}
+QFrame[role="location-stripe"][kind="live"] {{ background: {down}; border: none; }}
+QLabel[role="location-tag"] {{
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-family: {mono};
+    font-size: {head_font};
+    font-weight: 700;
+}}
+QLabel[role="location-tag"][kind="server"] {{ background: {warn_soft}; color: {warn_text}; }}
+QLabel[role="location-tag"][kind="live"] {{ background: {down_soft}; color: {down_text}; }}
+/* 0.49: the selection pill over the bottom of the listing. */
+QFrame[role="selection-pill"] {{
+    background: {bg_4};
+    border: 1px solid {accent_line};
+    border-radius: 15px;
+}}
+QLabel[role="pill-text"] {{ background: transparent; color: {txt_0}; font-weight: 600; }}
+QToolButton[role="pill-button"] {{
+    background: transparent;
+    color: {txt_0};
+    border: 1px solid {accent_line};
+    border-radius: 11px;
+    padding: 3px 9px;
+}}
+QToolButton[role="pill-button"]:hover {{ background: {accent_soft}; color: {txt_0}; }}
 /* 0.47: the line down the listing at the column edge being hovered or
    dragged, and the width beside it while dragging. */
 QFrame[role="column-guide"] {{ background: {accent}; border: none; }}

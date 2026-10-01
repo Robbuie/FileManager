@@ -269,6 +269,7 @@ class MainWindow(QMainWindow):
                 lambda message: self.statusBar().showMessage(message, 8000))
         for widget in self._widgets:
             widget.transferRequested.connect(self._on_transfer_requested)
+            widget.settingRequested.connect(self.apply_setting)
             widget.dropRequested.connect(
                 lambda sources, destination, move, w=widget:
                 self._on_drop_requested(w, sources, destination, move))
@@ -371,6 +372,13 @@ class MainWindow(QMainWindow):
         self._transfer_bar.opened.connect(self._show_queue)
         self._transfer_bar.set_motion(bool(config.get("look.motion")))
         self._transfer_bar.set_speedline(bool(config.get("transfers.speedline")))
+        # 0.49: the taskbar button as a progress bar. Made on first use, so a
+        # window that never copies anything never asks COM for the interface.
+        self._taskbar = None
+        self._taskbar_failed = False
+        if transfers is not None:
+            transfers.changed.connect(self._update_taskbar)
+            transfers.finished.connect(self._on_job_for_taskbar)
         self.resize(int(config.get("window.width")), int(config.get("window.height")))
 
         #: Said once. See `_watch_for_remote`.
@@ -1457,6 +1465,8 @@ class MainWindow(QMainWindow):
         self._config.set("look.motion", bool(checked))
         self._splitter.set_motion(bool(checked))
         self._transfer_bar.set_motion(bool(checked))
+        for widget in self._widgets:
+            widget.set_placeholder_motion(bool(checked))
 
     def _set_header(self, checked: bool) -> None:
         self._config.set("pane.header", bool(checked))
@@ -1803,6 +1813,18 @@ class MainWindow(QMainWindow):
                                                for w in widgets],
             "listing.size_bar": lambda v: [w.set_row_style(size_bar=v)
                                            for w in widgets],
+            "listing.stripes": lambda v: [w.set_row_style(stripes=v)
+                                          for w in widgets],
+            "listing.date_chips": lambda v: [w.set_row_style(date_chips=v)
+                                             for w in widgets],
+            "listing.location_stripe": lambda _v: [w.update_location()
+                                                   for w in widgets],
+            "places.live": lambda _v: [w.update_location() for w in widgets],
+            "listing.selection_pill": lambda _v: [w.update_selection_pill()
+                                                  for w in widgets],
+            "listing.placeholders": lambda _v: [w.update_placeholders()
+                                                for w in widgets],
+            "transfers.taskbar": lambda _v: self._update_taskbar(),
             "rail.capacity": lambda _v: self._rebuild_rail(),
             "network.ping": lambda _v: self._health.configure()
             if self._health is not None else None,
@@ -2917,7 +2939,31 @@ class MainWindow(QMainWindow):
         elif event.type() == QEvent.ActivationChange and self.isActiveWindow():
             for pane in self._panes:
                 pane.check_now()
+            if self._taskbar_failed:
+                # Seen: the red on the taskbar button has done its job.
+                self._taskbar_failed = False
+                self._update_taskbar()
         super().changeEvent(event)
+
+    def _on_job_for_taskbar(self, job) -> None:
+        if getattr(job, "failed", 0) or getattr(job, "refused", ""):
+            self._taskbar_failed = not self.isActiveWindow()
+        self._update_taskbar()
+
+    def _update_taskbar(self) -> None:
+        """0.49: what the taskbar button says about the queue."""
+        from app.ui import taskbar
+
+        if not self._config.get("transfers.taskbar"):
+            flag, fraction = taskbar.NOPROGRESS, 0.0
+        else:
+            flag, fraction = taskbar.state(self._transfers,
+                                           failed_since=self._taskbar_failed)
+        if self._taskbar is None:
+            if flag == taskbar.NOPROGRESS:
+                return
+            self._taskbar = taskbar.Taskbar()
+        self._taskbar.show(int(self.winId()), flag, fraction)
 
     # ------------------------------------------------------------------ close
 
