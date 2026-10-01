@@ -101,12 +101,16 @@ def main() -> int:
         # Mica behind a system title bar and a menu bar is a different
         # window from the one glass was designed for. Solid there.
         backdrop = "solid"
+    from app.core import themeswitch
+
     sheet.apply(
         app,
-        theme=config.get("theme"),
+        theme=themeswitch.current(config),
         accent=config.get("accent"),
         density=config.get("density"),
         backdrop=backdrop,
+        font=config.get("look.font"),
+        corners=config.get("look.corners"),
     )
 
     problem = paths.win32_problem()

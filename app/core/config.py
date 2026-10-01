@@ -40,6 +40,22 @@ DEFAULTS: dict[str, Any] = {
     # 0.35: a drafting grid on the backdrop, drawn only in the Blueprint theme.
     "look.blueprint_grid": True,
     "density": "normal",
+    # 0.48: the theme can follow Windows' light or dark setting, or the time
+    # of day ("off", "windows", "schedule"), choosing between `theme.light`
+    # and `theme.dark`; `theme` is still the one used when following is off
+    # or cannot be worked out. Hours are local, 0-23.
+    "theme.follow": "off",
+    "theme.light": "light",
+    "theme.dark": "dark",
+    "theme.day_from": 7,
+    "theme.night_from": 19,
+    # 0.48: the typeface ("ui", "variable", "mono") and the corners ("round",
+    # "square") -- see `FONTS` and `CORNERS` in app/theme/tokens.py.
+    "look.font": "ui",
+    "look.corners": "round",
+    # 0.48: an accent of its own for the right-hand pane, so a glance says
+    # which side is which. "same" is the one accent for both.
+    "accent.right": "same",
 
     # Where the panes open, and how paths are shown. Display is a preference
     # per pane; resolution is not a preference at all.

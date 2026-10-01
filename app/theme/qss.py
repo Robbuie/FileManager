@@ -17,6 +17,8 @@ from app.theme.tokens import (
     ACCENT_ALPHA,
     ACCENTS,
     AGE_ALPHA,
+    CORNERS,
+    FONTS,
     KINDS,
     DEFAULTS,
     DENSITIES,
@@ -69,8 +71,14 @@ def build(
     density: str | None = None,
     backdrop: str = "solid",
     accent_rgb: RGB | None = None,
+    font: str | None = None,
+    corners: str | None = None,
 ) -> dict[str, str]:
     """Return every token for one combination, ready to substitute into QSS.
+
+    `font` and `corners` (0.48) are a key of `FONTS` and of `CORNERS`. Like
+    the backdrop they are not axes of the design system -- neither changes a
+    colour -- and an unknown or missing one is the shipped look.
 
     `accent_rgb` (0.35) is a triple that stands in for the named accent when
     it comes from Windows or the wallpaper. Every tint is derived from it the
@@ -92,6 +100,9 @@ def build(
     out: dict[str, str] = {}
     out.update(THEMES[theme_name])
     out.update(SHAPE)
+    out.update(CORNERS.get(corners or "round", CORNERS["round"]))
+    if font in FONTS:
+        out["font"] = FONTS[font][0]
 
     a = ACCENTS[accent_name]
     if accent_rgb is not None and len(accent_rgb) == 3:

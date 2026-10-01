@@ -25,7 +25,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from app import __version__
 from app.core import commands as core_commands
 from app.core import compare as core_compare
-from app.core import when
+from app.core import themeswitch, when
 from app.core.transfers import worth_notifying
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
@@ -195,12 +195,17 @@ class MainWindow(QMainWindow):
         # icons and the rows -- so they need the same token set the sheet was
         # rendered from. Handed down rather than fetched, so a pane cannot end
         # up painted from a different render than the one it is styled by.
-        tokens = sheet.tokens(config.get("theme"), config.get("accent"),
+        #: 0.48: the theme actually on screen, which is `theme` unless it is
+        #: set to follow Windows or the clock. See `core/themeswitch.py`.
+        self._theme_shown = themeswitch.current(config)
+        tokens = sheet.tokens(self._theme_shown, config.get("accent"),
                               config.get("density"), self._backdrop,
-                              self._accent_rgb)
+                              self._accent_rgb, config.get("look.font"),
+                              config.get("look.corners"))
         self._tokens = tokens
-        for widget in self._widgets:
-            widget.apply_tokens(tokens)
+        self._pane_tokens = [tokens, self._right_tokens(tokens)]
+        for widget, own in zip(self._widgets, self._pane_tokens):
+            widget.apply_tokens(own)
 
         # One rail for the window, at the left of the same splitter the panes
         # are in, so the width it is dragged to is the width it keeps. It is
@@ -374,6 +379,13 @@ class MainWindow(QMainWindow):
         self._remote_timer.setInterval(30000)
         self._remote_timer.timeout.connect(self._watch_for_remote)
         self._remote_timer.start()
+        # 0.48: a theme that follows Windows or the clock is checked once a
+        # minute. Both answers are local and instant -- a registry value and
+        # the time -- and nothing is re-rendered unless the answer changed.
+        self._theme_timer = QTimer(self)
+        self._theme_timer.setInterval(60000)
+        self._theme_timer.timeout.connect(self._check_theme)
+        self._theme_timer.start()
 
         self._palette = CommandPalette(self)
         self._palette.apply_tokens(tokens)
@@ -1754,6 +1766,14 @@ class MainWindow(QMainWindow):
         widgets = self._widgets
         return {
             "theme": lambda _v: self._resolve_accent(),
+            "theme.follow": lambda _v: self._resolve_accent(),
+            "theme.light": lambda _v: self._resolve_accent(),
+            "theme.dark": lambda _v: self._resolve_accent(),
+            "theme.day_from": lambda _v: self._resolve_accent(),
+            "theme.night_from": lambda _v: self._resolve_accent(),
+            "look.font": lambda _v: self.apply_theme(),
+            "look.corners": lambda _v: self.apply_theme(),
+            "accent.right": lambda _v: self.apply_theme(),
             "accent.source": lambda _v: self._resolve_accent(),
             "look.pane_glow": lambda v: self._splitter.set_glow_enabled(bool(v)),
             "look.blueprint_grid": lambda _v: self._apply_grid(self._tokens),
@@ -1827,8 +1847,7 @@ class MainWindow(QMainWindow):
         # Now, with whatever accent is in hand, so a theme change shows at
         # once rather than when a wallpaper arrives.
         self.apply_theme()
-        backdrop = sheet.qss.unhex(
-            sheet.tokens(self._config.get("theme"))["bg_0"])
+        backdrop = sheet.qss.unhex(sheet.tokens(self._theme_shown)["bg_0"])
         self._accent_source.resolve(backdrop)
 
     def _on_accent_found(self, colour, why: str) -> None:
@@ -1866,14 +1885,35 @@ class MainWindow(QMainWindow):
         if self._options is not None:
             self._options.sync(key)
 
+    def _check_theme(self) -> None:
+        """0.48: the timer's question -- has Windows or the clock moved the
+        theme? -- answered without re-rendering anything when it has not."""
+        if str(self._config.get("theme.follow")) == themeswitch.FOLLOW_OFF:
+            return
+        if themeswitch.current(self._config) != self._theme_shown:
+            self._resolve_accent()
+
+    def _right_tokens(self, tokens: dict) -> dict:
+        """0.48: the right-hand pane's tokens -- the same render with another
+        accent when `accent.right` names one, otherwise the window's own."""
+        right = str(self._config.get("accent.right"))
+        if right == "same" or right not in ACCENT_LABELS:
+            return tokens
+        return sheet.tokens(self._theme_shown, right, self._config.get("density"),
+                            self._backdrop, None, self._config.get("look.font"),
+                            self._config.get("look.corners"))
+
     def apply_theme(self) -> None:
+        self._theme_shown = themeswitch.current(self._config)
         tokens = sheet.apply(
             QApplication.instance(),
-            theme=self._config.get("theme"),
+            theme=self._theme_shown,
             accent=self._config.get("accent"),
             density=self._config.get("density"),
             backdrop=self._backdrop,
             accent_rgb=self._accent_rgb,
+            font=self._config.get("look.font"),
+            corners=self._config.get("look.corners"),
         )
         if self._titlebar is not None:
             self._titlebar.apply_tokens(tokens)
@@ -1887,9 +1927,13 @@ class MainWindow(QMainWindow):
             # to a light theme has to reach Windows as well as the sheet.
             self._frame.set_dark(sum(sheet.qss.unhex(tokens["bg_0"])) < 382)
         metrics = sheet.metrics(self._config.get("density"))
-        for widget in self._widgets:
+        self._pane_tokens = [tokens, self._right_tokens(tokens)]
+        for widget, own in zip(self._widgets, self._pane_tokens):
             widget.apply_metrics(metrics)
-            widget.apply_tokens(tokens)
+            widget.apply_tokens(own)
+            widget.set_own_accent(None if own is tokens else own)
+        self._splitter.set_glow_colour(
+            self._pane_tokens[getattr(self, "_active", 0)]["accent"])
         if self._rail is not None:
             # The meters are painted rather than styled, so the rail needs the
             # same render the sheet was made from -- the reason the panes get
@@ -2672,6 +2716,9 @@ class MainWindow(QMainWindow):
         self._active = index
         for position, widget in enumerate(self._widgets):
             widget.set_active(position == index)
+        tokens = getattr(self, "_pane_tokens", None)
+        if tokens is not None:
+            self._splitter.set_glow_colour(tokens[index]["accent"])
         self._splitter.glow_on(self._widgets[index])
         self._sync_rail_mark()
         self._sync_flat_action()

@@ -19,8 +19,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QPoint, QRectF, Qt  # noqa: E402
-from PySide6.QtGui import QStandardItemModel  # noqa: E402
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt  # noqa: E402
+from PySide6.QtGui import QMouseEvent, QStandardItemModel  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication, QHeaderView, QTableView  # noqa: E402
 
@@ -104,6 +104,21 @@ def test_nearest_edge_picks_the_closest_within_the_zone() -> None:
     assert nearest_edge(edges, 240) is None
 
 
+def send(header, kind, x, y, button=Qt.NoButton, buttons=Qt.NoButton) -> None:
+    """A mouse event straight to the header, not through QTest.
+
+    QTest moves the real cursor and lets the platform decide which window is
+    under it, so with another test's window still about the hover tests saw
+    enter and leave events nobody made. Sent directly, the header sees exactly
+    the gesture described.
+    """
+    local = QPointF(x, y)
+    globe = QPointF(header.viewport().mapToGlobal(QPoint(int(x), int(y))))
+    QApplication.sendEvent(header.viewport(),
+                           QMouseEvent(kind, local, globe, button, buttons,
+                                       Qt.NoModifier))
+
+
 @pytest.fixture
 def table():
     model = QStandardItemModel(5, 4)
@@ -142,7 +157,7 @@ def test_a_drag_started_beside_the_edge_does_not_jump(table) -> None:
 def test_hovering_beside_an_edge_shows_the_resize_cursor(table) -> None:
     _view, header = table
     edge = header.sectionViewportPosition(1) + header.sectionSize(1)
-    QTest.mouseMove(header.viewport(), QPoint(edge - 5, header.height() // 2))
+    send(header, QEvent.MouseMove, edge - 5, header.height() // 2)
     assert header.cursor().shape() == Qt.SplitHCursor
 
 
@@ -173,18 +188,11 @@ def test_the_guide_follows_the_edge_and_says_when_it_is_a_drag(table) -> None:
     header.guideMoved.connect(lambda x, c, d: seen.append((x, c, d)))
     edge = header.sectionViewportPosition(0) + header.sectionSize(0)
     y = header.height() // 2
-    # A release somewhere harmless first: QTest keeps its own idea of which
-    # buttons are down across tests, and after a double click it still thinks
-    # one is -- so every move after it arrives as a drag nobody started.
-    QTest.mouseRelease(header.viewport(), Qt.LeftButton, Qt.NoModifier,
-                       QPoint(edge + 40, y))
-    QTest.mouseMove(header.viewport(), QPoint(edge + 41, y))
-    QTest.mouseMove(header.viewport(), QPoint(edge + 3, y))
+    send(header, QEvent.MouseMove, edge + 3, y)
     assert seen[-1] == (edge, 0, False)
-    QTest.mousePress(header.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(edge + 3, y))
-    QTest.mouseMove(header.viewport(), QPoint(edge + 13, y))
+    send(header, QEvent.MouseButtonPress, edge + 3, y, Qt.LeftButton, Qt.LeftButton)
+    send(header, QEvent.MouseMove, edge + 13, y, Qt.NoButton, Qt.LeftButton)
     assert seen[-1] == (edge + 10, 0, True)
-    QTest.mouseRelease(header.viewport(), Qt.LeftButton, Qt.NoModifier,
-                       QPoint(edge + 13, y))
-    QTest.mouseMove(header.viewport(), QPoint(edge + 60, y))
+    send(header, QEvent.MouseButtonRelease, edge + 13, y, Qt.LeftButton, Qt.NoButton)
+    send(header, QEvent.MouseMove, edge + 60, y)
     assert seen[-1] == (-1, -1, False)

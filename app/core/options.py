@@ -25,7 +25,7 @@ from typing import Any
 
 from app.core.config import DEFAULTS
 from app.io.protocol import THUMB_SIZES
-from app.theme.tokens import ACCENT_LABELS, DENSITY_LABELS, THEME_LABELS
+from app.theme.tokens import ACCENT_LABELS, DENSITY_LABELS, FONTS, THEME_LABELS
 
 #: The pages, in the order the dialog lists them.
 SECTIONS: tuple[tuple[str, str], ...] = (
@@ -91,8 +91,32 @@ OPTIONS: tuple[Option, ...] = (
     Option("look.blueprint_grid", "look", "Drafting grid behind Blueprint",
            "A faint grid on the window's backdrop, only in the Blueprint "
            "theme.", needs=("theme", "blueprint"), new=True),
+    _choice("theme.follow", "look", "Theme changes by itself",
+            (("off", "Never: always the theme above"),
+             ("windows", "With Windows' light and dark mode"),
+             ("schedule", "By time of day")),
+            "Switches between the two themes below. The theme above is the "
+            "one used when this is off.", new=True,
+            words=("dark mode", "light mode", "night", "automatic")),
+    _choice("theme.light", "look", "Light theme", tuple(THEME_LABELS.items()),
+            "Used in Windows' light mode, or during the day.", new=True),
+    _choice("theme.dark", "look", "Dark theme", tuple(THEME_LABELS.items()),
+            "Used in Windows' dark mode, or in the evening.", new=True),
+    _choice("theme.day_from", "look", "Day theme from",
+            tuple((h, f"{h:02d}:00") for h in range(4, 13)),
+            needs=("theme.follow", "schedule"), new=True),
+    _choice("theme.night_from", "look", "Evening theme from",
+            tuple((h, f"{h:02d}:00") for h in range(15, 24)),
+            needs=("theme.follow", "schedule"), new=True),
     _choice("density", "look", "Density", tuple(DENSITY_LABELS.items()),
             "Row height and the size of the chrome."),
+    _choice("look.font", "look", "Font",
+            tuple((key, label) for key, (_stack, label) in FONTS.items()),
+            "Cascadia Mono throughout suits the Phosphor theme.", new=True,
+            words=("typeface", "monospace")),
+    _choice("look.corners", "look", "Corners",
+            (("round", "Rounded"), ("square", "Square")),
+            "Square suits the Ink theme.", new=True),
     _choice("accent.source", "look", "Accent comes from",
             (("named", "A colour picked here"), ("windows", "Windows' accent"),
              ("wallpaper", "The wallpaper")),
@@ -101,6 +125,10 @@ OPTIONS: tuple[Option, ...] = (
     _choice("accent", "look", "Accent", tuple(ACCENT_LABELS.items()),
             "Selection, focus, the active pane and everything else that "
             "says where you are.", needs=("accent.source", "named")),
+    _choice("accent.right", "look", "Right pane's accent",
+            (("same", "The same as the left"),) + tuple(ACCENT_LABELS.items()),
+            "A colour of its own for the right-hand pane, so a glance says "
+            "which side has the keyboard.", new=True, words=("pane colour",)),
     _choice("window.backdrop", "look", "Glass backdrop",
             (("auto", "Automatic"), ("glass", "Glass"), ("solid", "Solid")),
             "Automatic is glass where Windows can draw it and solid over "

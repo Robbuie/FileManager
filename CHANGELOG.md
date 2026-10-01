@@ -5,6 +5,34 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.48.0]
+
+### Added
+- **Six new themes**, in Options > Look and View > Theme:
+  - **Graphite:** true black, for OLED screens and dim rooms.
+  - **Control room:** calm greys after modern HMI screens, with colour kept
+    for things that need attention.
+  - **Phosphor:** green on black.
+  - **Dusk:** warm dark browns, easier late in the day.
+  - **Frost:** a cool, bright light theme.
+  - **Ink:** black on white with real lines for borders, like a printed
+    drawing.
+- **The theme can change by itself.** "Theme changes by itself" follows
+  Windows' light and dark mode, or switches by time of day at hours you
+  pick, between a light theme and a dark theme of your choosing. It is
+  checked once a minute.
+- **Font:** Segoe UI as before, Segoe UI Variable, or Cascadia Mono
+  throughout (which suits Phosphor).
+- **Corners:** rounded as before, or square (which suits Ink).
+- **An accent for the right-hand pane.** Pick a second accent and the right
+  pane's border, glow, selection and sort arrow use it, so a glance says
+  which side has the keyboard.
+- `tools/preview.py --set KEY=VALUE` renders with any setting changed.
+
+### Changed
+- A choice in Options with many entries wraps onto a second row instead of
+  running off the edge of the page.
+
 ## [0.47.0]
 
 ### Added

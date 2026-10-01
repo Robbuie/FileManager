@@ -1104,6 +1104,22 @@ class PaneWidget(QFrame):
         self._preview.apply_tokens(tokens)
         self._view.viewport().update()
 
+    def set_own_accent(self, tokens: dict | None) -> None:
+        """0.48: this pane's edge in an accent of its own, or the window's.
+
+        The rows, the header and the guide already take whatever tokens were
+        handed to `apply_tokens`; the active border is the one part drawn by
+        the application's sheet, so a pane with its own accent restates that
+        one rule on itself. None hands it back to the sheet.
+        """
+        if tokens is None:
+            if self.styleSheet():
+                self.setStyleSheet("")
+            return
+        self.setStyleSheet(
+            'QFrame[pane="true"][active="true"] '
+            f'{{ border: 1px solid {tokens["accent_line"]}; }}')
+
     # ------------------------------------------------------------- view mode
 
     @property

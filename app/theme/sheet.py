@@ -758,6 +758,8 @@ def tokens(
     density: str | None = None,
     backdrop: str = "solid",
     accent_rgb=None,
+    font: str | None = None,
+    corners: str | None = None,
 ) -> dict[str, str]:
     """The rendered token set, for a caller that paints rather than styles.
 
@@ -765,7 +767,7 @@ def tokens(
     and the alternative -- letting it read the theme dictionaries itself --
     would be a second place that knows how a tint is derived.
     """
-    return qss.build(theme, accent, density, backdrop, accent_rgb)
+    return qss.build(theme, accent, density, backdrop, accent_rgb, font, corners)
 
 
 def apply(
@@ -776,6 +778,8 @@ def apply(
     density: str | None = None,
     backdrop: str = "solid",
     accent_rgb=None,
+    font: str | None = None,
+    corners: str | None = None,
 ) -> dict[str, str]:
     """Render the sheet for one combination and put it on the application.
 
@@ -786,7 +790,7 @@ def apply(
     """
     from PySide6.QtGui import QColor, QPalette
 
-    values = qss.build(theme, accent, density, backdrop, accent_rgb)
+    values = qss.build(theme, accent, density, backdrop, accent_rgb, font, corners)
     app.setStyleSheet(qss.render(TEMPLATE, values))
 
     palette = QPalette()

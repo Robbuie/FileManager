@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -83,6 +84,10 @@ class Switch(QAbstractButton):
         painter.drawEllipse(QRectF(21 if on else 3, 3, 16, 16))
 
 
+#: The most choices drawn side by side before a row wraps.
+PER_ROW = 6
+
+
 class Segments(QWidget):
     """A row of exclusive choices, drawn as one control.
 
@@ -97,7 +102,10 @@ class Segments(QWidget):
         super().__init__(parent)
         self.setProperty("role", "segments")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        row = QHBoxLayout(self)
+        # 0.48: wrapped into rows of `PER_ROW`. Eleven themes on one line ran
+        # past the edge of the page, and a sideways scroll inside a dialog is
+        # the combo box's hiding again in another form.
+        row = QGridLayout(self)
         row.setContentsMargins(3, 3, 3, 3)
         row.setSpacing(2)
         self._group = QButtonGroup(self)
@@ -112,7 +120,7 @@ class Segments(QWidget):
             button.setChecked(core_options._same(value, current))
             self._group.addButton(button, index)
             self._values.append(value)
-            row.addWidget(button)
+            row.addWidget(button, index // PER_ROW, index % PER_ROW)
         self._group.idClicked.connect(
             lambda index: self.chosen.emit(self._values[index]))
 

@@ -100,6 +100,122 @@ THEMES: dict[str, dict[str, str]] = {
         "warn": "#ffd75e",
         "sel": "#7cc4ff",
     },
+    # 0.48: six more, after the mockups of 30 September. These are this
+    # application's own rather than ports of Redline PDF's, so they are the
+    # place the family look is allowed to grow first; they restate the greys
+    # and nothing else, like the five above, so every accent and density works
+    # on each of them.
+    #
+    # True black for an OLED panel or a dim room. The steps between the greys
+    # are smaller than Dark's because on black a small step already reads.
+    "graphite": {
+        "bg_0": "#000000",
+        "bg_1": "#070708",
+        "bg_2": "#0e0e11",
+        "bg_3": "#18181c",
+        "bg_4": "#24242a",
+        "line": "#1f1f24",
+        "line_soft": "#151518",
+        "txt_0": "#ededf0",
+        "txt_1": "#a6a6ae",
+        "txt_2": "#77777f",
+        "info": "#5ab0ff",
+        "good": "#46c98b",
+        "warn": "#f2c14e",
+        "sel": "#5ab0ff",
+    },
+    # After the ISA-101 high-performance HMI screens: calm mid greys, dark
+    # text, and the colour left to the things that need somebody -- a share
+    # that stopped answering, a failed copy. The greens and ambers are darker
+    # than the other themes' because they sit on a light grey.
+    "control": {
+        "bg_0": "#b7babe",
+        "bg_1": "#c6c9cc",
+        "bg_2": "#dcdee1",
+        "bg_3": "#cdd0d4",
+        "bg_4": "#b4b8be",
+        "line": "#a9aeb4",
+        "line_soft": "#c3c7cc",
+        "txt_0": "#14181c",
+        "txt_1": "#343a41",
+        "txt_2": "#535a63",
+        "info": "#2f5fa8",
+        "good": "#2b8a55",
+        "warn": "#a97a08",
+        "sel": "#2f5fa8",
+    },
+    # Green on black. Pairs with the monospace font in Options and the green
+    # accent, though neither is forced: a theme sets greys, not a typeface.
+    "phosphor": {
+        "bg_0": "#020604",
+        "bg_1": "#051009",
+        "bg_2": "#08150d",
+        "bg_3": "#0e2216",
+        "bg_4": "#163222",
+        "line": "#13301f",
+        "line_soft": "#0d2116",
+        "txt_0": "#b4ffc8",
+        "txt_1": "#70dc97",
+        "txt_2": "#4c9f6b",
+        "info": "#39ff88",
+        "good": "#39ff88",
+        "warn": "#e6d34a",
+        "sel": "#39ff88",
+    },
+    # Warm dark browns, for the end of a long day. Amber is the accent it was
+    # drawn with; blue on it works too.
+    "dusk": {
+        "bg_0": "#14100e",
+        "bg_1": "#1b1613",
+        "bg_2": "#221c18",
+        "bg_3": "#2c2420",
+        "bg_4": "#3a302a",
+        "line": "#322923",
+        "line_soft": "#28211c",
+        "txt_0": "#f2e7db",
+        "txt_1": "#c3b4a4",
+        "txt_2": "#928372",
+        "info": "#6fb2ff",
+        "good": "#5cc98b",
+        "warn": "#f2c14e",
+        "sel": "#6fb2ff",
+    },
+    # A cool light theme with steel-blue greys: brighter than Paper, softer
+    # than Light.
+    "frost": {
+        "bg_0": "#dee5ed",
+        "bg_1": "#ecf1f6",
+        "bg_2": "#f8fbfd",
+        "bg_3": "#e5ecf3",
+        "bg_4": "#d1dbe6",
+        "line": "#cdd7e2",
+        "line_soft": "#e1e8ef",
+        "txt_0": "#131f2b",
+        "txt_1": "#405066",
+        "txt_2": "#67768c",
+        "info": "#3b7dd8",
+        "good": "#2c9c66",
+        "warn": "#b9800e",
+        "sel": "#3b7dd8",
+    },
+    # Black on white like a printed drawing, with the borders made real lines
+    # rather than hints. Pairs with square corners and ruled columns.
+    "ink": {
+        "bg_0": "#ebebe9",
+        "bg_1": "#f7f7f5",
+        "bg_2": "#ffffff",
+        "bg_3": "#efefec",
+        "bg_4": "#d4d4d0",
+        "line": "#8c8c88",
+        "line_soft": "#c6c6c2",
+        "txt_0": "#0a0a0a",
+        "txt_1": "#2d2d2d",
+        "txt_2": "#5a5a5a",
+        "info": "#0a58ca",
+        "good": "#1d8a4c",
+        "warn": "#a8700f",
+        "sel": "#0a58ca",
+    },
 }
 
 THEME_LABELS: dict[str, str] = {
@@ -108,6 +224,33 @@ THEME_LABELS: dict[str, str] = {
     "paper": "Warm paper",
     "blueprint": "Blueprint",
     "contrast": "High contrast",
+    "graphite": "Graphite",
+    "control": "Control room",
+    "phosphor": "Phosphor",
+    "dusk": "Dusk",
+    "frost": "Frost",
+    "ink": "Ink",
+}
+
+#: 0.48: which themes are light, for "follow Windows" -- which picks one of
+#: each -- and anything else that needs to know without measuring the greys.
+LIGHT_THEMES: frozenset[str] = frozenset({"light", "paper", "control", "frost", "ink"})
+
+#: 0.48: the typeface choice. A fourth thing beside the three axes rather than
+#: part of a theme, for the axes' reason: a theme that also set a font would
+#: be a theme half of whose combinations nobody asked for.
+FONTS: dict[str, tuple[str, str]] = {
+    "ui": ('"Segoe UI", Inter, system-ui, sans-serif', "Segoe UI"),
+    "variable": ('"Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif',
+                 "Segoe UI Variable"),
+    "mono": ('"Cascadia Mono", Consolas, monospace', "Cascadia Mono throughout"),
+}
+
+#: 0.48: corner shapes. Square keeps a hint of rounding, because a radius of
+#: zero on a selection band makes neighbouring selected rows read as one slab.
+CORNERS: dict[str, dict[str, str]] = {
+    "round": {"radius": "7px", "radius_sm": "5px", "radius_lg": "12px"},
+    "square": {"radius": "2px", "radius_sm": "2px", "radius_lg": "3px"},
 }
 
 # --------------------------------------------------------------------------

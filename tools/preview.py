@@ -17,6 +17,7 @@ is missing.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -31,7 +32,8 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            pane_preview: bool = False, grid: bool = False, flat: str = "",
            backdrop: str = "solid",
            viewer: str = "", cell: int = 128, commands: bool = False,
-           stale: bool = False, options: str = "", peek: str = "") -> str:
+           stale: bool = False, options: str = "", peek: str = "",
+           settings: dict | None = None) -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -62,8 +64,11 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     config.set("density", density)
     config.set("left.path", path)
     config.set("right.path", path)
+    for key, value in (settings or {}).items():
+        config.set(key, value)
     sheet.apply(app, theme=theme, accent=accent, density=density,
-                backdrop=backdrop)
+                backdrop=backdrop, font=config.get("look.font"),
+                corners=config.get("look.corners"))
 
     pool = WorkerPool()
     bridge = Bridge(pool)
@@ -698,7 +703,17 @@ def main(argv: list[str] | None = None) -> int:
                              "has stopped answering")
     parser.add_argument("--all-themes", action="store_true",
                         help="one image per theme, to check the greys together")
+    parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
+                        help="any setting, the value read as JSON when it parses "
+                             "(--set listing.column_edges=ruled)")
     args = parser.parse_args(argv)
+    settings = {}
+    for item in args.set:
+        key, _, raw = item.partition("=")
+        try:
+            settings[key] = json.loads(raw)
+        except ValueError:
+            settings[key] = raw
 
     if not args.all_themes:
         print(render(args.path, args.out, theme=args.theme, accent=args.accent,
@@ -708,7 +723,7 @@ def main(argv: list[str] | None = None) -> int:
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
                      cell=args.cell, backdrop=args.backdrop, stale=args.stale,
-                     options=args.options, peek=args.peek))
+                     options=args.options, peek=args.peek, settings=settings))
         return 0
 
     from app.theme.tokens import THEMES
@@ -721,7 +736,7 @@ def main(argv: list[str] | None = None) -> int:
                      queue=args.queue, cut=args.cut, grid=args.grid,
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
-                     cell=args.cell))
+                     cell=args.cell, settings=settings))
     return 0
 
 
