@@ -5,6 +5,38 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.50.0]
+
+### Changed
+- **A shorter application menu.** Six menus instead of nine -- File, Edit,
+  Go, View, Tools, Help -- with Options at the end.
+  - Edit has Undo, cut, copy and paste, every selection command, and Copy
+    path.
+  - Go has Tabs, Favorites and Workspaces as submenus.
+  - View is down from 34 entries to 17. The on/off switches it used to
+    carry (icons, overlays, animations, folder header, thumbnail handlers,
+    the Explorer menu, the title bar and backdrop) are in Options, and
+    Ctrl+K still finds each of them by name.
+  - Split and Join moved from Tools to File > More, beside Checksums,
+    Attributes and New link.
+  - Every key works as before.
+- **A shorter right-click menu.** The everyday commands are at the top:
+  Open, View, Cut, Copy, Paste, Copy and Move to the other pane, Rename and
+  Delete. Duplicate, Rename several, Attributes, Checksums, Folder size,
+  Basket, Note and Delete permanently are under **More**. Explorer's own
+  entries (7-Zip, Open with, Send to and the rest) are under one
+  **Explorer** submenu, with Properties beside it. Options > General >
+  "Explorer's entries inline" puts them back at the bottom of the menu as
+  before.
+
+### Added
+- **Glass looks**, in Options > Look > Glass look, when the glass backdrop
+  is on: Mica as before, **Acrylic** (the desktop blurred behind the
+  frame), **Frosted panes** (the panes let it through as well) and **Tinted
+  glass** (acrylic washed with the accent). They take effect at the next
+  start. Windows turns transparency off in Remote Desktop and Hyper-V
+  enhanced sessions, so these show as solid there.
+
 ## [0.49.0]
 
 ### Added

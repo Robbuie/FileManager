@@ -253,6 +253,18 @@ contrast** — restate the greys only, exactly as in Redline PDF's `app.css`. Po
 those values verbatim rather than re-deriving them; the family look depends on
 them being the same numbers.
 
+0.48 added six themes of this application's own -- graphite, control room,
+phosphor, dusk, frost, ink -- which also restate the greys and nothing else;
+`LIGHT_THEMES` says which are light. Font (`FONTS`) and corners (`CORNERS`)
+are choices beside the three axes, not part of a theme: Phosphor does not set
+a monospace font and Ink does not set square corners, they are only suggested
+in Options. `core/themeswitch.py` decides the theme actually drawn when it
+follows Windows or the clock; anything that needs "the current theme" asks
+the window's `_theme_shown`, never `config["theme"]` directly. The glass looks
+(0.50, `window.glass`) change the DWM material and, for frosted, the panes'
+own ground (`pane_bg`); the solid fallback rules in `core/backdrop.py` still
+decide whether there is glass at all.
+
 Accents are **channel triples, not hex**, because every tint is derived from
 them:
 
@@ -872,6 +884,14 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   itself -- `<name>.taken.json` when queued, `<name>.result.json` when its
   last job ends, when it is refused or declined, and when the window closes
   with its jobs unfinished -- and never at a path the request names.
+- **The menus are short on purpose, and nothing on them is the only way in.**
+  Since 0.50 the app menu is File, Edit, Go, View, Tools, Help and Options,
+  and the on/off switches live in Options and in `_switches`, a menu that is
+  never shown but is walked by `palette_sources` -- so Ctrl+K still finds
+  each by name. A new switch goes in Options and `_switches`, not on View.
+  On a right-click, the app's everyday verbs are top level, the rest under
+  More, and Explorer's entries under one Explorer submenu with Properties
+  beside it (`menu.shell_inline` puts them back inline).
 - **A drive letter can be present and dead at the same time.** Presence in
   `WNetGetConnection` is not reachability, and treating it as such reintroduces
   the startup hang.

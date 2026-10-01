@@ -405,6 +405,9 @@ DEFAULTS: dict[str, Any] = {
     # nothing else, which is the answer when a shell extension misbehaves --
     # and the reason it is a setting rather than a rebuild.
     "menu.shell": True,
+    # 0.50: Explorer's own entries on a right-click go under one Explorer
+    # submenu; True puts them back inline at the bottom of the menu.
+    "menu.shell_inline": False,
 
     # The external command table: a list of the dicts `commands.Command`
     # writes. Empty means the shipped defaults, which is not the same as "no
@@ -439,6 +442,11 @@ DEFAULTS: dict[str, Any] = {
     # Mica -- see `core/backdrop.py`. Both are read once, at start.
     "window.frame": "custom",
     "window.backdrop": "auto",
+    # 0.50: what the glass looks like when it is on -- "mica" (0.26), or
+    # "acrylic" (the desktop blurred behind the chrome), "frosted" (the panes
+    # translucent too) or "tinted" (acrylic washed with the accent). Ignored
+    # when the backdrop is solid; takes effect at the next start.
+    "window.glass": "mica",
 
     "window.width": 1280,
     "window.height": 760,

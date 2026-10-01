@@ -571,7 +571,13 @@ def _show_menu(window) -> None:
     menu.setToolTipsVisible(True)
     widget._add_verbs(menu, ["plan.dwg"], on_row=True)  # noqa: SLF001
     menu.addSeparator()
-    widget._fill(menu, items, 1, top=True)  # noqa: SLF001
+    # Through the same arrival the real shell entries take, so the Explorer
+    # submenu (0.50) or the inline list is whatever the setting says.
+    widget._menu = menu  # noqa: SLF001
+    widget._menu_commands = {}  # noqa: SLF001
+    widget._menu_slot = menu.addAction("Explorer commands")  # noqa: SLF001
+    widget._menu_anchor = widget.mapToGlobal(widget.rect().topLeft()) + QPoint(80, 120)  # noqa: SLF001
+    widget._on_shell_items(1, items)  # noqa: SLF001
     # `popup`, not `exec`: this has to return so the image can be grabbed.
     menu.popup(widget.mapToGlobal(widget.rect().topLeft()) + QPoint(80, 120))
     return menu

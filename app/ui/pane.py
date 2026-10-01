@@ -1787,6 +1787,11 @@ class PaneWidget(QFrame):
         """The application's own operations, in the words and keys they have
         everywhere else. The keys are shown, not claimed: they belong to the
         pane, which is what makes them safe to press in a text field.
+
+        0.50: the everyday ones at the top level and the rest under More, so a
+        right-click on a file is fifteen lines rather than thirty-seven.
+        Nothing went: every entry here before is still here, one step away at
+        most, and every key still works without the menu.
         """
         if on_row:
             menu.addAction("Open\tEnter", self._open_current)
@@ -1800,19 +1805,16 @@ class PaneWidget(QFrame):
                                    self._pane.current.model.row_of(name),
                                    background=False))
             if entry is not None and not entry.is_dir:
-                # Above Open rather than below, because for a drawing or a
-                # photograph this is the entry somebody wants and Open hands the
-                # file to whatever Windows has associated with it.
                 menu.addAction("View\tF3", self.view_current)
             if entry is not None and entry.is_link:
                 menu.addAction("Go to link target",
                                lambda name=entry.name: self._pane.follow_link(
                                    self._pane.current.model.row_of(name)))
-            if entry is not None and not entry.is_dir:
-                menu.addAction("Checksums...", self.checksums)
             if self._pane.in_archive:
                 # 0.41: inside an archive, the things that read and nothing
                 # that writes. F5 is extraction.
+                if entry is not None and not entry.is_dir:
+                    menu.addAction("Checksums...", self.checksums)
                 menu.addSeparator()
                 menu.addAction("Copy out to other pane\tF5",
                                lambda: self.transferRequested.emit("copy"))
@@ -1822,27 +1824,10 @@ class PaneWidget(QFrame):
             if entry is not None and self._pane.archive_extract_name(row) is not None:
                 self._archive_verbs(menu, entry.name)
             menu.addSeparator()
-            menu.addAction("Copy\tCtrl+C",
-                           lambda: self.clipboardRequested.emit("copy"))
             menu.addAction("Cut\tCtrl+X",
                            lambda: self.clipboardRequested.emit("cut"))
-            menu.addAction("Copy to other pane\tF5",
-                           lambda: self.transferRequested.emit("copy"))
-            menu.addAction("Move to other pane\tF6",
-                           lambda: self.transferRequested.emit("move"))
-            menu.addAction("Duplicate\tShift+F5", self.duplicate_current)
-            if self._pane.config.get("basket.enabled"):
-                menu.addAction("Add to basket\tAlt+Ins", self.add_to_basket)
-            if self._pane.labels is not None and self._pane.config.get("labels.shown"):
-                self._label_menu(menu, names)
-            menu.addAction("Rename\tF2", self.rename_current)
-            if len(names) > 1:
-                menu.addAction("Rename several...\tCtrl+M", self.rename_several)
-            menu.addAction("Attributes and dates...", self.attributes)
-            menu.addAction("Delete\tDel", self.delete_selection)
-            menu.addAction("Delete permanently\tShift+Del",
-                           lambda: self.delete_selection(permanent=True))
-            menu.addSeparator()
+            menu.addAction("Copy\tCtrl+C",
+                           lambda: self.clipboardRequested.emit("copy"))
         # Paste is offered whether or not a row was clicked: pasting into the
         # empty part of a listing is how a folder with nothing in it gets its
         # first file, and a menu that only offered it on top of an existing
@@ -1852,13 +1837,44 @@ class PaneWidget(QFrame):
         paste.setEnabled(self._pane.clipboard is not None
                          and self._pane.clipboard.has_files())
         menu.addSeparator()
-        if on_row and self._pane.sizes is not None:
-            counted = menu.addAction("Folder size\tSpace", self.measure_selection)
-            counted.setToolTip("Walk what is under it and put the total in the "
-                               "size column.")
+        if on_row:
+            menu.addAction("Copy to other pane\tF5",
+                           lambda: self.transferRequested.emit("copy"))
+            menu.addAction("Move to other pane\tF6",
+                           lambda: self.transferRequested.emit("move"))
+            menu.addSeparator()
+            menu.addAction("Rename\tF2", self.rename_current)
+            menu.addAction("Delete\tDel", self.delete_selection)
+            menu.addSeparator()
+            if self._pane.labels is not None and self._pane.config.get("labels.shown"):
+                self._label_menu(menu, names, notes=False)
+            more = menu.addMenu("More")
+            more.setToolTipsVisible(True)
+            more.addAction("Duplicate\tShift+F5", self.duplicate_current)
+            if len(names) > 1:
+                more.addAction("Rename several...\tCtrl+M", self.rename_several)
+            more.addAction("Attributes and dates...", self.attributes)
+            if entry is not None and not entry.is_dir:
+                more.addAction("Checksums...", self.checksums)
+            if self._pane.sizes is not None:
+                counted = more.addAction("Folder size\tSpace", self.measure_selection)
+                counted.setToolTip("Walk what is under it and put the total in the "
+                                   "size column.")
+            if self._pane.config.get("basket.enabled"):
+                more.addAction("Add to basket\tAlt+Ins", self.add_to_basket)
+            if (self._pane.labels is not None and self._pane.config.get("labels.shown")
+                    and len(names) == 1):
+                more.addAction("Note...", lambda name=names[0]: self.edit_note(name))
+            more.addSeparator()
+            more.addAction("Delete permanently\tShift+Del",
+                           lambda: self.delete_selection(permanent=True))
             menu.addSeparator()
         menu.addAction("New folder\tF7", self.new_folder)
-        menu.addAction("Refresh\tCtrl+R", self._pane.refresh)
+        if not on_row:
+            menu.addAction("Refresh\tCtrl+R", self._pane.refresh)
+            if self._pane.sizes is not None:
+                menu.addAction("Size of every folder here\tCtrl+Shift+Space",
+                               self.measure_all)
         if not on_row and self._pane.config.get("listing.location_stripe"):
             from app.core import location
 
@@ -1888,7 +1904,23 @@ class PaneWidget(QFrame):
             disabled.setEnabled(False)
             self._place_menu()
             return
-        self._fill(self._menu, items, token, top=True)
+        pane = getattr(self, "_pane", None)
+        if pane is not None and pane.config.get("menu.shell_inline"):
+            self._fill(self._menu, items, token, top=True)
+            self._place_menu()
+            return
+        # 0.50: Explorer's entries under one submenu -- 7-Zip, Open with, Send
+        # to and the rest are all still there -- with Properties kept beside
+        # it, because it is the one of them reached for on every kind of file.
+        kept = _tidy(items, drop_verbs=SHELL_VERBS_WE_HAVE)
+        props = [item for item in kept if (item.verb or "").lower() == "properties"]
+        rest = [item for item in kept if item not in props]
+        if rest:
+            explorer = self._menu.addMenu("Explorer")
+            explorer.setToolTipsVisible(True)
+            self._fill(explorer, rest, token, top=True)
+        if props:
+            self._fill(self._menu, props, token)
         self._place_menu()
 
     def _place_menu(self) -> None:
@@ -1998,7 +2030,7 @@ class PaneWidget(QFrame):
                                         and entry.name in names) else 0
         self.viewRequested.emit(self._pane.current.path, names, at)
 
-    def _label_menu(self, menu: QMenu, names: list[str]) -> None:
+    def _label_menu(self, menu: QMenu, names: list[str], *, notes: bool = True) -> None:
         """0.38: a colour for the rows, and a note for the one under the cursor."""
         from app.core.labels import COLOURS
 
@@ -2009,7 +2041,7 @@ class PaneWidget(QFrame):
         colours.addSeparator()
         for number, name in enumerate(COLOURS, start=1):
             colours.addAction(name, lambda n=number: labels.set_colour(folder, names, n))
-        if len(names) == 1:
+        if notes and len(names) == 1:
             menu.addAction("Note...", lambda name=names[0]: self.edit_note(name))
 
     def edit_note(self, name: str) -> None:

@@ -191,9 +191,14 @@ def build(
     # What sits directly on the window: the gaps around the cards, the title
     # bar, the rail and the status line. One token so glass and solid differ
     # in exactly one place.
-    glass = backdrop == "glass"
+    glass = backdrop in ("glass", "frosted")
     out["backdrop"] = "transparent" if glass else out["bg_0"]
     out["backdrop_name"] = "glass" if glass else "solid"
+    # 0.50: the listing's own ground. Solid everywhere except the frosted
+    # glass look, where the panes let the desktop through as well -- at an
+    # alpha that keeps text on them well clear of the wallpaper behind.
+    surface_rgb = unhex(out["bg_2"])
+    out["pane_bg"] = rgba(surface_rgb, 0.78) if backdrop == "frosted" else out["bg_2"]
     # Windows' own close-button red. A semantic colour that has to agree with
     # every other window on the screen, so it follows neither theme nor accent.
     out["close_hover"] = "#c42b1c"

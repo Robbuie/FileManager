@@ -134,6 +134,14 @@ OPTIONS: tuple[Option, ...] = (
             "Automatic is glass where Windows can draw it and solid over "
             "Remote Desktop or Hyper-V, where transparency is turned off.",
             heading="Window", restart=True),
+    _choice("window.glass", "look", "Glass look",
+            (("mica", "Mica"), ("acrylic", "Acrylic"),
+             ("frosted", "Frosted panes"), ("tinted", "Tinted glass")),
+            "Mica tints the frame from the wallpaper. Acrylic shows the "
+            "wallpaper blurred behind the frame; Frosted lets it through the "
+            "panes too; Tinted washes it with the accent. Only while the glass "
+            "backdrop is on.", restart=True, new=True,
+            words=("acrylic", "blur", "transparent", "frosted", "tint")),
     _choice("window.frame", "look", "Title bar",
             (("custom", "This application's"), ("system", "Windows' own")),
             "Windows' own brings the menu bar back. The way out if the drawn "
@@ -333,6 +341,12 @@ OPTIONS: tuple[Option, ...] = (
     Option("menu.shell", "general", "Explorer context menu",
            "The shell's own entries after this application's. Off is the "
            "answer when an extension misbehaves.", heading="Shell"),
+    Option("menu.shell_inline", "general", "Explorer's entries inline",
+           "Off puts 7-Zip, Open with, Send to and the rest under one Explorer "
+           "submenu on a right-click, with Properties beside it. On lists them "
+           "at the bottom of the menu, as before 0.50.",
+           needs=("menu.shell", True), new=True,
+           words=("7-zip", "context menu", "right-click", "submenu")),
     Option("general.single_instance", "general", "One window",
            "Starting File Manager again -- or Open in File Manager from "
            "Explorer -- opens the folder in a new tab of the window already "

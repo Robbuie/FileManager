@@ -73,6 +73,9 @@ _SWP_FLAGS = 0x0002 | 0x0001 | 0x0004 | 0x0020  # NOMOVE NOSIZE NOZORDER FRAMECH
 _DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 _DWMWA_SYSTEMBACKDROP_TYPE = 38
 _DWMSBT_MAINWINDOW = 2  # Mica
+_DWMSBT_TRANSIENTWINDOW = 3  # Acrylic: the blurred desktop, used by 0.50's
+#: acrylic, frosted and tinted glass looks
+_DWMSBT_TABBEDWINDOW = 4
 _SM_REMOTESESSION = 0x1000
 _SM_CXSIZEFRAME = 32
 _SM_CYSIZEFRAME = 33
@@ -157,9 +160,14 @@ class NativeFrame:
     rendered offscreen by `tools/preview.py` and built by the tests.
     """
 
-    def __init__(self, window, *, glass: bool, dark: bool) -> None:
+    def __init__(self, window, *, glass: bool, dark: bool,
+                 material: str = "mica") -> None:
         self._window = window
         self._glass = glass
+        #: 0.50: which backdrop Windows draws behind glass -- "mica" (the
+        #: wallpaper's colour, faintly) or anything else for acrylic (the
+        #: wallpaper itself, blurred).
+        self._material = material
         self._dark = dark
         self._installed = False
         self.problem = ""
@@ -197,7 +205,8 @@ class NativeFrame:
             dwm.DwmSetWindowAttribute(hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE,
                                       ctypes.byref(dark), ctypes.sizeof(dark))
             if self._glass:
-                kind = ctypes.c_int(_DWMSBT_MAINWINDOW)
+                kind = ctypes.c_int(_DWMSBT_MAINWINDOW if self._material == "mica"
+                                    else _DWMSBT_TRANSIENTWINDOW)
                 dwm.DwmSetWindowAttribute(hwnd, _DWMWA_SYSTEMBACKDROP_TYPE,
                                           ctypes.byref(kind), ctypes.sizeof(kind))
             user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, _SWP_FLAGS)

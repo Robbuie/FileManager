@@ -39,6 +39,9 @@ from app.theme.tokens import (
     THEME_LABELS,
 )
 from app.ui import dialogs, winframe
+
+#: 0.50: how strongly the accent washes the desktop in the tinted glass look.
+TINT_ALPHA = 0.24
 from app.ui.deck import Deck
 from app.core import palette as core_palette
 from app.ui.hints import HintBar
@@ -129,6 +132,12 @@ class MainWindow(QMainWindow):
         #: translucent from the moment it is created. Changing it takes a
         #: restart, and the View menu says so.
         self._backdrop = backdrop if backdrop in ("glass", "solid") else "solid"
+        #: 0.50: the glass look, read once like the backdrop itself -- a
+        #: different material is a different window as far as Windows is
+        #: concerned, so it waits for the next start.
+        look = str(config.get("window.glass"))
+        self._glass_look = look if look in ("mica", "acrylic", "frosted", "tinted") \
+            else "mica"
         #: "custom" draws the 0.26 title bar; "system" is the Windows title bar
         #: and the menu bar, kept as the way back if the custom one misbehaves
         #: on a machine it was not tried on.
@@ -199,7 +208,7 @@ class MainWindow(QMainWindow):
         #: set to follow Windows or the clock. See `core/themeswitch.py`.
         self._theme_shown = themeswitch.current(config)
         tokens = sheet.tokens(self._theme_shown, config.get("accent"),
-                              config.get("density"), self._backdrop,
+                              config.get("density"), self._paint_backdrop,
                               self._accent_rgb, config.get("look.font"),
                               config.get("look.corners"))
         self._tokens = tokens
@@ -329,6 +338,8 @@ class MainWindow(QMainWindow):
                 self.setAttribute(Qt.WA_TranslucentBackground, True)
             dark = sum(sheet.qss.unhex(tokens["bg_0"])) < 382
             self._frame = winframe.NativeFrame(self, glass=self._backdrop == "glass",
+                                               material="mica" if self._glass_look == "mica"
+                                               else "acrylic",
                                                dark=dark)
         else:
             self.setCentralWidget(self._splitter)
@@ -479,7 +490,30 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------- menus
 
     def _build_menus(self) -> None:
+        """The application menu.
+
+        0.50: six menus where there were nine, in the order a person reaches
+        for them -- File, Edit, Go, View, Tools, Help -- with Options at the
+        end. Tabs, Favorites and Workspaces are submenus of Go; Select is part
+        of Edit; the on/off switches that used to fill the View menu live in
+        Options, where each one is explained, and in `_switches`, a menu that
+        is never shown but that the command palette still searches -- so
+        Ctrl+K finds every one of them by name, as before.
+        """
         files = self.menuBar().addMenu("&File")
+        edit = self.menuBar().addMenu("&Edit")
+        go = self.menuBar().addMenu("&Go")
+        view = self.menuBar().addMenu("&View")
+        self._tools_menu = self.menuBar().addMenu("&Tools")
+        helping = self.menuBar().addMenu("&Help")
+        #: Settings with a tick that are not on any menu shown, for Ctrl+K.
+        self._switches = QMenu("Settings", self)
+        viewing = self._hint(files, "View\tF3",
+                             lambda: self._current_widget().view_current())
+        viewing.setToolTip("Open the file under the cursor: a picture with zoom, "
+                           "text with its encoding, or a hex dump. The arrow "
+                           "keys step through the folder.")
+        files.addSeparator()
         # These four carry their keys in the label rather than as shortcuts.
         # A window shortcut on Delete would take the key from the path bar and
         # the filter box, so a backspace over a typo could start deleting
@@ -490,37 +524,45 @@ class MainWindow(QMainWindow):
         self._hint(files, "Rename\tF2", lambda: self._current_widget().rename_current())
         self._action(files, "Rename several...", "Ctrl+M",
                      lambda: self._current_widget().rename_several())
-        self._undo_action = self._hint(files, "Undo\tCtrl+Z", self._undo_last)
-        self._undo_action.setEnabled(False)
-        self._undo.changed.connect(self._sync_undo)
+        self._hint(files, "Duplicate\tShift+F5",
+                   lambda: self._current_widget().duplicate_current())
         files.addSeparator()
-        self._hint(files, "Checksums...", lambda: self._current_widget().checksums())
-        self._hint(files, "Attributes and dates...",
-                   lambda: self._current_widget().attributes())
-        self._hint(files, "New link in other pane...", self._new_link)
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",
                    lambda: self._current_widget().delete_selection(permanent=True))
         files.addSeparator()
-        # Hints again, all three. Ctrl+C, Ctrl+X and Ctrl+V as window
-        # shortcuts would take copy, cut and paste away from the path bar and
-        # the filter box, which is the same failure Delete is kept off the
-        # window for -- and there the cost is only a lost keystroke, while
-        # here it is a paste of files into a folder because the user meant to
-        # paste text into a field.
-        self._hint(files, "Copy\tCtrl+C",
-                   lambda: self._on_clipboard_requested("copy"))
-        self._hint(files, "Cut\tCtrl+X",
-                   lambda: self._on_clipboard_requested("cut"))
-        self._hint(files, "Paste\tCtrl+V",
-                   lambda: self._on_clipboard_requested("paste"))
+        self._file_more = files.addMenu("More")
+        self._file_more.setToolTipsVisible(True)
+        self._hint(self._file_more, "Checksums...",
+                   lambda: self._current_widget().checksums())
+        self._hint(self._file_more, "Attributes and dates...",
+                   lambda: self._current_widget().attributes())
+        self._hint(self._file_more, "New link in other pane...", self._new_link)
         files.addSeparator()
         self._action(files, "Queue", "Ctrl+J", self._show_queue)
         self._hint(files, "Job history", self._show_history)
         files.addSeparator()
         self._action(files, "Quit", "Ctrl+Q", self.close)
 
-        tabs = self.menuBar().addMenu("&Tabs")
+        self._undo_action = self._hint(edit, "Undo\tCtrl+Z", self._undo_last)
+        self._undo_action.setEnabled(False)
+        self._undo.changed.connect(self._sync_undo)
+        edit.addSeparator()
+        # Hints again, all three. Ctrl+C, Ctrl+X and Ctrl+V as window
+        # shortcuts would take copy, cut and paste away from the path bar and
+        # the filter box, which is the same failure Delete is kept off the
+        # window for -- and there the cost is only a lost keystroke, while
+        # here it is a paste of files into a folder because the user meant to
+        # paste text into a field.
+        self._hint(edit, "Cut\tCtrl+X",
+                   lambda: self._on_clipboard_requested("cut"))
+        self._hint(edit, "Copy\tCtrl+C",
+                   lambda: self._on_clipboard_requested("copy"))
+        self._hint(edit, "Paste\tCtrl+V",
+                   lambda: self._on_clipboard_requested("paste"))
+        edit.addSeparator()
+
+        tabs = QMenu("&Tabs", self)
         self._action(tabs, "New tab", "Ctrl+T", lambda: self._current_pane().open_tab())
         self._action(tabs, "Duplicate tab", "Ctrl+Shift+T",
                      lambda: self._current_pane().duplicate_tab())
@@ -571,7 +613,7 @@ class MainWindow(QMainWindow):
         # characters typed into a quick search, which only the widget holding
         # the search can do. The pane handles all of them where focus makes
         # that safe.
-        select = self.menuBar().addMenu("Se&lect")
+        select = edit
         widget = self._current_widget
         self._hint(select, "Select group\tNum +  /  Ctrl+=",
                    lambda: widget().ask_and_select(on=True))
@@ -605,8 +647,11 @@ class MainWindow(QMainWindow):
                        "cursor was.")
         dated.setToolTipsVisible(True)
         select.setToolTipsVisible(True)
+        edit.addSeparator()
+        self._action(edit, "Copy path", "Ctrl+Shift+C", self._copy_path)
+        self._action(edit, "Copy path as UNC", "Ctrl+Alt+C", self._copy_unc_path)
 
-        self._favorites_menu = self.menuBar().addMenu("F&avorites")
+        self._favorites_menu = QMenu("F&avorites", self)
         self._favorites_menu.setToolTipsVisible(True)
         self._add_favorite_action = QAction("Add this folder", self)
         self._add_favorite_action.setShortcut(QKeySequence("Ctrl+D"))
@@ -649,7 +694,7 @@ class MainWindow(QMainWindow):
         from app.core.workspaces import Workspaces
 
         self._workspaces = Workspaces(self._config, self)
-        self._workspaces_menu = self.menuBar().addMenu("&Workspaces")
+        self._workspaces_menu = QMenu("&Workspaces", self)
         self._workspaces_menu.setToolTipsVisible(True)
         self._workspace_keys = []
         for position in range(1, 10):
@@ -664,7 +709,6 @@ class MainWindow(QMainWindow):
         self._workspaces.changed.connect(self._fill_workspaces)
         self._fill_workspaces()
 
-        go = self.menuBar().addMenu("&Go")
         self._action(go, "Up", "Backspace", lambda: self._current_pane().go_up())
         self._action(go, "Back", "Alt+Left", lambda: self._current_pane().go_back())
         self._action(go, "Forward", "Alt+Right", lambda: self._current_pane().go_forward())
@@ -676,15 +720,13 @@ class MainWindow(QMainWindow):
         self._palette_action = self._action(go, "Command palette", "Ctrl+K",
                                             self._open_palette)
         go.addSeparator()
-        self._action(go, "Swap panes", "Ctrl+U", self._swap_panes)
-        self._action(go, "Other pane here", "Ctrl+Shift+M", self._mirror_pane)
+        go.addMenu(tabs)
+        go.addMenu(self._favorites_menu)
+        go.addMenu(self._workspaces_menu)
         go.addSeparator()
         self._action(go, "Rescan drives", "Ctrl+Shift+D",
                      lambda: self._volumes.refresh(rescan=True))
-        self._action(go, "Copy path", "Ctrl+Shift+C", self._copy_path)
-        self._action(go, "Copy path as UNC", "Ctrl+Alt+C", self._copy_unc_path)
 
-        view = self.menuBar().addMenu("&View")
         view.setToolTipsVisible(True)
         # A hint rather than a shortcut, like every other function key: a window
         # shortcut on F3 would take the key from the path bar and the filter box.
@@ -692,11 +734,6 @@ class MainWindow(QMainWindow):
         # function key in this application is the pane's, so which pane the
         # viewer opens on is decided by the same rule as which pane F5 copies
         # from, rather than by a second mechanism that agrees most of the time.
-        viewing = self._hint(view, "View\tF3",
-                             lambda: self._current_widget().view_current())
-        viewing.setToolTip("Open the file under the cursor: a picture with zoom, "
-                           "text with its encoding, or a hex dump. The arrow "
-                           "keys step through the folder.")
         pane_preview = QAction("Preview pane", self, checkable=True)
         pane_preview.setShortcut(QKeySequence("Ctrl+P"))
         pane_preview.setShortcutContext(Qt.WindowShortcut)
@@ -737,17 +774,6 @@ class MainWindow(QMainWindow):
                    lambda: self._current_widget().measure_selection())
         self._action(view, "Size of every folder here", "Ctrl+Shift+Space",
                      lambda: self._current_widget().measure_all())
-        view.addSeparator()
-        typed = self._hint(view, "Quick search\tType a name", lambda: None)
-        typed.setEnabled(False)
-        typed.setToolTip("Typing in the listing jumps to a name. Ctrl+G finds "
-                         "the next match and Ctrl+Shift+G the previous, whether "
-                         "or not you have just typed; Enter also steps while "
-                         "the search is still live. Esc forgets the name, and "
-                         "so does leaving the folder. F3 was this until 0.16 "
-                         "and is the viewer now.")
-        self._hint(view, "Find next\tCtrl+G", lambda: None).setEnabled(False)
-        view.addSeparator()
         self._action(view, "Filter", "Ctrl+F", lambda: self._current_widget().focus_filter())
         self._action(view, "Clear filter", "Ctrl+Shift+F",
                      lambda: self._current_widget().clear_filter())
@@ -792,16 +818,24 @@ class MainWindow(QMainWindow):
             lambda checked: self.apply_setting("rail.shown", bool(checked)))
         self._bound["rail.shown"] = rail
         view.addAction(rail)
-        view.addSeparator()
-        self._axis_menu(view, "Theme", THEME_LABELS, "theme")
-        self._axis_menu(view, "Accent", ACCENT_LABELS, "accent")
-        self._axis_menu(view, "Density", DENSITY_LABELS, "density")
-        self._window_menu(view)
-        view.addSeparator()
         unc = QAction("Show UNC paths", self, checkable=True)
         unc.setChecked(bool(self._config.get("left.show_unc")))
         unc.triggered.connect(self._set_show_unc)
         view.addAction(unc)
+        view.addSeparator()
+        self._action(view, "Swap panes", "Ctrl+U", self._swap_panes)
+        self._action(view, "Other pane here", "Ctrl+Shift+M", self._mirror_pane)
+        view.addSeparator()
+        self._axis_menu(view, "Theme", THEME_LABELS, "theme")
+        self._axis_menu(view, "Accent", ACCENT_LABELS, "accent")
+        self._axis_menu(view, "Density", DENSITY_LABELS, "density")
+        view.addSeparator()
+        more_look = self._hint(view, "More look settings...",
+                               lambda: self.open_options("look"))
+        more_look.setToolTip("Themes that follow Windows or the clock, the font, "
+                             "corners, glass and the rest.")
+        switches = self._switches
+        self._window_menu(switches)
         badges = QAction("Type badges instead of icons", self, checkable=True)
         badges.setChecked(self._config.get("icons.style") == "badges")
         badges.setToolTip("A tag with the extension, coloured by kind of file: "
@@ -810,7 +844,7 @@ class MainWindow(QMainWindow):
             lambda checked: self.apply_setting(
                 "icons.style", "badges" if checked else "icons"))
         self._bound["icons.style"] = badges
-        view.addAction(badges)
+        switches.addAction(badges)
         motion = QAction("Animations", self, checkable=True)
         motion.setChecked(bool(self._config.get("look.motion")))
         motion.setToolTip("Folders fade in, the active pane's glow moves across, "
@@ -818,7 +852,7 @@ class MainWindow(QMainWindow):
         motion.triggered.connect(
             lambda checked: self.apply_setting("look.motion", bool(checked)))
         self._bound["look.motion"] = motion
-        view.addAction(motion)
+        switches.addAction(motion)
         header = QAction("Folder header", self, checkable=True)
         header.setChecked(bool(self._config.get("pane.header")))
         header.setToolTip("The folder's name above the listing, and a bar of "
@@ -826,14 +860,14 @@ class MainWindow(QMainWindow):
         header.triggered.connect(
             lambda checked: self.apply_setting("pane.header", bool(checked)))
         self._bound["pane.header"] = header
-        view.addAction(header)
+        switches.addAction(header)
         shell_icons = QAction("Shell icons", self, checkable=True)
         shell_icons.setChecked(bool(self._config.get("icons.shell")))
         shell_icons.setEnabled(self._icons is not None)
         shell_icons.triggered.connect(
             lambda checked: self.apply_setting("icons.shell", bool(checked)))
         self._bound["icons.shell"] = shell_icons
-        view.addAction(shell_icons)
+        switches.addAction(shell_icons)
         overlays = QAction("Icon overlays", self, checkable=True)
         overlays.setChecked(bool(self._config.get("icons.overlays")))
         overlays.setEnabled(self._overlays is not None)
@@ -843,7 +877,7 @@ class MainWindow(QMainWindow):
         overlays.triggered.connect(
             lambda checked: self.apply_setting("icons.overlays", bool(checked)))
         self._bound["icons.overlays"] = overlays
-        view.addAction(overlays)
+        switches.addAction(overlays)
         file_icons = QAction("Icons from the file itself", self, checkable=True)
         file_icons.setChecked(bool(self._config.get("icons.per_file")))
         file_icons.setEnabled(self._file_icons is not None)
@@ -853,7 +887,7 @@ class MainWindow(QMainWindow):
         file_icons.triggered.connect(
             lambda checked: self.apply_setting("icons.per_file", bool(checked)))
         self._bound["icons.per_file"] = file_icons
-        view.addAction(file_icons)
+        switches.addAction(file_icons)
         thumbs = QAction("Pictures in the grid", self, checkable=True)
         thumbs.setChecked(bool(self._config.get("preview.thumbnails")))
         thumbs.setEnabled(self._thumbnails is not None)
@@ -862,7 +896,7 @@ class MainWindow(QMainWindow):
         thumbs.triggered.connect(
             lambda checked: self.apply_setting("preview.thumbnails", bool(checked)))
         self._bound["preview.thumbnails"] = thumbs
-        view.addAction(thumbs)
+        switches.addAction(thumbs)
         shell_preview = QAction("Windows thumbnail handlers", self, checkable=True)
         shell_preview.setChecked(bool(self._config.get("preview.shell")))
         shell_preview.setToolTip("Ask Windows for a picture of the kinds this "
@@ -873,20 +907,21 @@ class MainWindow(QMainWindow):
         shell_preview.triggered.connect(
             lambda checked: self.apply_setting("preview.shell", bool(checked)))
         self._bound["preview.shell"] = shell_preview
-        view.addAction(shell_preview)
+        switches.addAction(shell_preview)
         shell_commands = QAction("Explorer context menu", self, checkable=True)
         shell_commands.setChecked(bool(self._config.get("menu.shell")))
         shell_commands.setEnabled(self._shell_menu is not None)
         shell_commands.triggered.connect(
             lambda checked: self.apply_setting("menu.shell", bool(checked)))
         self._bound["menu.shell"] = shell_commands
-        view.addAction(shell_commands)
-        view.addSeparator()
-        options = self._action(view, "Options...", "Ctrl+,", self.open_options)
-        options.setToolTip("Every setting in one place, each one applied as it "
-                           "is changed.")
+        switches.addAction(shell_commands)
+        self._options_action = QAction("Options...", self)
+        self._options_action.setShortcut(QKeySequence("Ctrl+,"))
+        self._options_action.setShortcutContext(Qt.WindowShortcut)
+        self._options_action.triggered.connect(lambda: self.open_options())
+        self._options_action.setToolTip("Every setting in one place, each one "
+                                        "applied as it is changed.")
 
-        self._tools_menu = self.menuBar().addMenu("&Tools")
         self._tools_menu.setToolTipsVisible(True)
         # Made once and put back by `_fill_tools`, for the favourites menu's
         # reason: an action remade on every rebuild stays alive on the window,
@@ -936,6 +971,9 @@ class MainWindow(QMainWindow):
         self._join_action.setToolTip("Put a file split into .001, .002 ... back together: "
                                      "run it on the .001 part.")
         self._join_action.triggered.connect(lambda: self._split_or_join(joining=True))
+        self._file_more.addSeparator()
+        self._file_more.addAction(self._split_action)
+        self._file_more.addAction(self._join_action)
         self._edit_commands_action = QAction("Commands", self)
         self._edit_commands_action.setToolTip(
             "The programs on the Tools menu and the keys that reach them.")
@@ -943,11 +981,6 @@ class MainWindow(QMainWindow):
         self._edit_commands_action.setEnabled(self._commands is not None)
         self._fill_tools()
 
-        helping = self.menuBar().addMenu("&Help")
-        version = QAction(f"Version {__version__}", self)
-        version.setEnabled(False)
-        helping.addAction(version)
-        helping.addSeparator()
         check = QAction("Check for updates", self)
         check.triggered.connect(self._check_for_updates)
         check.setEnabled(self._updates is not None)
@@ -970,20 +1003,30 @@ class MainWindow(QMainWindow):
         diagnostics.triggered.connect(self._copy_diagnostics)
         helping.addAction(diagnostics)
         helping.addSeparator()
+        settings = helping.addMenu("Settings")
+        settings.setToolTipsVisible(True)
         backup = QAction("Back up settings", self)
         backup.setToolTip("A dated copy of every setting -- favourites, workspaces, "
                           "labels, commands -- beside the settings file.")
         backup.triggered.connect(self._back_up_settings)
-        helping.addAction(backup)
+        settings.addAction(backup)
         restore = QAction("Restore settings...", self)
         restore.triggered.connect(self._restore_settings)
-        helping.addAction(restore)
+        settings.addAction(restore)
         folder = QAction("Show settings folder", self)
         folder.setToolTip("Opens the folder holding the settings and their backups in "
                           "the active pane, to copy them to another machine.")
         folder.triggered.connect(
             lambda: self._current_pane().open_tab(os.path.dirname(self._config.path)))
-        helping.addAction(folder)
+        settings.addAction(folder)
+        helping.addSeparator()
+        version = QAction(f"Version {__version__}", self)
+        version.setEnabled(False)
+        helping.addAction(version)
+        # Options last, on the bar itself: the one place every setting is.
+        self.menuBar().addSeparator()
+        self.menuBar().addAction(self._options_action)
+
 
     # ------------------------------------------------------------------- rail
 
@@ -1282,8 +1325,6 @@ class MainWindow(QMainWindow):
         menu.addAction(self._search_action)
         menu.addAction(self._duplicates_action)
         menu.addAction(self._map_action)
-        menu.addAction(self._split_action)
-        menu.addAction(self._join_action)
         menu.addSeparator()
         menu.addAction(self._compare_action)
         menu.addAction(self._sync_action)
@@ -1907,6 +1948,14 @@ class MainWindow(QMainWindow):
         if self._options is not None:
             self._options.sync(key)
 
+    @property
+    def _paint_backdrop(self) -> str:
+        """What the sheet is built for: "frosted" when the panes themselves
+        are to let the desktop through, otherwise the backdrop as decided."""
+        if self._backdrop == "glass" and getattr(self, "_glass_look", "") == "frosted":
+            return "frosted"
+        return self._backdrop
+
     def _check_theme(self) -> None:
         """0.48: the timer's question -- has Windows or the clock moved the
         theme? -- answered without re-rendering anything when it has not."""
@@ -1922,7 +1971,7 @@ class MainWindow(QMainWindow):
         if right == "same" or right not in ACCENT_LABELS:
             return tokens
         return sheet.tokens(self._theme_shown, right, self._config.get("density"),
-                            self._backdrop, None, self._config.get("look.font"),
+                            self._paint_backdrop, None, self._config.get("look.font"),
                             self._config.get("look.corners"))
 
     def apply_theme(self) -> None:
@@ -1932,7 +1981,7 @@ class MainWindow(QMainWindow):
             theme=self._theme_shown,
             accent=self._config.get("accent"),
             density=self._config.get("density"),
-            backdrop=self._backdrop,
+            backdrop=self._paint_backdrop,
             accent_rgb=self._accent_rgb,
             font=self._config.get("look.font"),
             corners=self._config.get("look.corners"),
@@ -2781,6 +2830,7 @@ class MainWindow(QMainWindow):
                     checked=action.isChecked() if action.isCheckable() else None))
 
         walk(self.menuBar(), "")
+        walk(self._switches, "Settings")
         pane = self._current_pane()
         if self._favorites is not None:
             for entry in self._favorites.entries:
@@ -2832,11 +2882,16 @@ class MainWindow(QMainWindow):
         walk(self.menuBar())
 
     def _show_app_menu(self, at) -> None:
-        """Every menu the bar used to show, as one menu under the mark."""
+        """Every menu the bar used to show, as one menu under the mark, with
+        Options after them as it is on the bar."""
         menu = QMenu(self)
         for action in self.menuBar().actions():
             if action.menu() is not None:
                 menu.addMenu(action.menu())
+            elif action.isSeparator():
+                menu.addSeparator()
+            else:
+                menu.addAction(action)
         menu.aboutToHide.connect(menu.deleteLater)
         menu.popup(at)
 
@@ -2895,7 +2950,13 @@ class MainWindow(QMainWindow):
         if self._backdrop == "glass" and self._frame_kind == "custom":
             painter = QPainter(self)
             painter.setCompositionMode(QPainter.CompositionMode_Source)
-            painter.fillRect(event.rect(), QColor(*GLASS_FLOOR))
+            floor = QColor(*GLASS_FLOOR)
+            if self._glass_look == "tinted":
+                # 0.50: the accent washed over the blurred desktop. Still a
+                # floor with alpha, so clicks still land on this window.
+                floor = QColor(self._tokens.get("accent", "#4a91ff"))
+                floor.setAlphaF(TINT_ALPHA)
+            painter.fillRect(event.rect(), floor)
             painter.end()
         super().paintEvent(event)
 

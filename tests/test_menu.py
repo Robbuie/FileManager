@@ -753,9 +753,14 @@ def test_the_menu_is_placed_again_when_the_shell_entries_land() -> None:
     widget._place_menu = lambda: asked.append(True)
 
     widget._on_shell_items(7, [MenuItem(id=1, text="7-Zip"),
-                               MenuItem(id=2, text="Scan")])
+                               MenuItem(id=2, text="Scan"),
+                               MenuItem(id=3, text="Properties", verb="properties")])
     assert asked == [True]
-    assert len(menu.actions()) >= 2
+    # 0.50: Explorer's entries under one submenu, Properties beside it.
+    texts = [action.text() for action in menu.actions()]
+    assert texts == ["Explorer", "Properties"]
+    explorer = menu.actions()[0].menu()
+    assert [action.text() for action in explorer.actions()] == ["7-Zip", "Scan"]
 
     menu.deleteLater()
 
