@@ -219,6 +219,21 @@ HISTORY_BUTTONS = {Qt.BackButton: -1, Qt.ForwardButton: 1}
 _DRAG_EVENTS = (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop)
 
 
+class ListingTable(QTableView):
+    """The listing's table, with its drags handed to the shell (0.50.3).
+
+    See `app/ui/shelldrag.py` for why: Qt's drag offers a dragged file as a
+    link as well, and Outlook took the link."""
+
+    shell_drag = True
+
+    def startDrag(self, actions) -> None:  # noqa: N802 - Qt naming
+        from app.ui import shelldrag
+
+        if not shelldrag.start_from_view(self):
+            super().startDrag(actions)
+
+
 def _drag_out(view: QAbstractItemView) -> None:
     """Let rows be dragged -- out of the window into an email, onto the
     desktop, into another program, and since 0.29.13 onto a pane.
@@ -685,7 +700,7 @@ class PaneWidget(QFrame):
         self._filter.textChanged.connect(self._pane.set_filter)
         self._filter.hide()
 
-        self._view = QTableView()
+        self._view = ListingTable()
         self._header = SortHeader(self._view)
         # Clickable, said out loud. A header a view makes for itself is
         # clickable already, and one built here is not -- and `setSortingEnabled`
@@ -720,6 +735,7 @@ class PaneWidget(QFrame):
         self._rows.size_bar = str(pane.config.get("listing.size_bar"))
         self._rows.stripes = bool(pane.config.get("listing.stripes"))
         self._rows.date_chips = bool(pane.config.get("listing.date_chips"))
+        self._view.shell_drag = bool(pane.config.get("listing.shell_drag"))
         self._header.set_edges(self._rows.edges)
         # The line down the listing at the edge being hovered or dragged, and
         # the width while dragging. Children of the view rather than painted
@@ -804,6 +820,7 @@ class PaneWidget(QFrame):
         # widget go on asking `self._view.selectionModel()` without caring which
         # view is in front.
         self._grid = GridView(self._pane.thumbnails)
+        self._grid.shell_drag = bool(pane.config.get("listing.shell_drag"))
         _drag_out(self._grid)
         self._grid.activated.connect(self._on_activated)
         self._grid.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -3041,6 +3058,10 @@ class PaneWidget(QFrame):
         text = f"{marked} selected" + (f"  ·  {format_size(total)}" if total else "")
         self._pill.show_selection(text)
 
+    def set_shell_drag(self, on: bool) -> None:
+        self._view.shell_drag = bool(on)
+        self._grid.shell_drag = bool(on)
+
     def set_placeholder_motion(self, on: bool) -> None:
         self._placeholders.set_motion(on)
 
@@ -3632,9 +3653,14 @@ class PaneWidget(QFrame):
             self._show_drop(-1, "")
             return True
         mime = event.mimeData()
-        sources = drops.decode(mime.data(drops.DRAG_FORMAT).data()
-                               if mime is not None and mime.hasFormat(drops.DRAG_FORMAT)
-                               else None)
+        # 0.50.3: a drag this window handed to the shell carries plain files,
+        # not this application's format; `sources_from` knows them by
+        # `drops.outgoing`.
+        sources = drops.sources_from(
+            mime.data(drops.DRAG_FORMAT).data()
+            if mime is not None and mime.hasFormat(drops.DRAG_FORMAT) else None,
+            [url.toLocalFile() for url in mime.urls()]
+            if mime is not None and mime.hasUrls() else [])
         if not sources:
             event.ignore()
             return True

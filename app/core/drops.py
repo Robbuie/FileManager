@@ -44,6 +44,36 @@ from app.io import paths
 DRAG_FORMAT = "application/x-filemanager-rows"
 
 
+#: 0.50.3: the paths of a drag this application handed to the shell
+#: (`app/ui/shelldrag.py`), for as long as that drag is running. The shell's
+#: data object carries the files Windows programs read and not
+#: `DRAG_FORMAT`, so this is how a drop on one of the panes still knows the
+#: drag is one of its own. None between drags.
+outgoing: list[str] | None = None
+
+
+def sources_from(own: bytes | None, urls: list[str]) -> list[str]:
+    """The dragged paths a pane may take a drop of.
+
+    Its own format first. Failing that, the plain file list -- but only while
+    a shell drag from this window is running and only when that list is
+    exactly the files it dragged, so a drag from Explorer, which arrives in
+    the same shape, is still not one this application takes.
+    """
+    found = decode(own)
+    if found:
+        return found
+    if outgoing and urls:
+        wanted = {_plain(path) for path in outgoing}
+        if {_plain(path) for path in urls} == wanted:
+            return list(outgoing)
+    return []
+
+
+def _plain(path: str) -> str:
+    return paths.normalize(path.replace("/", "\\")).lower().rstrip("\\")
+
+
 def encode(sources: list[str]) -> bytes:
     return json.dumps({"sources": list(sources)}).encode("utf-8")
 

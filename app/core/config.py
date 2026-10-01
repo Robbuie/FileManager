@@ -309,6 +309,10 @@ DEFAULTS: dict[str, Any] = {
     # 0.49: every other row shaded (off: air and a hover do that job), and a
     # chip behind the date in a folder's name, today's in the accent.
     "listing.stripes": False,
+    # 0.50.3: a drag out of a listing is run by the shell, as Explorer's are,
+    # so Outlook and the rest attach the file rather than paste a link to it.
+    # False is Qt's own drag, as before.
+    "listing.shell_drag": True,
     "listing.date_chips": True,
     # 0.49: what a pane says about where it is -- a stripe and a tag on the
     # folder header for a network folder, and a red one for a folder marked

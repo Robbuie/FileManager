@@ -5,6 +5,18 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.50.3]
+
+### Fixed
+- **A file dragged into Outlook arrived as its name instead of as an
+  attachment.** The drag offered the file as a link as well as a file, and
+  Outlook's message editor took the link. A drag out of a listing is now run
+  by Windows the way Explorer runs one, so Outlook, the desktop and other
+  programs get the file itself. It still only ever offers a copy, and a drop
+  on the other pane still goes through the copy prompt as before.
+  Options > Listing > "Drag files out like Explorer" brings back the old drag
+  if this one misbehaves somewhere.
+
 ## [0.50.2]
 
 ### Fixed

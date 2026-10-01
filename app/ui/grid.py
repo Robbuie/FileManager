@@ -228,6 +228,15 @@ class GridView(QListView):
     the cell size.
     """
 
+    #: 0.50.3: drags go to the shell, as the table's do. See shelldrag.py.
+    shell_drag = True
+
+    def startDrag(self, actions) -> None:  # noqa: N802 - Qt naming
+        from app.ui import shelldrag
+
+        if not shelldrag.start_from_view(self):
+            super().startDrag(actions)
+
     def __init__(self, thumbnails, parent=None) -> None:
         super().__init__(parent)
         self._cells = CellDelegate(thumbnails, self)

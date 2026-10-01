@@ -1886,6 +1886,7 @@ class MainWindow(QMainWindow):
                                            for w in widgets],
             "listing.stripes": lambda v: [w.set_row_style(stripes=v)
                                           for w in widgets],
+            "listing.shell_drag": lambda v: [w.set_shell_drag(v) for w in widgets],
             "listing.date_chips": lambda v: [w.set_row_style(date_chips=v)
                                              for w in widgets],
             "listing.location_stripe": lambda _v: [w.update_location()
