@@ -1779,6 +1779,10 @@ class MainWindow(QMainWindow):
             "listing.fade_days": lambda v: [w.set_row_style(fade_days=v)
                                             for w in widgets],
             "listing.scrollmap": lambda v: [w.set_scrollmap(v) for w in widgets],
+            "listing.column_edges": lambda v: [w.set_row_style(edges=v)
+                                               for w in widgets],
+            "listing.size_bar": lambda v: [w.set_row_style(size_bar=v)
+                                           for w in widgets],
             "rail.capacity": lambda _v: self._rebuild_rail(),
             "network.ping": lambda _v: self._health.configure()
             if self._health is not None else None,

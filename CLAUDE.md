@@ -349,6 +349,9 @@ drag any divider  including the name's, and it is remembered per pane
 double click a divider  fit that column to the rows on screen, not to all of
 them -- `ResizeToContents` measures every row and this application does not
 right click the header  fit them all, reset the widths, hide a column
+since 0.47 a drag or double click is taken `GRAB_ZONE` pixels either side of
+an edge -- `SortHeader` moves the event onto the edge before Qt sees it, and
+carries the same shift through the drag so the column does not jump
 
 The rail and the path bar
 click a place, a drive, a network location, a saved folder  the pane that has

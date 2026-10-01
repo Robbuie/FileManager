@@ -5,6 +5,28 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.47.0]
+
+### Added
+- **You can see where each column ends.** A thin line now sits between the
+  column headings, so the place to drag a width is no longer something to
+  hunt for. Options > Listing > Column edges also offers lines carried down
+  through the whole listing, every other column shaded, or nothing.
+- **The edge is easier to grab.** The header takes a drag from a few pixels
+  either side of a line rather than the narrow strip Windows gives it, and
+  the resize cursor shows as soon as the pointer is close enough. The edge
+  under the pointer lights up in the accent with a line down the listing,
+  and while dragging, the width is shown beside it. Double-clicking near an
+  edge still fits that column to what is on screen.
+
+### Changed
+- **The size bar sits behind the figure instead of under it.** The old
+  two-pixel line ran into the bottom of the digits on compact rows and on
+  some themes, which made the size itself hard to read. It is now a soft
+  block the height of the row, behind the number, and a file too small
+  against the largest to make a visible bar gets none. Options > Listing >
+  Size comparison brings the old line back or turns it off.
+
 ## [0.46.1]
 
 ### Fixed

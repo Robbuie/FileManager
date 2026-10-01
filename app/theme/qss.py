@@ -136,6 +136,23 @@ def build(
     # 0.39: stronger, now that it sits behind the rows rather than in the gaps
     # between panes. Still well under the text: the listing is read through it.
     out["grid_minor"] = rgba(info, 0.10)
+    # 0.47: where a column ends. Before this nothing marked it, so finding the
+    # spot to drag meant hunting along the header for a cursor change.
+    # Derived from the theme's own greys -- muted text pulled most of the way
+    # to the pane -- so the divider is visible on every theme and never as
+    # loud as the text it separates. `rule_soft` is the same line through the
+    # rows, faint enough to read the listing through; `band` is the shade on
+    # every other column for the banded style.
+    muted = unhex(out["txt_2"])
+    out["rule"] = mix(surface, muted, 0.55)
+    out["rule_soft"] = rgba(muted, 0.16)
+    out["band"] = rgba(unhex(out["txt_1"]), 0.06)
+    # 0.47: the size bar, now drawn *behind* the figure for the full height of
+    # the row rather than as a line under the digits that ran into them. Low
+    # enough that the number stays the strongest thing in the cell on every
+    # theme; a counted folder's bar keeps the accent, as it did.
+    out["size_fill"] = rgba(unhex(out["txt_1"]), 0.15)
+    out["size_fill_dir"] = rgba(a, 0.20)
     out["grid_major"] = rgba(info, 0.20)
 
     for key, value in DENSITIES[density_name].items():

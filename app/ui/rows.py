@@ -13,9 +13,10 @@ What it draws, and why each one is worth a delegate:
     pane it sits in is, and a square selection inside a rounded pane is the
     detail that makes a themed window look like a themed window with a table
     dropped into it.
-  * **The size bar** is two pixels under the figure, as wide as that file is
-    against the largest file in the listing. Finding what is big in a folder
-    stops being arithmetic done by eye over a column of numbers.
+  * **The size bar** is as wide as that file is against the largest file in
+    the listing. Finding what is big in a folder stops being arithmetic done
+    by eye over a column of numbers. Since 0.47 it is a soft block *behind*
+    the figure by default; the two-pixel line under it ran into the digits.
   * **The age chip** is how long ago, tinted in three steps. The Modified
     column says exactly when, which is six digits to read; this says how long
     ago, which is the question actually being asked.
@@ -62,6 +63,9 @@ GROUP_HEAD = 26
 BAR_HEIGHT = 2
 BAR_LIFT = 3
 
+#: 0.47: the narrowest bar drawn behind a figure.
+BEHIND_MIN = 8
+
 #: Inset of the selection band from the left and right edges of the listing.
 #: The band is a shape floating on the pane, not a stripe painted across it.
 BAND_INSET = 3
@@ -86,6 +90,65 @@ OLD_OPACITY = 0.5
 
 #: 0.38: the width a label's dot or a note's mark takes at the end of a name.
 LABEL_ROOM = 14
+
+
+def size_bar_rect(mode: str, cell: QRectF, share: float) -> QRectF | None:
+    """Where a size bar goes in its cell, or None for no bar.
+
+    0.47. "under" is the 0.11 bar: two pixels a few above the bottom of the
+    row, right under the figure -- and at compact density that is the bottom
+    of the digits, which is what was reported as the line making the size hard
+    to read. "behind" is the replacement: the whole height of the row inside
+    the selection band's air, so the figure sits *on* the bar rather than
+    having one cross it, and nothing in it is near a glyph's edge. A plain
+    function so the geometry is tested without a painter.
+    """
+    if mode not in ("behind", "under") or not share or share <= 0:
+        return None
+    share = min(1.0, float(share))
+    if mode == "under":
+        room = max(0.0, cell.width() - 12)
+        width = max(1.0, float(int(room * share)))
+        return QRectF(cell.right() - 6 - width,
+                      cell.bottom() - BAR_LIFT - BAR_HEIGHT, width, BAR_HEIGHT)
+    room = max(0.0, cell.width() - 6)
+    width = round(room * share)
+    if width < BEHIND_MIN:
+        # A few pixels behind the last digit read as a cursor or a stray
+        # divider rather than as a bar, so a file that small against the
+        # largest gets none: "no bar" already says "not one of the big ones".
+        return None
+    top = cell.top() + BAND_GAP + 2
+    height = max(2.0, cell.height() - 2 * (BAND_GAP + 2))
+    return QRectF(cell.right() - 3 - width, top, width, height)
+
+
+def visible_position(view, column: int) -> tuple[int, bool]:
+    """`column`'s place among the columns on screen, and whether it is last.
+
+    For the banded and ruled styles: shading every other *visible* column,
+    and drawing no line after the last one, both need to skip the hidden
+    columns -- Ext starts hidden and Location is hidden outside flat view, so
+    counting by logical index would shade two neighbours alike and draw a
+    line at the right edge of the listing.
+    """
+    if view is None:
+        return 0, False
+    header = view.horizontalHeader() if hasattr(view, "horizontalHeader") else view
+    if not hasattr(header, "visualIndex"):
+        return 0, False
+    own = header.visualIndex(column)
+    place = 0
+    last = True
+    for visual in range(header.count()):
+        logical = header.logicalIndex(visual)
+        if header.isSectionHidden(logical):
+            continue
+        if visual < own:
+            place += 1
+        elif visual > own:
+            last = False
+    return place, last
 
 
 def tabular(font: QFont) -> QFont:
@@ -191,6 +254,12 @@ class RowDelegate(QStyledItemDelegate):
         self.fade_days = 0.0
         self._today = 0.0
         self._today_checked = 0.0
+        #: 0.47: "off", "header", "ruled" or "banded" -- see
+        #: `listing.column_edges`. The rows draw the last two; the header
+        #: draws its own dividers for all but "off".
+        self.edges = "header"
+        #: 0.47: "behind", "under" or "off" -- see `listing.size_bar`.
+        self.size_bar = "behind"
 
     # ------------------------------------------------------------- the state
 
@@ -266,6 +335,12 @@ class RowDelegate(QStyledItemDelegate):
         opt.backgroundBrush = Qt.NoBrush
 
         painter.save()
+        place, last = (visible_position(option.widget, index.column())
+                       if self.edges in ("banded", "ruled") else (0, False))
+        if self.edges == "banded" and place % 2 == 1:
+            shade = parse_colour(self._t.get("band"))
+            if shade.isValid():
+                painter.fillRect(option.rect, shade)
         if selected or hovered:
             self._band(painter, option, index, selected)
         if self.progress is not None:
@@ -337,12 +412,23 @@ class RowDelegate(QStyledItemDelegate):
                 opt.text = stem
                 self._name_and_ext(painter, opt, stem, ext)
         else:
+            sized = index.column() == Column.SIZE
+            if sized and self.size_bar == "behind":
+                self._bar(painter, option, index)
             super().paint(painter, opt, index)
-            if index.column() == Column.SIZE:
+            if sized and self.size_bar == "under":
                 self._bar(painter, option, index)
         if marker:
             self._label(painter, option, marker)
         painter.restore()
+        if self.edges == "ruled" and not last:
+            # After the restore, so the line is not faded with the row: it is
+            # part of the listing's structure, not of the file.
+            line = parse_colour(self._t.get("rule_soft"))
+            if line.isValid():
+                x = option.rect.right()
+                painter.fillRect(QRectF(x, option.rect.top(), 1,
+                                        option.rect.height()), line)
 
     def _label(self, painter: QPainter, option: QStyleOptionViewItem, marker) -> None:
         """Git's letter, a colour label's dot and a note's mark, at the end of
@@ -634,30 +720,27 @@ class RowDelegate(QStyledItemDelegate):
         number is still there; the comparison is the thing that would be a lie.
         """
         share = index.data(ListingModel.SizeShareRole)
-        if not share:
+        bar = size_bar_rect(self.size_bar, QRectF(option.rect),
+                            float(share) if share else 0.0)
+        if bar is None:
             return
         # A folder's bar is on a scale of its own -- the largest counted
-        # folder -- so it is drawn in the accent's dim shade to keep the two
-        # scales from being read as one.
+        # folder -- so it is drawn in the accent to keep the two scales from
+        # being read as one.
         folder = bool(index.data(ListingModel.IsDirRole))
-        colour = parse_colour(self._t.get("accent_dim" if folder else "bg_4"))
+        if self.size_bar == "behind":
+            key = "size_fill_dir" if folder else "size_fill"
+        else:
+            key = "accent_dim" if folder else "bg_4"
+        colour = parse_colour(self._t.get(key))
         if not colour.isValid():
             return
-
-        rect = option.rect
-        room = max(0, rect.width() - 12)
-        width = max(1, int(room * max(0.0, min(1.0, float(share)))))
-        bar = QRectF(
-            rect.right() - 6 - width,
-            rect.bottom() - BAR_LIFT - BAR_HEIGHT,
-            width,
-            BAR_HEIGHT,
-        )
+        radius = 1 if self.size_bar == "under" else max(2, self._radius - 2)
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setPen(Qt.NoPen)
         painter.setBrush(colour)
-        painter.drawRoundedRect(bar, 1, 1)
+        painter.drawRoundedRect(bar, radius, radius)
         painter.restore()
 
     def _age(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:

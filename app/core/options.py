@@ -131,6 +131,22 @@ OPTIONS: tuple[Option, ...] = (
             (("badges", "Type badge"), ("icons", "Windows icon")),
             "A badge is a tag with the extension, coloured by kind of file.",
             heading="Rows"),
+    _choice("listing.column_edges", "listing", "Column edges",
+            (("header", "Lines between the headings"),
+             ("ruled", "Lines down the whole listing"),
+             ("banded", "Every other column shaded"),
+             ("off", "Nothing")),
+            "Shows where each column ends, so the place to drag a width is "
+            "easy to find. The header also takes a drag a few pixels either "
+            "side of a line, and shows the width while dragging.",
+            new=True, words=("divider", "grid", "border", "resize", "width")),
+    _choice("listing.size_bar", "listing", "Size comparison",
+            (("behind", "A bar behind the size"),
+             ("under", "A line under the size"),
+             ("off", "None")),
+            "How big each file is against the largest in the folder. Behind "
+            "keeps the figure clear of the bar on every theme.",
+            new=True, words=("bar", "size")),
     Option("pane.header", "listing", "Folder header",
            "The folder's name above the listing, and a bar of what it holds "
            "by kind of file."),

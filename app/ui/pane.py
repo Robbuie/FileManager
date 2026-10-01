@@ -22,9 +22,10 @@ from PySide6.QtCore import (
     Qt,
     Signal,
 )
-from PySide6.QtCore import QEvent, QRect, QSize, QTimer
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, QSize, QTimer
 from PySide6.QtGui import (
     QAction,
+    QMouseEvent,
     QGuiApplication,
     QFontMetrics,
     QIcon,
@@ -313,6 +314,30 @@ def shortcut_text(event) -> str:
         return ""
 
 
+#: 0.47: how far either side of a column's edge the header takes a drag. Qt's
+#: own margin is the style's few pixels, which is what made the edge something
+#: to hunt for; this is wide enough to hit without looking and still leaves the
+#: middle of every heading for a click that sorts.
+GRAB_ZONE = 6
+
+
+def nearest_edge(edges: list[tuple[int, int]], x: int,
+                 zone: int = GRAB_ZONE) -> tuple[int, int] | None:
+    """The `(logical, edge_x)` within `zone` of `x`, the closest one, or None.
+
+    A plain function for the reason `fit_popup` is one: deciding which edge a
+    pointer is on is a few comparisons, and the few comparisons are where a
+    wrong answer would be -- a press meant to sort taken as a drag, or the
+    other way round.
+    """
+    best = None
+    for logical, edge in edges:
+        distance = abs(x - edge)
+        if distance <= zone and (best is None or distance < best[0]):
+            best = (distance, logical, edge)
+    return None if best is None else (best[1], best[2])
+
+
 class SortHeader(QHeaderView):
     """The listing's header, with a chevron on the column it is sorted by.
 
@@ -320,20 +345,140 @@ class SortHeader(QHeaderView):
     arrow is a platform bitmap in the platform's grey -- so for fourteen
     releases nothing on screen said which column was sorted, or which way.
     Painted from the same glyph set as the rest of the chrome, in the accent.
+
+    0.47 adds where each column *ends*. A divider between headings (the
+    `listing.column_edges` setting), a drag taken `GRAB_ZONE` pixels either
+    side of an edge rather than the style's narrow margin, and `guideMoved`
+    so the pane can draw a line down the listing and a width readout while
+    the edge is hovered or dragged. The wide zone is done by moving the event
+    onto the edge before Qt sees it -- Qt's own resize then does the work, so
+    the minimum width, `sectionResized` and the double click that fits a
+    column all behave exactly as they did.
     """
+
+    #: The x of the edge being hovered or dragged, in the header's (and so the
+    #: listing viewport's) coordinates, and its column; -1 when there is none.
+    #: The third value says whether a drag is in progress.
+    guideMoved = Signal(int, int, bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(Qt.Horizontal, parent)
         self._colour = "#4aa8ff"
+        self._rule = ""
+        self._band = ""
+        self.edges = "header"
+        self._hot = -1          # the column whose right edge is under the pointer
+        self._dragging = -1     # the column whose right edge is being dragged
+        self._shift = 0         # how far the drag's events are moved onto the edge
+        self.setMouseTracking(True)
 
     def set_colour(self, colour: str) -> None:
         self._colour = colour
         self.viewport().update()
 
+    def apply_tokens(self, tokens: dict) -> None:
+        self._colour = tokens.get("accent", self._colour)
+        self._rule = tokens.get("rule", "")
+        self._band = tokens.get("band", "")
+        self.viewport().update()
+
+    def set_edges(self, edges: str) -> None:
+        self.edges = str(edges)
+        self.viewport().update()
+
+    # ------------------------------------------------------------ the edges
+
+    def _edges(self) -> list[tuple[int, int]]:
+        out = []
+        for visual in range(self.count()):
+            logical = self.logicalIndex(visual)
+            if self.isSectionHidden(logical):
+                continue
+            if self.sectionResizeMode(logical) != QHeaderView.Interactive:
+                continue
+            out.append((logical, self.sectionViewportPosition(logical)
+                        + self.sectionSize(logical)))
+        return out
+
+    def _edge_of(self, logical: int) -> int:
+        return self.sectionViewportPosition(logical) + self.sectionSize(logical)
+
+    def _moved(self, event, x: float) -> QMouseEvent:
+        """`event`, at `x` instead of where it happened."""
+        dx = x - event.position().x()
+        local = QPointF(x, event.position().y())
+        globe = QPointF(event.globalPosition().x() + dx, event.globalPosition().y())
+        return QMouseEvent(event.type(), local, globe, event.button(),
+                           event.buttons(), event.modifiers())
+
+    def _set_hot(self, logical: int) -> None:
+        if logical != self._hot:
+            self._hot = logical
+            self.viewport().update()
+        if logical < 0:
+            self.guideMoved.emit(-1, -1, False)
+        else:
+            self.guideMoved.emit(self._edge_of(logical), logical, self._dragging >= 0)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        x = int(event.position().x())
+        if self._dragging >= 0:
+            super().mouseMoveEvent(self._moved(event, event.position().x() + self._shift))
+            self._set_hot(self._dragging)
+            return
+        if event.buttons() == Qt.NoButton:
+            near = nearest_edge(self._edges(), x)
+            if near is not None:
+                # One pixel inside the edge, which is inside Qt's own grip
+                # whatever the style's margin is -- so Qt sets the resize
+                # cursor exactly as it would for a pointer it had found itself.
+                super().mouseMoveEvent(self._moved(event, near[1] - 1))
+                self._set_hot(near[0])
+                return
+            self._set_hot(-1)
+        super().mouseMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if event.button() == Qt.LeftButton:
+            near = nearest_edge(self._edges(), int(event.position().x()))
+            if near is not None:
+                self._dragging = near[0]
+                self._shift = (near[1] - 1) - event.position().x()
+                super().mousePressEvent(self._moved(event, near[1] - 1))
+                self._set_hot(near[0])
+                return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._dragging >= 0:
+            super().mouseReleaseEvent(
+                self._moved(event, event.position().x() + self._shift))
+            self._dragging = -1
+            self._shift = 0
+            near = nearest_edge(self._edges(), int(event.position().x()))
+            self._set_hot(near[0] if near is not None else -1)
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        near = nearest_edge(self._edges(), int(event.position().x()))
+        if event.button() == Qt.LeftButton and near is not None:
+            super().mouseDoubleClickEvent(self._moved(event, near[1] - 1))
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._dragging < 0:
+            self._set_hot(-1)
+        super().leaveEvent(event)
+
+    # ------------------------------------------------------------- painting
+
     def paintSection(self, painter, rect, logical: int) -> None:  # noqa: N802
         painter.save()
         super().paintSection(painter, rect, logical)
         painter.restore()
+        self._paint_edge(painter, rect, logical)
         if not self.isSortIndicatorShown() or logical != self.sortIndicatorSection():
             return
         model = self.model()
@@ -360,6 +505,37 @@ class SortHeader(QHeaderView):
         x = max(rect.left() + 1, min(x, rect.right() - size))
         y = rect.center().y() - size // 2
         painter.drawPixmap(x, y, pixmap)
+
+    def _paint_edge(self, painter, rect, logical: int) -> None:
+        """The divider at this heading's right edge, and the band behind it.
+
+        The last column gets no divider: its right edge is the pane's. The
+        hovered or dragged edge is drawn in the accent and a pixel wider
+        whatever the style, because that is the one saying "this is the edge
+        you are on" -- it shows even with the dividers turned off.
+        """
+        from app.ui.rows import parse_colour, visible_position
+
+        place, last = visible_position(self, logical)
+        if self.edges == "banded" and place % 2 == 1:
+            shade = parse_colour(self._band)
+            if shade.isValid():
+                painter.fillRect(rect, shade)
+        hot = logical in (self._hot, self._dragging)
+        if hot:
+            colour = parse_colour(self._colour)
+            if colour.isValid():
+                painter.fillRect(QRectF(rect.right() - 1, rect.top() + 3, 2,
+                                        rect.height() - 6), colour)
+            return
+        if last or self.edges == "off":
+            return
+        colour = parse_colour(self._rule)
+        if not colour.isValid():
+            return
+        inset = 0 if self.edges == "ruled" else max(4, rect.height() // 4)
+        painter.fillRect(QRectF(rect.right(), rect.top() + inset, 1,
+                                rect.height() - 2 * inset), colour)
 
 
 class PaneWidget(QFrame):
@@ -534,6 +710,23 @@ class PaneWidget(QFrame):
         # 0.34: how recent and old rows are drawn, from the settings.
         self._rows.recency = str(pane.config.get("listing.recency"))
         self._rows.fade_days = float(pane.config.get("listing.fade_days"))
+        # 0.47: column edges and the size bar, from the settings.
+        self._rows.edges = str(pane.config.get("listing.column_edges"))
+        self._rows.size_bar = str(pane.config.get("listing.size_bar"))
+        self._header.set_edges(self._rows.edges)
+        # The line down the listing at the edge being hovered or dragged, and
+        # the width while dragging. Children of the view rather than painted
+        # by the delegate, so a hover costs moving a widget instead of a
+        # repaint of every row on screen.
+        self._guide = QFrame(self._view.viewport())
+        self._guide.setProperty("role", "column-guide")
+        self._guide.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._guide.hide()
+        self._readout = QLabel(self._view)
+        self._readout.setProperty("role", "column-readout")
+        self._readout.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._readout.hide()
+        self._header.guideMoved.connect(self._on_guide)
         # 0.34: the scrollbar map. A scrollbar of this application's own, set
         # before any model, so the view never draws with the stock one.
         self._map = MapScrollBar(self._view)
@@ -903,7 +1096,7 @@ class PaneWidget(QFrame):
             "folder", colour=tokens["txt_1"], muted=tokens["txt_2"], ratio=ratio)
         for index in range(self._tabs.count()):
             self._tabs.setTabIcon(index, self._tab_icon)
-        self._header.set_colour(tokens.get("accent", "#4aa8ff"))
+        self._header.apply_tokens(tokens)
         self._rows.apply_tokens(tokens)
         self._map.apply_tokens(tokens)
         self._folder_header.apply_tokens(tokens)
@@ -2546,14 +2739,52 @@ class PaneWidget(QFrame):
         self._update_map()
 
     def set_row_style(self, *, recency: str | None = None,
-                      fade_days: float | None = None) -> None:
-        """How recent and old rows are drawn. Both panes get the same answer
-        from the window; a repaint is all it costs."""
+                      fade_days: float | None = None,
+                      edges: str | None = None,
+                      size_bar: str | None = None) -> None:
+        """How recent and old rows are drawn, where the columns end and how
+        sizes compare. Both panes get the same answer from the window; a
+        repaint is all it costs."""
         if recency is not None:
             self._rows.recency = str(recency)
         if fade_days is not None:
             self._rows.fade_days = float(fade_days)
+        if edges is not None:
+            self._rows.edges = str(edges)
+            self._header.set_edges(str(edges))
+        if size_bar is not None:
+            self._rows.size_bar = str(size_bar)
         self._view.viewport().update()
+
+    def _on_guide(self, x: int, column: int, dragging: bool) -> None:
+        """0.47: the line down the listing at the edge under the pointer.
+
+        The header's x is the viewport's x -- both scroll together and start at
+        the same left margin -- so the line needs no mapping. The readout only
+        while dragging: hovering is looking for the edge, dragging is choosing
+        a width, and the number is the answer to the second.
+        """
+        if x < 0 or column < 0:
+            self._guide.hide()
+            self._readout.hide()
+            return
+        viewport = self._view.viewport()
+        self._guide.setGeometry(x - 1, 0, 2, viewport.height())
+        self._guide.show()
+        self._guide.raise_()
+        if not dragging:
+            self._readout.hide()
+            return
+        width = self._header.sectionSize(column)
+        self._readout.setText(f"{HEADERS[column]}  {width} px")
+        self._readout.adjustSize()
+        left = viewport.x() + x - self._readout.width() - 6
+        if left < viewport.x() + 2:
+            left = viewport.x() + x + 6
+        left = max(2, min(left, self._view.width() - self._readout.width() - 2))
+        self._readout.move(left, self._header.height() + 4)
+        self._readout.show()
+        self._readout.raise_()
 
     def _on_flat_changed(self) -> None:
         # Laid out again rather than only re-hidden: the Location column

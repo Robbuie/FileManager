@@ -516,6 +516,18 @@ QFrame[pane="true"][active="true"] {{
 /* And the other pane steps back: its rows are faded by the delegates (see
    IDLE_OPACITY in app/ui/rows.py) and its header labels go one grey quieter. */
 QFrame[pane="true"][active="false"] QHeaderView::section {{ color: {line}; }}
+/* 0.47: the line down the listing at the column edge being hovered or
+   dragged, and the width beside it while dragging. */
+QFrame[role="column-guide"] {{ background: {accent}; border: none; }}
+QLabel[role="column-readout"] {{
+    background: {bg_1};
+    color: {txt_0};
+    border: 1px solid {accent};
+    border-radius: 8px;
+    padding: 1px 8px;
+    font-size: {head_font};
+    font-weight: 600;
+}}
 QLabel[role="status"] {{ background: transparent; color: {txt_1}; padding: 2px 6px; }}
 QLabel[role="status"][state="busy"] {{ color: {accent_text}; }}
 QLabel[role="status"][state="bad"] {{ color: {warn}; }}

@@ -283,6 +283,13 @@ DEFAULTS: dict[str, Any] = {
     # 0.34: a bar under a folder's size once it has been counted, against the
     # largest counted folder here -- never against the files, see rows.py.
     "listing.folder_bars": True,
+    # 0.47: what marks where one column ends and the next begins -- "off",
+    # "header" (a divider between headings), "ruled" (the dividers carried
+    # down through the rows) or "banded" (every other column shaded) -- and
+    # how a file's size is compared with the largest in the folder: "behind"
+    # (a soft bar behind the figure), "under" (the 0.11 line under it), "off".
+    "listing.column_edges": "header",
+    "listing.size_bar": "behind",
     # 0.40: a folder sorted by clicking a heading keeps that order, and gets it
     # back the next time it is opened (`core/sorts.py`). `listing.sorts` is the
     # memory itself, by lower-cased path: [column, 0 ascending / 1 descending].
