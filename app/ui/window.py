@@ -42,6 +42,13 @@ from app.ui import dialogs, winframe
 
 #: 0.50: how strongly the accent washes the desktop in the tinted glass look.
 TINT_ALPHA = 0.24
+
+#: 0.50.1: the glass watchdog -- a beat, how late counts as slow, and how many
+#: slow beats in how long mean glass is too much for this machine.
+GLASS_BEAT_MS = 500
+GLASS_LATE_S = 0.4
+GLASS_STRIKES = 4
+GLASS_WINDOW_S = 20.0
 from app.ui.deck import Deck
 from app.core import palette as core_palette
 from app.ui.hints import HintBar
@@ -251,6 +258,13 @@ class MainWindow(QMainWindow):
             volumes.changed.connect(self._measure_local_drives)
 
         self._splitter = Deck()
+        if self._backdrop == "glass":
+            # 0.50.1: on glass every repaint sends the whole window to
+            # Windows, and a live splitter re-lays both panes out on every
+            # pixel of a drag -- which was reported as the panes not resizing
+            # and the window feeling locked. A line follows the drag instead,
+            # and the panes are laid out once, where it is let go.
+            self._splitter.setOpaqueResize(False)
         if self._rail is not None:
             self._splitter.addWidget(self._rail)
         for widget in self._widgets:
@@ -405,6 +419,20 @@ class MainWindow(QMainWindow):
         self._theme_timer.setInterval(60000)
         self._theme_timer.timeout.connect(self._check_theme)
         self._theme_timer.start()
+        # 0.50.1: glass that makes this machine's window slow turns itself off
+        # for the next start. See `_watch_glass`.
+        self._glass_beat = None
+        self._glass_slow = []
+        if self._backdrop == "glass":
+            import time as _time
+
+            self._glass_beat = _time.monotonic()
+            self._glass_timer = QTimer(self)
+            self._glass_timer.setInterval(GLASS_BEAT_MS)
+            self._glass_timer.timeout.connect(self._watch_glass)
+            self._glass_timer.start()
+            for widget in self._widgets:
+                widget.set_placeholder_motion(False)
 
         self._palette = CommandPalette(self)
         self._palette.apply_tokens(tokens)
@@ -1507,7 +1535,9 @@ class MainWindow(QMainWindow):
         self._splitter.set_motion(bool(checked))
         self._transfer_bar.set_motion(bool(checked))
         for widget in self._widgets:
-            widget.set_placeholder_motion(bool(checked))
+            # Never on glass: a pulse redraws through the see-through window
+            # ten times a second for as long as a slow folder takes.
+            widget.set_placeholder_motion(bool(checked) and self._backdrop != "glass")
 
     def _set_header(self, checked: bool) -> None:
         self._config.set("pane.header", bool(checked))
@@ -2913,6 +2943,38 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showMaximized()
+
+    def _watch_glass(self) -> None:
+        """0.50.1: give up glass on a machine where it makes the window slow.
+
+        A timer that should fire every `GLASS_BEAT_MS` measures how late it
+        actually fires. Late by more than `GLASS_LATE_S`, `GLASS_STRIKES`
+        times inside `GLASS_WINDOW_S`, and the event loop is spending its time
+        drawing the see-through window rather than answering the user. Nothing
+        in this application blocks the UI thread on a volume, so on glass this
+        is the drawing. The backdrop is set to solid for the next start --
+        changing it live would mean recreating the native window -- and the
+        status bar says so and how to put it back.
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        late = now - self._glass_beat - GLASS_BEAT_MS / 1000.0
+        self._glass_beat = now
+        if late < GLASS_LATE_S:
+            return
+        self._glass_slow = [t for t in self._glass_slow if now - t < GLASS_WINDOW_S]
+        self._glass_slow.append(now)
+        if len(self._glass_slow) < GLASS_STRIKES:
+            return
+        self._glass_timer.stop()
+        if self._config.get("window.backdrop") != "solid":
+            self._config.set("window.backdrop", "solid")
+            self._config.save()
+        self.statusBar().showMessage(
+            "the glass backdrop is making this window slow on this PC, so it "
+            "will be solid from the next start (Options > Look > Glass backdrop "
+            "to turn it back on)", 30000)
 
     def _watch_for_remote(self) -> None:
         """Notice a remote session that started after this window did.

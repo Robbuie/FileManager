@@ -5,6 +5,32 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.50.2]
+
+### Fixed
+- **The window felt locked up with a glass look on.** Dragging the divider
+  between the panes did nothing visible and the rest of the window was slow
+  to answer. A see-through window is drawn by handing Windows the whole
+  window on every repaint, and 0.50 made the repaints far more frequent.
+  Three changes:
+  - On glass, dragging a divider shows a line that follows the mouse, and
+    the panes are laid out once where it is let go, instead of on every
+    pixel of the drag.
+  - Under Frosted panes only the pane's card lets the desktop through. The
+    listing inside it stays solid, so scrolling and hovering redraw only
+    rows again rather than the whole window.
+  - The placeholder rows no longer pulse on glass.
+- **Glass turns itself off on a PC where it makes the window fall behind.**
+  If the window keeps answering late for several seconds with the glass
+  backdrop on, the backdrop is set to solid for the next start, and the
+  status bar says so and how to turn it back on (Options > Look > Glass
+  backdrop). Slowness in Windows' own drawing of the glass does not make the
+  window late, so on a PC like that, set the backdrop to Solid by hand.
+- **The freeze log no longer cries wolf.** `hangs.log` wrote "one turn of
+  the event loop took 1.00 s" every second the window was open, healthy or
+  not, because it measured its own one-second beat as lateness (since
+  0.29.8). It now writes a line only when the window is genuinely late.
+
 ## [0.50.1]
 
 ### Fixed

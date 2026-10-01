@@ -108,6 +108,7 @@ class HangRecorder(QObject):
         self._stopping = threading.Event()
         self._hung_at = 0.0
         self._late = LATE_SECONDS
+        self._interval = int(beat_ms) / 1000.0
         self._slow = 0
 
     @property
@@ -151,9 +152,15 @@ class HangRecorder(QObject):
         if gap > self._stall:
             self._write(f"---- {_now()}  the window answered again after "
                         f"{gap:.1f} s\n")
-        elif gap > self._late:
+        elif gap - self._interval > self._late:
             # Not a stall and not nothing: the loop is turning, so no stack
             # would say anything, and the window is still too slow to use.
+            #
+            # Measured past the beat's own interval. Until 0.50.1 this compared
+            # the whole gap -- a second, by design -- with three quarters of a
+            # second, so a window that was perfectly fine wrote "took 1.00 s"
+            # every second it was open, and a log sent in about glass being
+            # slow said nothing either way.
             self._slow += 1
             # Checked on this path as well as before a dump. One line is not a
             # dump, but a window slow enough to write one every second writes
@@ -161,7 +168,7 @@ class HangRecorder(QObject):
             # on the file rather than on any one thing that fills it.
             self._rotate()
             self._write(f"{_now()}  slow: one turn of the event loop took "
-                        f"{gap:.2f} s ({self._slow} so far)\n")
+                        f"{gap - self._interval:.2f} s ({self._slow} so far)\n")
         self._last = now
         try:
             faulthandler.dump_traceback_later(self._stall, repeat=True,

@@ -97,8 +97,25 @@ def test_a_dump_with_no_windows_says_so_rather_than_nothing(tmp_path):
 def test_a_loop_that_turns_but_is_slow_is_written_down(tmp_path):
     """The freeze that produced no record: every repaint finished, so nothing
     stalled, and the window was unusable anyway."""
-    recorder = HangRecorder(str(tmp_path / "hangs.log"), version="t", stall=5.0)
+    recorder = HangRecorder(str(tmp_path / "hangs.log"), version="t", stall=5.0,
+                            beat_ms=100)
     recorder._late = 0.1
+    recorder.start()
+    try:
+        time.sleep(0.35)
+        recorder.beat()
+    finally:
+        recorder.stop()
+    text = (tmp_path / "hangs.log").read_text(encoding="utf-8")
+    assert "slow: one turn of the event loop took" in text
+    assert "Timeout" not in text          # nothing was stuck, so no stacks
+
+
+def test_a_beat_on_time_writes_nothing(tmp_path):
+    """0.50.1: the beat's own interval is not lateness. Before, every beat of a
+    healthy window was logged as a one-second turn."""
+    recorder = HangRecorder(str(tmp_path / "hangs.log"), version="t", stall=5.0,
+                            beat_ms=300)
     recorder.start()
     try:
         time.sleep(0.3)
@@ -106,8 +123,7 @@ def test_a_loop_that_turns_but_is_slow_is_written_down(tmp_path):
     finally:
         recorder.stop()
     text = (tmp_path / "hangs.log").read_text(encoding="utf-8")
-    assert "slow: one turn of the event loop took" in text
-    assert "Timeout" not in text          # nothing was stuck, so no stacks
+    assert "slow:" not in text
 
 
 def test_the_log_is_bounded_within_a_run_and_not_only_across_launches(tmp_path):

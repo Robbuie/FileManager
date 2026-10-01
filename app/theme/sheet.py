@@ -469,8 +469,8 @@ QLabel[role="viewerwhere"] {{
    Selection is painted in `app/ui/rows.py`, not here: a rounded row is not
    something `QTableView::item` can be asked for. */
 QTableView {{
-    background: {pane_bg};
-    alternate-background-color: {pane_bg};
+    background: {bg_2};
+    alternate-background-color: {bg_2};
     color: {txt_0};
     border: none;
     gridline-color: transparent;
@@ -480,7 +480,7 @@ QTableView {{
 }}
 QTableView::item {{ padding: 0px 6px; border: none; }}
 QTableView::item:focus {{ border: none; }}
-QHeaderView {{ background: {pane_bg}; }}
+QHeaderView {{ background: {bg_2}; }}
 QHeaderView::section {{
     background: transparent;
     color: {txt_2};

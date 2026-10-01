@@ -194,9 +194,12 @@ def build(
     glass = backdrop in ("glass", "frosted")
     out["backdrop"] = "transparent" if glass else out["bg_0"]
     out["backdrop_name"] = "glass" if glass else "solid"
-    # 0.50: the listing's own ground. Solid everywhere except the frosted
-    # glass look, where the panes let the desktop through as well -- at an
-    # alpha that keeps text on them well clear of the wallpaper behind.
+    # 0.50: the pane card's own ground. Solid everywhere except the frosted
+    # glass look, where the card lets the desktop through -- at an alpha that
+    # keeps text on it well clear of the wallpaper behind. 0.50.1: the card
+    # only, never the listing inside it: a see-through listing cannot scroll
+    # by moving pixels, so every step of a scroll and every hover redrew the
+    # whole window through the glass.
     surface_rgb = unhex(out["bg_2"])
     out["pane_bg"] = rgba(surface_rgb, 0.78) if backdrop == "frosted" else out["bg_2"]
     # Windows' own close-button red. A semantic colour that has to agree with

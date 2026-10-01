@@ -15,28 +15,32 @@ pytest.importorskip("PySide6")
 from app.core import options  # noqa: E402
 from app.core.config import DEFAULTS  # noqa: E402
 from app.theme import qss  # noqa: E402
-from tests.test_options import window as _shown_window  # noqa: E402
 
 
-@pytest.fixture
-def window(tmp_path):
-    """test_options' window, deleted afterwards rather than only hidden.
+@pytest.fixture(scope="module")
+def window(tmp_path_factory):
+    """One window for the whole file. Every window a test leaves behind is
+    one more set of widgets each later theme change repolishes, and a window
+    per test here made the theme tests later in a full run several times
+    slower."""
+    from app.core.capacity import Capacity
+    from app.core.config import Config
+    from app.core.favorites import Favorites
+    from app.core.pane import Pane
+    from app.core.transfers import TransferQueue
+    from app.ui.window import MainWindow
+    from tests.test_window import FakeBridge, FakeVolumes
 
-    Every window a test leaves behind is one more set of widgets the next
-    `setStyleSheet` repolishes, and the theme tests later in the run were
-    taking minutes each by the time they got there.
-    """
-    from PySide6.QtWidgets import QApplication
-
-    made = _shown_window.__wrapped__(tmp_path)
-    shown = next(made)
-    yield shown
-    try:
-        next(made)
-    except StopIteration:
-        pass
-    shown.deleteLater()
-    QApplication.processEvents()
+    tmp_path = tmp_path_factory.mktemp("menus")
+    config = Config({"left.path": "C:\\Jobs", "right.path": "D:\\Archive"},
+                    str(tmp_path / "config.json"))
+    bridge = FakeBridge()
+    made = MainWindow(config, Pane(bridge, config, "left"),
+                      Pane(bridge, config, "right"), FakeVolumes(),
+                      TransferQueue(), None, Favorites(config),
+                      Capacity(bridge, config))
+    yield made
+    made.hide()
 
 
 def _titles(menu_bar):
