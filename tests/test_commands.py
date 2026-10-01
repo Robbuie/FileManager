@@ -488,3 +488,22 @@ def test_a_saved_untouched_compare_row_moves_to_file_compare() -> None:
     assert loaded["compare"].program == "FileCompare.exe"
     assert loaded["compare"].alternatives == ("BCompare.exe", "WinMergeU.exe")
     assert loaded["compare-files"].program == "C:\\Tools\\diff.exe"
+
+
+def test_file_compare_is_found_in_its_install_folder_without_path(tmp_path, monkeypatch):
+    # 0.50.1: a File Manager started before File Compare was installed has a
+    # PATH without it; the per-user install folder is looked in as well.
+    from app.io import worker
+
+    import os
+
+    # Joined the way `locate` joins it, so the test holds off Windows too,
+    # where the backslash in the table is part of a name, not a separator.
+    exe = os.path.join(str(tmp_path / "Programs"), r"FileCompare\FileCompare.exe")
+    os.makedirs(os.path.dirname(exe), exist_ok=True)
+    open(exe, "wb").close()
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
+    for name in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+        monkeypatch.delenv(name, raising=False)
+    assert worker.locate("FileCompare.exe") == str(exe)

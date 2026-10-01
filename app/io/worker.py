@@ -689,6 +689,11 @@ KNOWN_PROGRAMS: dict[str, tuple[str, ...]] = {
         r"Beyond Compare 3\BCompare.exe",
     ),
     "winmergeu.exe": (r"WinMerge\WinMergeU.exe",),
+    # 0.50.1: File Compare's per-user install (`%LOCALAPPDATA%\Programs`).
+    # Its installer puts it on PATH, but a File Manager already running when
+    # it was installed still has the old PATH -- and without this, Ctrl+F2
+    # quietly went to Beyond Compare until File Manager was restarted.
+    "filecompare.exe": (r"FileCompare\FileCompare.exe",),
     "code.exe": (r"Microsoft VS Code\Code.exe",),
     "notepad++.exe": (r"Notepad++\notepad++.exe",),
     "wt.exe": (r"WindowsApps\wt.exe",),

@@ -5,6 +5,15 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.50.1]
+
+### Fixed
+- **Ctrl+F2 and Alt+F2 open File Compare even if it was installed while File
+  Manager was running.** File Compare's installer puts it on PATH, but a File
+  Manager already open keeps the PATH it started with, so the compare keys
+  fell back to Beyond Compare until it was restarted. File Compare's install
+  folder is now looked in as well.
+
 ## [0.50.0]
 
 ### Changed
