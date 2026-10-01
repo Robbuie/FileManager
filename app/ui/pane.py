@@ -58,6 +58,7 @@ from app.ui import dialogs, glyphs
 from app.ui.breadcrumb import Breadcrumb
 from app.ui.favorites import FavoritesBar
 from app.ui.grid import GridView
+from app.ui.fitlabel import FitLabel
 from app.ui.header import FolderHeader
 from app.ui.preview import PANE_TEXT_BYTES, PreviewPanel
 from app.ui.rows import RowDelegate
@@ -857,11 +858,14 @@ class PaneWidget(QFrame):
         self._body.setStretchFactor(1, 0)
         self._body.splitterMoved.connect(self._remember_preview_width)
 
-        self._status = QLabel("")
+        self._status = FitLabel("")
         self._status.setProperty("role", "status")
-        self._space = QLabel("")
+        self._space = FitLabel("")
         self._space.setProperty("role", "space")
         self._space.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        # 0.50.4: the free space keeps its full width while it can; the status
+        # sentence beside it is what gives way first. See `app/ui/fitlabel.py`.
+        self._space.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
 
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)

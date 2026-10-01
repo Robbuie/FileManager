@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.50.4]
+
+### Fixed
+- **The left pane could not be dragged narrower than a point, so the right
+  pane could not be given the room.** The status line under each pane (what
+  is selected, the folder's totals, anything being counted) was setting the
+  narrowest the pane could go, and that sentence often runs to 500 px or
+  more. It now shortens with an ellipsis instead, with the whole of it in a
+  tooltip, and the free space beside it gives way after it. A pane now goes
+  down to the width of its back, forward and up buttons and path bar. This
+  was not the glass change in 0.50.2; that only affects how the divider
+  looks while it is dragged with a glass backdrop on.
+
 ## [0.50.3]
 
 ### Fixed
