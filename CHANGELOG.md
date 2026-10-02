@@ -5,6 +5,34 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.50.5]
+
+### Fixed
+- **A share that needs a different account now asks for one.** Opening a
+  share on a server outside the domain showed "the user name or password is
+  incorrect" and stopped there; the login prompt only came after a
+  Reconnect. Now the listing failing for that reason (or "access is denied"
+  at the share itself) brings up the Connect as prompt straight away, as
+  Double Commander does. Both panes on the same share get one prompt.
+  Cancel it and it stays away for that share until Reconnect
+  (Ctrl+Shift+R). A wrong password asks again with the user filled in.
+- **`\user` and `.\user` mean the server's own account.** Windows' own
+  prompt reads them that way; they are now passed on as `SERVER\user`, which
+  is what they mean, rather than as an account on this PC.
+- **"Already connected as another account" says what to do.** Windows
+  allows one account per server, so a mapped drive on the same server as
+  the domain user blocks a second login (error 1219). The message now says
+  to disconnect that first or use the server's IP address in the path.
+- **Closing while maximised no longer opens full-size but not maximised.**
+  The maximised size was being saved as the window's size. The size it
+  restores to is saved instead, and the window opens maximised again.
+- **Maximising should now fill the window.** Reported: maximising from the
+  middle of the screen left the panes and key hints at their old height
+  with an empty band below. After a maximise or restore the window now
+  checks its contents against the size Windows gave it and lays out again
+  if they differ. Not reproduced here; any mismatch found is written to
+  `window.log` beside the settings.
+
 ## [0.50.4]
 
 ### Fixed

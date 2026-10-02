@@ -454,6 +454,9 @@ DEFAULTS: dict[str, Any] = {
 
     "window.width": 1280,
     "window.height": 760,
+    # 0.50.5: whether it was closed maximised. The size above is then the
+    # size it restores to, not the size of the screen.
+    "window.maximized": False,
     "window.split": 0.5,
 }
 

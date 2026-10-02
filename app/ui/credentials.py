@@ -54,7 +54,7 @@ class LoginDialog(Dialog):
         why.setWordWrap(True)
         why.setVisible(bool(reason))
         self._user = QLineEdit(user)
-        self._user.setPlaceholderText(r"DOMAIN\user or user@domain")
+        self._user.setPlaceholderText(r"\user (the server's own), DOMAIN\user or user@domain")
         self._password = QLineEdit()
         self._password.setEchoMode(QLineEdit.Password)
         self._remember = QCheckBox("Remember in Windows' Credential Manager")

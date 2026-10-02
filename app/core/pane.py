@@ -160,6 +160,10 @@ class Pane(QObject):
     #: administrator rights, and the sentence describing it. Nothing happens
     #: unless somebody answers the dialog this puts on screen.
     elevationOffered = Signal(object, str)
+    #: 0.50.5: a share refused the session's account -- the share, and
+    #: Windows' reason. The window answers with a login prompt, as Double
+    #: Commander does with Windows' own; nothing here asks anybody anything.
+    loginNeeded = Signal(str, str)
     #: A tab went into or out of flat view, or the flat layout changed.
     flatChanged = Signal()
     #: 0.31: the tab in front started or stopped showing rows that are out of
@@ -1583,6 +1587,12 @@ class Pane(QObject):
             self._set_stale(tab, True)
             self._set_status(tab, _stale_note(tab), BAD)
             return
+        share = _login_share(self.resolved(tab.path), reply)
+        if share:
+            self._set_status(tab, f"{share} needs a different account -- "
+                                  f"Ctrl+Shift+R to connect", BAD)
+            self.loginNeeded.emit(share, _windows_words(reply))
+            return
         self._set_status(tab, _explain(reply), BAD)
 
     def _set_stale(self, tab: Tab, stale: bool) -> None:
@@ -1688,6 +1698,40 @@ def _stale_note(tab: "Tab", now: float | None = None) -> str:
     when = time.strftime("%H:%M" if same_day else "%Y-%m-%d %H:%M", listed)
     return (f"not answering — showing the listing from {when}. "
             "Retry to reconnect.")
+
+
+_WINERROR_RE = re.compile(r"(?:winerror|WinError)\s*(\d+)")
+
+
+def _login_share(resolved: str, reply: Reply) -> str | None:
+    r"""The share to log into, when a listing failed for want of an account.
+
+    Only on a share, and only for the reasons a different account fixes: one
+    of Windows' logon failures anywhere on it, or "access is denied" at the
+    share's own root -- a folder further down that says no is a permission on
+    that folder, which is what the elevation offer is for, and no login
+    prompt should stand in front of it.
+    """
+    share = paths.share_root(resolved or "")
+    if not share:
+        return None
+    found = _WINERROR_RE.search(reply.message or "")
+    number = int(found.group(1)) if found else None
+    if number in paths.LOGON_WINERRORS:
+        return share
+    if reply.status is Status.DENIED or number == 5:
+        if paths.normalize(resolved).rstrip("\\").lower() == share.lower():
+            return share
+    return None
+
+
+def _windows_words(reply: Reply) -> str:
+    """Windows' sentence out of a worker's `Type: [WinError n] words: 'path'`."""
+    message = reply.message or ""
+    found = re.search(r"\[WinError \d+\]\s*([^:]+)", message)
+    if found:
+        return found.group(1).strip().rstrip(".") + "."
+    return _explain(reply)
 
 
 def _explain(reply: Reply) -> str:

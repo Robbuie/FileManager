@@ -202,7 +202,12 @@ def main() -> int:
                         health=ShareHealth(bridge, config),
                         git=GitMarks(bridge, config),
                         folder_map=FolderMap(bridge, config))
-    window.show()
+    # 0.50.5: maximised by Windows, not by being made the size of the screen,
+    # so that Restore has a smaller size to go back to.
+    if config.get("window.maximized"):
+        window.showMaximized()
+    else:
+        window.show()
 
     from PySide6.QtCore import QObject, Signal
 

@@ -9,6 +9,8 @@ adding one is how a picker ends up half working.
 from __future__ import annotations
 
 import os.path
+import sys
+import time
 
 from PySide6.QtGui import QAction, QActionGroup, QColor, QKeySequence, QPainter
 from PySide6.QtWidgets import (
@@ -159,6 +161,12 @@ class MainWindow(QMainWindow):
         self._commands = commands
         #: The network locations, or None for a window built without them.
         self._network = network
+        # 0.50.5: login prompts -- shares whose prompt was cancelled, shares
+        # with one on screen, and the user last typed for each (never the
+        # password, and none of it is written anywhere).
+        self._declined_logins: set[str] = set()
+        self._asking_logins: set[str] = set()
+        self._login_users: dict[str, str] = {}
         self._updates = updates
         self._favorites = favorites
         self._capacity = capacity
@@ -275,6 +283,9 @@ class MainWindow(QMainWindow):
             pane.flatChanged.connect(self._sync_flat_action)
             pane.currentChanged.connect(self._sync_flat_action)
             pane.elevationOffered.connect(self._offer_elevation(pane))
+            # 0.50.5: a share that refused this session's account asks for
+            # another one, as Double Commander does, rather than only saying so.
+            pane.loginNeeded.connect(self._on_login_needed)
             # The rail marks the row the active pane is standing on, which is
             # the one thing a rail can say that a menu cannot. Both panes are
             # watched and the mark follows whichever is active, so the answer
@@ -1172,6 +1183,8 @@ class MainWindow(QMainWindow):
     def _reconnect(self, path: str) -> None:
         if self._network is None:
             return
+        # Asked for by hand, so a login prompt cancelled earlier is offered again.
+        self._declined_logins.discard(path.lower())
         self.statusBar().showMessage(f"reconnecting to {path}", 0)
         self._network.reconnect(path)
 
@@ -1186,16 +1199,14 @@ class MainWindow(QMainWindow):
         if why:
             self.statusBar().showMessage(f"{path}: {why}", 10000)
             # 0.43: a failure an account could fix gets a login prompt; any
-            # other failure is only reported, as before.
+            # other failure is only reported, as before. A wrong password
+            # lands back here and asks again, with the user already filled in.
             from app.ui import credentials
 
-            if self._network is not None and credentials.wants_login(why):
-                answer = credentials.ask(self, share=path, reason=why)
-                if answer is not None:
-                    user, password, save = answer
-                    self.statusBar().showMessage(f"connecting to {path} as {user}", 10000)
-                    self._network.reconnect(path, user=user, password=password, save=save)
+            if credentials.wants_login(why):
+                self._ask_login(path, why)
             return
+        self._declined_logins.discard(path.lower())
         self.statusBar().showMessage(f"{path} is connected", 6000)
         # The pane on it, if there is one, can stop saying it is not there.
         # Against the *resolved* path: a pane showing `S:\Jobs` is standing in
@@ -1204,6 +1215,40 @@ class MainWindow(QMainWindow):
         for pane in self._panes:
             if pane.resolved().lower().startswith(path.lower()):
                 pane.retry()
+
+    def _on_login_needed(self, share: str, why: str) -> None:
+        """A pane's listing was refused for want of an account.
+
+        Asked once per share until somebody acts: a Cancel is remembered so
+        that the next refresh of the same folder does not put the prompt
+        straight back, and Ctrl+Shift+R (Reconnect) is the way to be asked
+        again. Deferred to the event loop because this arrives in the middle
+        of a reply being handled, and a modal dialog is a loop of its own.
+        """
+        if share.lower() in self._declined_logins:
+            return
+        QTimer.singleShot(0, lambda: self._ask_login(share, why))
+
+    def _ask_login(self, share: str, why: str) -> None:
+        from app.ui import credentials
+
+        key = share.lower()
+        if self._network is None or key in self._asking_logins:
+            return  # both panes on the same share: one prompt, not two
+        self._asking_logins.add(key)
+        try:
+            answer = credentials.ask(self, share=share, reason=why,
+                                     user=self._login_users.get(key, ""))
+        finally:
+            self._asking_logins.discard(key)
+        if answer is None:
+            self._declined_logins.add(key)
+            return
+        user, password, save = answer
+        self._declined_logins.discard(key)
+        self._login_users[key] = user
+        self.statusBar().showMessage(f"connecting to {share} as {user}", 10000)
+        self._network.reconnect(share, user=user, password=password, save=save)
 
     def _sync_rail_mark(self, *_ignored) -> None:
         """Put the rail's mark on the folder the active pane is showing."""
@@ -3055,6 +3100,11 @@ class MainWindow(QMainWindow):
         if event.type() == QEvent.WindowStateChange:
             if self._titlebar is not None:
                 self._titlebar.set_maximized(self.isMaximized())
+            if not self.windowState() & Qt.WindowMinimized:
+                # 0.50.5: see `_settle_geometry`. Twice, because Windows'
+                # maximise animation can still be running at the first look.
+                QTimer.singleShot(60, self._settle_geometry)
+                QTimer.singleShot(400, self._settle_geometry)
             minimised = bool(self.windowState() & Qt.WindowMinimized)
             for pane in self._panes:
                 pane.set_live(not minimised)
@@ -3068,6 +3118,70 @@ class MainWindow(QMainWindow):
                 self._taskbar_failed = False
                 self._update_taskbar()
         super().changeEvent(event)
+
+    def _settle_geometry(self) -> None:
+        """0.50.5: make the window's contents fill the window after a maximise.
+
+        Reported: maximising a window from the middle of the screen made the
+        window fill the screen while the panes, the key hints and the title
+        bar stayed the size they were -- the rest an empty band -- and only a
+        restart put it right. With the drawn title bar, Windows is told the
+        frame takes no room (`winframe`), and Qt keeps its own idea of where
+        the frame is; when the two disagree after a state change, Qt lays the
+        window out for a size the screen is not showing.
+
+        So after every maximise and restore: compare the size Windows gives
+        the client area with the size Qt laid out, and if they differ have
+        Windows send the frame and size messages again, then lay out afresh.
+        Each mismatch found is written to `window.log` beside the settings,
+        because this could not be reproduced here and that line is what will
+        say which half was wrong if it is still seen.
+        """
+        layout = self.layout()
+        if layout is not None:
+            layout.invalidate()
+            layout.activate()
+        if sys.platform != "win32" or self._frame is None or not self._frame.active:
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = wintypes.HWND(int(self.winId()))
+            rect = wintypes.RECT()
+            ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(rect))
+            ratio = self.devicePixelRatioF() or 1.0
+            native_w = round((rect.right - rect.left) / ratio)
+            native_h = round((rect.bottom - rect.top) / ratio)
+            status = self.statusBar().geometry()
+            short = (abs(native_w - self.width()) > 2 or abs(native_h - self.height()) > 2
+                     or (self.statusBar().isVisible()
+                         and status.bottom() < self.height() - 3))
+            if not short:
+                return
+            self._log_geometry(
+                f"state={int(self.windowState())} ratio={ratio:g} "
+                f"native={native_w}x{native_h} qt={self.width()}x{self.height()} "
+                f"central={self.centralWidget().geometry().getRect()} "
+                f"status={status.getRect()}")
+            # NOMOVE | NOSIZE | NOZORDER | FRAMECHANGED: the same window, its
+            # frame and size worked out again and announced to Qt.
+            ctypes.windll.user32.SetWindowPos(hwnd, None, 0, 0, 0, 0,
+                                              0x0002 | 0x0001 | 0x0004 | 0x0020)
+            if layout is not None:
+                layout.invalidate()
+                layout.activate()
+            self.update()
+        except Exception:  # noqa: BLE001 - a check, never a failure
+            pass
+
+    def _log_geometry(self, line: str) -> None:
+        try:
+            folder = os.path.dirname(self._config.path)
+            with open(os.path.join(folder, "window.log"), "a", encoding="utf-8") as out:
+                out.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {__version__} {line}\n")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _on_job_for_taskbar(self, job) -> None:
         if getattr(job, "failed", 0) or getattr(job, "refused", ""):
@@ -3126,8 +3240,16 @@ class MainWindow(QMainWindow):
         if self._updates is not None:
             self._updates.shutdown()
         if not self._restored:
-            self._config.set("window.width", self.width())
-            self._config.set("window.height", self.height())
+            # 0.50.5: a maximised window keeps the size it restores to, and
+            # says it was maximised. Saving the maximised size as the size is
+            # what made the next start fill the screen without being
+            # maximised, so the maximise button then did nothing useful.
+            maximized = self.isMaximized()
+            size = self.normalGeometry().size() if maximized else self.size()
+            if size.width() > 0 and size.height() > 0:
+                self._config.set("window.width", size.width())
+                self._config.set("window.height", size.height())
+            self._config.set("window.maximized", bool(maximized))
             self._remember_rail_width()
             for side, pane in zip(("left", "right"), self._panes):
                 self._config.set(f"{side}.path", pane.current.path)

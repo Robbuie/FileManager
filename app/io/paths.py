@@ -506,6 +506,7 @@ def connect(remote: str, *, remember: bool = False, user: str = "", password: st
     """
     if win32wnet is None:
         return "not running on Windows"
+    user = account_for(remote, user)
     resource = win32wnet.NETRESOURCE()
     resource.dwType = _RESOURCETYPE_DISK
     resource.lpRemoteName = normalize(remote)
@@ -515,10 +516,70 @@ def connect(remote: str, *, remember: bool = False, user: str = "", password: st
             resource, password or None, user or None,
             _CONNECT_UPDATE_PROFILE if remember else 0)
     except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+        number = getattr(exc, "winerror", None)
+        if number is None and getattr(exc, "args", None) and isinstance(exc.args[0], int):
+            number = exc.args[0]
+        if number == ERROR_SESSION_CREDENTIAL_CONFLICT:
+            return _conflict_reason(remote)
         return str(getattr(exc, "strerror", None) or exc)
     if user and save_credential:
         _save_credential(normalize(remote), user, password)
     return ""
+
+
+#: 0.50.5: the failures a different account can fix, by Windows' number. A
+#: folder that refuses the session's own account on a server outside its
+#: domain says 1326 ("the user name or password is incorrect") when it is
+#: listed, which Double Commander answers with Windows' own login prompt and
+#: this application used to show as an error and nothing else.
+LOGON_WINERRORS = frozenset({
+    86,     # the specified network password is not correct
+    1244,   # not authenticated
+    1326,   # the user name or password is incorrect
+    1327,   # account restriction
+    1331,   # account disabled
+    1909,   # account locked out
+    2202,   # the specified username is invalid
+})
+
+#: Windows already holds a connection to this server as another account.
+ERROR_SESSION_CREDENTIAL_CONFLICT = 1219
+
+
+def account_for(remote: str, user: str) -> str:
+    r"""The account as Windows wants it, for a share on `remote`.
+
+    `\user` and `.\user` are how people write "the server's own account, not
+    my domain's" -- the form a server outside the domain is logged into with.
+    Windows' own prompt understands them; `WNetAddConnection2` does not, and
+    would take `.\user` as an account on *this* machine. So both become
+    `SERVER\user`, which is what they mean. Anything else goes through as
+    typed.
+    """
+    user = (user or "").strip()
+    for prefix in (".\\", "\\"):
+        if user.startswith(prefix) and len(user) > len(prefix):
+            parts = split_unc(remote)
+            if parts is not None:
+                return parts[0] + "\\" + user[len(prefix):]
+    return user
+
+
+def _conflict_reason(remote: str) -> str:
+    """1219 in words that say what to do about it.
+
+    Windows allows one account per server per session. If a mapped drive or
+    another share on the same server is already open as the domain account,
+    a second account is refused until that one is disconnected -- and the
+    usual way round it is the server's address in place of its name, which
+    Windows counts as a different server.
+    """
+    parts = split_unc(remote)
+    server = parts[0] if parts else "this server"
+    return (f"Windows is already connected to {server} as another account "
+            f"(a mapped drive or another share on it). Disconnect that first, "
+            f"or open the share by the server's IP address instead of its name. "
+            f"({ERROR_SESSION_CREDENTIAL_CONFLICT})")
 
 
 def _save_credential(remote: str, user: str, password: str) -> None:
