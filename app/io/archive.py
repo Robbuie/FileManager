@@ -13,8 +13,12 @@ doing that safely -- beside the original, renamed over it, the transfer
 engine's rule -- on a 2 GB archive on a share is a feature of its own. Every
 write aimed inside an archive is refused with a sentence saying so.
 
-Only the standard library: `zipfile` and `tarfile`. 7-Zip and RAR would need a
-bundled binary, which is exactly the kind of weight 0.39 went looking for.
+Zip and tar with the standard library: `zipfile` and `tarfile`. Since 0.51,
+`.7z` and `.rar` through the 7-Zip already installed on the machine -- `7z l`
+for the table and `7z e -so` for a member's bytes, run in the worker like any
+other read. Nothing is bundled: a 7-Zip inside the installer is the kind of
+weight 0.39 went looking for, and the machines this runs on have 7-Zip
+anyway. Without it, a `.7z` says so rather than opening.
 
 **The index.** An archive's table of contents is read once and kept, per
 worker process, for the few archives looked at most recently -- keyed on the
@@ -38,6 +42,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import tarfile
 import threading
 import time
@@ -51,7 +56,9 @@ from app.io.protocol import Entry
 #: Suffixes read as archives, longest first so `.tar.gz` wins over `.gz`.
 ZIP_SUFFIXES = (".zip",)
 TAR_SUFFIXES = (".tar.gz", ".tar.bz2", ".tar.xz", ".tgz", ".tbz2", ".txz", ".tar")
-SUFFIXES = ZIP_SUFFIXES + TAR_SUFFIXES
+#: 0.51: read through the installed 7-Zip, never bundled.
+SEVEN_SUFFIXES = (".7z", ".rar")
+SUFFIXES = ZIP_SUFFIXES + TAR_SUFFIXES + SEVEN_SUFFIXES
 
 #: How many archives' tables a worker keeps.
 CACHED = 4
@@ -111,7 +118,11 @@ def inside(path: str) -> bool:
 
 def kind_of(archive: str) -> str:
     lowered = archive.lower()
-    return "zip" if lowered.endswith(ZIP_SUFFIXES) else "tar"
+    if lowered.endswith(ZIP_SUFFIXES):
+        return "zip"
+    if lowered.endswith(SEVEN_SUFFIXES):
+        return "7z"
+    return "tar"
 
 
 def usable(parts: list[str]) -> bool:
@@ -224,6 +235,10 @@ def _zip_time(info: zipfile.ZipInfo) -> float:
 
 def _read_index(archive: str, deadline: float) -> Index:
     index = Index(kind=kind_of(archive))
+    if index.kind == "7z":
+        for member in seven_members(archive, deadline):
+            index.add(member)
+        return index
     if index.kind == "zip":
         with zipfile.ZipFile(paths.api(archive)) as handle:
             for number, info in enumerate(handle.infolist()):
@@ -317,6 +332,11 @@ def extract(archive: str, inner: str, target: str, *,
             done += len(block)
             if progress is not None:
                 progress(done)
+        # A stream that ended early is a damaged archive or a wrong password,
+        # not a short file: the caller's partial is discarded, never renamed.
+        source.verify()
+    if done != member.size:
+        raise OSError(f"{inner}: read {done:,} of {member.size:,} bytes from the archive")
     if member.mtime:
         try:
             os.utime(paths.api(target), (member.mtime, member.mtime))
@@ -334,6 +354,10 @@ class _Closing:
     def read(self, size: int = -1) -> bytes:
         return self._stream.read(size)
 
+    def verify(self) -> None:
+        """Raise if the stream did not end cleanly. Only 7-Zip's can fail
+        this way -- `zipfile` and `tarfile` raise as they read."""
+
     def __enter__(self):
         return self
 
@@ -346,6 +370,8 @@ class _Closing:
 
 
 def _open_member(archive: str, kind: str, member: Member) -> _Closing:
+    if kind == "7z":
+        return _SevenStream(archive, member)
     if kind == "zip":
         handle = zipfile.ZipFile(paths.api(archive))
         return _Closing(handle.open(member.name), handle)
@@ -355,6 +381,187 @@ def _open_member(archive: str, kind: str, member: Member) -> _Closing:
         handle.close()
         raise FileNotFoundError(member.name)
     return _Closing(stream, handle)
+
+
+# ------------------------------------------------------------- 7-Zip (0.51)
+#
+# Three rules, each from a way a child program can hold a worker:
+#
+# - **stdin is closed and `-p` is always given.** 7-Zip asks for a password on
+#   the console when an archive's names are encrypted, and a prompt nobody can
+#   see is a worker waiting forever. With an empty password it fails at once,
+#   and the failure says the archive is encrypted.
+# - **Every run has the caller's deadline** and is killed at it, the way a
+#   worker is killed by the pool.
+# - **`-spd`:** a member name is a name, not a wildcard. Windows names cannot
+#   hold `*` or `?`, but 7-Zip also treats a name as a pattern to be matched
+#   recursively unless told otherwise.
+
+#: Overridden by the tests; None means "look for it".
+SEVEN_ZIP: str | None = None
+
+#: Kept per process once found, and so is not finding it.
+_seven_found: list[str | None] = []
+
+NO_SEVEN_ZIP = ("7-Zip is needed to open .7z and .rar files and was not found -- "
+                "install it from 7-zip.org, or open the file from its right-click menu")
+
+
+def _registry_7zip() -> list[str]:
+    try:
+        import winreg  # noqa: PLC0415 - Windows only
+    except ImportError:
+        return []
+    found = []
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for view in (0, getattr(winreg, "KEY_WOW64_64KEY", 0)):
+            try:
+                with winreg.OpenKey(hive, r"Software\7-Zip", 0,
+                                    winreg.KEY_READ | view) as key:
+                    for value in ("Path64", "Path"):
+                        try:
+                            folder, _type = winreg.QueryValueEx(key, value)
+                        except OSError:
+                            continue
+                        found.append(os.path.join(str(folder), "7z.exe"))
+            except OSError:
+                continue
+    return found
+
+
+def seven_zip() -> str | None:
+    """The installed 7-Zip's console program, or None.
+
+    Where its installer registers it, then the two Program Files folders, then
+    the PATH. Local reads only; asked once per process.
+    """
+    if SEVEN_ZIP is not None:
+        return SEVEN_ZIP or None
+    if _seven_found:
+        return _seven_found[0]
+    candidates = _registry_7zip()
+    for variable in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
+        base = os.environ.get(variable)
+        if base:
+            candidates.append(os.path.join(base, "7-Zip", "7z.exe"))
+    found = next((path for path in candidates if os.path.isfile(path)), None)
+    if found is None:
+        found = shutil.which("7z") or shutil.which("7zz") or shutil.which("7za")
+    _seven_found.append(found)
+    return found
+
+
+def _seven_path(archive: str) -> str:
+    """The archive's path as 7-Zip is given it: plain while it is short,
+    since a command line is not a Win32 file call, and the extended form only
+    past the length where nothing else would reach it."""
+    return archive if len(archive) < 240 else paths.api(archive)
+
+
+def _seven(arguments: list[str], **extra) -> subprocess.Popen:
+    program = seven_zip()
+    if program is None:
+        raise BadArchive(NO_SEVEN_ZIP)
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return subprocess.Popen([program, *arguments], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            creationflags=flags, **extra)
+
+
+def _seven_error(text: str, archive: str) -> str:
+    lowered = text.lower()
+    if "wrong password" in lowered or "encrypted" in lowered:
+        return f"{os.path.basename(archive)} is password protected -- open it in 7-Zip"
+    lines = [line.strip() for line in text.splitlines() if line.strip()
+             and not line.startswith(("7-Zip", "Scanning", "Break"))]
+    detail = "; ".join(lines[-2:]) if lines else "7-Zip could not read it"
+    return f"not a readable archive: {detail}"
+
+
+def _seven_time(text: str) -> float:
+    text = text.strip()
+    if not text:
+        return 0.0
+    try:
+        return datetime.datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+    except (ValueError, OverflowError):
+        return 0.0
+
+
+def parse_slt(text: str) -> Iterator[Member]:
+    """Members out of `7z l -slt -ba`: blocks of `Key = value`, blank-separated.
+
+    A folder is `Folder = +` in some formats and an attribute string starting
+    with `D` in others; either is believed.
+    """
+    for block in re.split(r"\r?\n\s*\r?\n", text):
+        fields: dict[str, str] = {}
+        for line in block.splitlines():
+            key, sep, value = line.partition(" = ")
+            if sep:
+                fields[key.strip()] = value
+            elif line.rstrip().endswith(" ="):
+                fields[line.rstrip()[:-2].strip()] = ""
+        name = fields.get("Path")
+        if not name:
+            continue
+        is_dir = fields.get("Folder") == "+" or fields.get("Attributes", "").startswith("D")
+        try:
+            size = int(fields.get("Size") or 0)
+        except ValueError:
+            size = 0
+        yield Member(name, 0 if is_dir else size, _seven_time(fields.get("Modified", "")),
+                     is_dir)
+
+
+def seven_members(archive: str, deadline: float) -> list[Member]:
+    """The table of a 7-Zip-readable archive, within the deadline."""
+    process = _seven(["l", "-slt", "-ba", "-sccUTF-8", "-p", "--", _seven_path(archive)])
+    try:
+        out, err = process.communicate(timeout=max(0.5, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        raise TimeoutError("reading the archive took too long") from None
+    text = out.decode("utf-8", "replace")
+    if process.returncode != 0:
+        raise BadArchive(_seven_error(err.decode("utf-8", "replace") + text, archive))
+    return list(parse_slt(text))
+
+
+class _SevenStream(_Closing):
+    """One member's bytes from `7z e -so`, closed by killing it if unfinished."""
+
+    def __init__(self, archive: str, member: Member) -> None:
+        self._archive = archive
+        self._process = _seven(["e", "-so", "-spd", "-r-", "-bd", "-sccUTF-8", "-p",
+                                "--", _seven_path(archive), member.name])
+        super().__init__(self._process.stdout)
+
+    def verify(self) -> None:
+        try:
+            self._process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            raise OSError("7-Zip did not finish") from None
+        if self._process.returncode != 0:
+            err = self._process.stderr.read().decode("utf-8", "replace") \
+                if self._process.stderr else ""
+            raise OSError(_seven_error(err, self._archive))
+
+    def __exit__(self, *_exc) -> None:
+        if self._process.poll() is None:
+            self._process.kill()
+        try:
+            self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        for stream in (self._process.stdout, self._process.stderr):
+            try:
+                if stream is not None:
+                    stream.close()
+            except OSError:
+                pass
 
 
 # ------------------------------------------------------------ the temp copy

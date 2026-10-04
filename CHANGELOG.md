@@ -5,6 +5,27 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.51.0]
+
+### Added
+- **.7z and .rar open like folders, through the 7-Zip already installed.**
+  Enter goes in; files inside can be viewed, previewed, opened and copied
+  out with F5 or Extract, the same as a zip. Read-only, as zips are. Nothing
+  is added to the installer: the app finds 7-Zip where its installer
+  registers it, or in Program Files. Without 7-Zip the listing says so
+  instead of opening. A password-protected archive says it is one rather
+  than asking; open those in 7-Zip itself. Extracting from a large solid
+  .7z reads from the start of its block, so one file out of a big archive
+  can take longer than the same file out of a zip.
+
+### Changed
+- **A HEIC that cannot be drawn because the reader is missing says so.** A
+  copy run from source whose Python environment predates 0.29.11 has no
+  `pi-heif`, and iPhone photos showed only "no decoder on this machine".
+  The line now names the missing piece and the command that adds it
+  (`pip install -r requirements.txt`). The installed app has always shipped
+  it.
+
 ## [0.50.5]
 
 ### Fixed

@@ -630,6 +630,13 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   `a.zip\` is its contents** (`archive.inside`), which is how F5 on the zip
   row still copies the zip; and the UI's read-only refusals are courtesy only
   -- `Pane.in_archive` is by name, and the worker and the engine are the rule.
+  Since 0.51 `.7z` and `.rar` are read through the *installed* 7-Zip
+  (`archive.seven_zip`), never a bundled one: `7z l -slt` builds the same
+  index and `7z e -so` streams a member into the same `extract`. Every run
+  closes stdin and passes `-p` (an encrypted archive must fail, never prompt
+  where nobody can see), carries the caller's deadline, and passes `-spd` so
+  a member name is never a wildcard. `extract` checks the byte count and the
+  exit code before the partial can be renamed into place.
 - **A search is a walk with a filter, and its results are a flat view.**
   Since 0.42 `Op.WALK` takes `args["search"]` (`app/io/search.py` reads it)
   and keeps only what matches, in the worker, so matches stream into a tab
@@ -929,7 +936,8 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
 3. The copy/move engine with its queue.
 
 Those three beat the current setup on their own. Multi-rename, archives (zip and
-tar from the standard library since 0.41; 7-Zip would be a bundled binary),
+tar from the standard library since 0.41; 7z and rar through the installed
+7-Zip since 0.51),
 compare and sync, and preview panes bolt on cleanly afterwards —
 and are out of scope until step 3 is solid.
 

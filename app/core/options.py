@@ -245,9 +245,10 @@ OPTIONS: tuple[Option, ...] = (
            heading="Extras", new=True),
     Option("archives.browse", "listing", "Open archives like folders",
            "Enter on a .zip or a .tar (also .tar.gz, .tgz, .tar.bz2, .tar.xz) "
-           "goes into it. Inside, files can be viewed, opened and copied out "
-           "with F5; nothing inside can be changed. Off hands them to Windows.",
-           heading="Archives", new=True, words=("zip", "tar", "extract")),
+           "goes into it, and so does a .7z or a .rar when 7-Zip is installed. "
+           "Inside, files can be viewed, opened and copied out with F5; "
+           "nothing inside can be changed. Off hands them to Windows.",
+           heading="Archives", new=True, words=("zip", "tar", "7z", "rar", "extract")),
     Option("listing.remember_sort", "listing", "Remember each folder's sort",
            "Clicking a column heading keeps that order for that folder, and "
            "it comes back the next time the folder is opened. Folders never "

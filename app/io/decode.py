@@ -770,9 +770,20 @@ def _nothing(family: str) -> str:
     a file that is broken, and the difference is what somebody would need to
     know before going looking at the file itself.
     """
+    if family == FAMILY_HEIF and not _heif_reader_present():
+        # 0.51: a checkout whose environment predates the dependency read
+        # exactly like a broken photograph. It is a missing package, and
+        # saying which one is the whole fix.
+        return ("the HEIC reader is not installed in this copy -- "
+                "pip install -r requirements.txt adds it")
     if family in DRAWS_OR_NOTHING:
         return "no decoder on this machine reads this kind of picture"
     return "nothing could read this file"
+
+
+def _heif_reader_present() -> bool:
+    from importlib.util import find_spec                     # noqa: PLC0415
+    return any(find_spec(name) is not None for name in ("pi_heif", "pillow_heif"))
 
 
 def _short(exc: BaseException) -> str:
