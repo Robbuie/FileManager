@@ -187,7 +187,9 @@ def test_f3_on_an_export_opens_the_browser_and_asks_for_the_outline(export, tmp_
     QApplication.instance() or QApplication([])
     bridge = FakeBridge()
     viewer = Viewer(Previews(bridge, Config({}, str(tmp_path / "c.json"))), {})
-    folder, name = export.rsplit("/", 1)
+    import os
+
+    folder, name = os.path.split(export)
     viewer._folder, viewer._names, viewer._at = folder, [name], 0
     answer = decode.preview(export, box=256, deadline=time.monotonic() + 10, logix=True)
     viewer._on_ready(viewer.path, answer)

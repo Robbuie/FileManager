@@ -5,6 +5,15 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.1]
+
+### Fixed
+- **The Logix card no longer runs off the side of a narrow panel on
+  Windows.** In Segoe UI the section headings and the date lines were wider
+  than a 300-pixel preview panel and pushed the whole card sideways. They
+  now wrap, and the card is always exactly as wide as the panel it is in.
+  This is what failed the 0.56.0 build; that release was never published.
+
 ## [0.56.0]
 
 ### Added

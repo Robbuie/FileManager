@@ -167,6 +167,17 @@ class _Wrap(QWidget):
             self.updateGeometry()
 
 
+def _content() -> QWidget:
+    """The card's scrolling body. Its width is ignored when the scroll area
+    sizes it, so it is always exactly as wide as the panel: a label that
+    cannot fold any further is clipped at the edge rather than pushing the
+    whole card sideways under a scroll bar that is turned off."""
+    content = QWidget()
+    content.setProperty("role", "lxcontent")
+    content.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+    return content
+
+
 class LogixCard(QScrollArea):
     """A scrolling card built from one Logix summary."""
 
@@ -195,8 +206,7 @@ class LogixCard(QScrollArea):
         self._summary = dict(summary)
         self._folding = []
         self._columns = []
-        content = QWidget()
-        content.setProperty("role", "lxcontent")
+        content = _content()
         outer = QVBoxLayout(content)
         outer.setContentsMargins(14, 12, 14, 14)
         outer.setSpacing(14)
@@ -237,8 +247,7 @@ class LogixCard(QScrollArea):
         self._summary = dict(header)
         self._body = None
         self._folding, self._columns = [], []
-        content = QWidget()
-        content.setProperty("role", "lxcontent")
+        content = _content()
         outer = QVBoxLayout(content)
         outer.setContentsMargins(14, 12, 14, 14)
         outer.setSpacing(12)
@@ -255,7 +264,7 @@ class LogixCard(QScrollArea):
             chips.append(_chip(f"{len(history)} versions listed"))
         if chips:
             outer.addWidget(_Wrap(chips, 150, spacing=6, natural=True))
-        outer.addWidget(_label("WHAT THE FILE SAYS ABOUT ITSELF", "lxhead"))
+        outer.addWidget(_label("WHAT THE FILE SAYS ABOUT ITSELF", "lxhead", wrap=True))
         box = QFrame()
         box.setProperty("role", "lxbox")
         lines = QVBoxLayout(box)
@@ -284,6 +293,10 @@ class LogixCard(QScrollArea):
             row.setSpacing(1 if folded else 10)
         for label, column in self._columns:
             label.setMinimumWidth(0 if folded else column)
+            if label.property("role") == "lxfact":
+                # Beside the name there is room for a date on one line; under
+                # it, in a narrow panel, it may have to break.
+                label.setWordWrap(folded)
             label.setAlignment(Qt.AlignLeft if folded else Qt.AlignRight)
 
     def _fold(self, *widgets: QWidget, indent: int = 0) -> QBoxLayout:
@@ -348,7 +361,7 @@ class LogixCard(QScrollArea):
         return tile
 
     def _section(self, into: QVBoxLayout, title: str) -> QFrame:
-        into.addWidget(_label(title.upper(), "lxhead"))
+        into.addWidget(_label(title.upper(), "lxhead", wrap=True))
         box = QFrame()
         box.setProperty("role", "lxbox")
         into.addWidget(box)
@@ -394,7 +407,7 @@ class LogixCard(QScrollArea):
         udts = summary.get("udt_list") or []
         if not aois and not udts:
             return
-        into.addWidget(_label("ADD-ON INSTRUCTIONS AND TYPES", "lxhead"))
+        into.addWidget(_label("ADD-ON INSTRUCTIONS AND TYPES", "lxhead", wrap=True))
         chips = [_chip(f"{name}  v{revision}" if revision else name)
                  for name, revision in aois]
         chips += [_chip(name) for name in udts]
@@ -408,7 +421,7 @@ class LogixCard(QScrollArea):
         slots = logixview.chassis(summary)
         if not slots:
             return
-        into.addWidget(_label("I/O: LOCAL CHASSIS", "lxhead"))
+        into.addWidget(_label("I/O: LOCAL CHASSIS", "lxhead", wrap=True))
         cells = []
         for slot in slots:
             cell = QFrame()

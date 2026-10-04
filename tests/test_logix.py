@@ -313,16 +313,27 @@ def test_the_card_draws_and_folds_without_overflowing(chassis_export):
     from app.ui.logixcard import LogixCard
 
     app = QApplication.instance() or QApplication([])
-    card = LogixCard()
-    card.resize(320, 700)
-    card.show()
-    card.show_summary(logix.summarise(chassis_export, time.monotonic() + 10), "x.L5X")
-    app.processEvents()
-    assert card.widget().width() <= card.viewport().width() + 1
-    card.resize(1000, 700)
-    app.processEvents()
-    assert card.widget().width() <= card.viewport().width() + 1
-    card.hide()
+    original = app.font()
+    try:
+        # Larger than any machine here draws it: Windows' Segoe UI is wider
+        # than the font the tests usually run with, and 0.56.0 overflowed
+        # there and nowhere else.
+        for points in (original.pointSizeF(), 14.0):
+            font = app.font()
+            font.setPointSizeF(points)
+            app.setFont(font)
+            card = LogixCard()
+            card.resize(320, 700)
+            card.show()
+            card.show_summary(logix.summarise(chassis_export, time.monotonic() + 10), "x.L5X")
+            app.processEvents()
+            assert card.widget().width() <= card.viewport().width() + 1, points
+            card.resize(1000, 700)
+            app.processEvents()
+            assert card.widget().width() <= card.viewport().width() + 1, points
+            card.hide()
+    finally:
+        app.setFont(original)
 
 
 # ------------------------------------------------------------------ 0.56 .ACD
