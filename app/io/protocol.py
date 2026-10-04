@@ -265,6 +265,14 @@ class Op(str, Enum):
     #: its kind, which is what the listing was drawing anyway.
     THUMBNAIL = "thumbnail"
 
+    #: 0.55: the inside of a Logix export, for the F3 browser.
+    #: `args["what"]` is "outline" (programs and add-on instructions with
+    #: their routines), "routine" (`args["program"]`, `args["routine"]`: its
+    #: rungs or structured-text lines) or "search" (`args["text"]`: where it
+    #: appears). The export is read once and kept by the worker, so stepping
+    #: from routine to routine does not read a forty-megabyte file again.
+    LOGIX = "logix"
+
     #: Every network location this session is attached to, letters or not.
     #:
     #: DRIVES answers from `GetLogicalDrives`, which reports **letters** -- so

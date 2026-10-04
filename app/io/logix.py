@@ -404,3 +404,257 @@ def render(summary: dict[str, Any]) -> str:
         if extra > 0:
             lines.append(f"  and {extra:,} more")
     return "\n".join(lines)
+
+
+# ------------------------------------------------------------------ 0.55 browse
+#
+# The F3 browser needs what the summary deliberately throws away: every rung's
+# text. So this is a second reader, used only when somebody presses F3 on an
+# export, that keeps the logic and nothing else -- no tags, no data, no I/O
+# configuration -- and is kept by the worker for the export last browsed, so
+# moving from routine to routine is a lookup rather than another forty
+# megabytes off a share.
+
+import os  # noqa: E402 - only this half needs it
+from dataclasses import dataclass, field  # noqa: E402
+
+#: The most rungs one routine reply carries, and the most search hits. Both
+#: far beyond a real routine; both a bound on one message across the pipe.
+MAX_RUNGS = 5000
+MAX_HITS = 1000
+
+
+class NotAnExport(Exception):
+    """A file named like an export whose content is not one."""
+
+
+@dataclass
+class Routine:
+    name: str
+    kind: str = "RLL"              # RLL, ST, FBD, SFC
+    #: (number, comment, text) for ladder; text is Logix's neutral form.
+    rungs: list = field(default_factory=list)
+    #: Lines of structured text.
+    lines: list = field(default_factory=list)
+    #: Source-protected: the logic is encrypted in the file.
+    protected: bool = False
+
+
+@dataclass
+class Container:
+    name: str
+    kind: str                      # "program" or "aoi"
+    routines: dict = field(default_factory=dict)
+
+
+@dataclass
+class Project:
+    controller: str = ""
+    containers: list = field(default_factory=list)
+
+    def _find(self, program: str, routine: str) -> Routine | None:
+        for container in self.containers:
+            if container.name == program:
+                return container.routines.get(routine)
+        return None
+
+    def outline(self) -> dict:
+        return {"controller": self.controller, "containers": [
+            {"name": c.name, "kind": c.kind, "routines": [
+                {"name": r.name, "kind": r.kind, "protected": r.protected,
+                 "count": len(r.rungs) if r.kind == "RLL" else len(r.lines)}
+                for r in c.routines.values()]}
+            for c in self.containers]}
+
+    def routine(self, program: str, name: str) -> dict:
+        found = self._find(program, name)
+        if found is None:
+            return {"program": program, "routine": name, "missing": True}
+        return {"program": program, "routine": name, "kind": found.kind,
+                "protected": found.protected,
+                "rungs": [list(r) for r in found.rungs[:MAX_RUNGS]],
+                "lines": list(found.lines[:MAX_RUNGS]),
+                "more": max(len(found.rungs), len(found.lines)) > MAX_RUNGS}
+
+    def search(self, text: str) -> dict:
+        needle = text.strip().lower()
+        hits: list[dict] = []
+        if not needle:
+            return {"text": text, "hits": [], "more": False}
+        for container in self.containers:
+            for routine in container.routines.values():
+                for number, comment, rung in routine.rungs:
+                    if needle in rung.lower() or needle in (comment or "").lower():
+                        hits.append({"program": container.name, "routine": routine.name,
+                                     "at": number})
+                        if len(hits) >= MAX_HITS:
+                            return {"text": text, "hits": hits, "more": True}
+                for number, line in enumerate(routine.lines):
+                    if needle in line.lower():
+                        hits.append({"program": container.name, "routine": routine.name,
+                                     "at": number})
+                        if len(hits) >= MAX_HITS:
+                            return {"text": text, "hits": hits, "more": True}
+        return {"text": text, "hits": hits, "more": False}
+
+
+_loaded: dict = {}
+
+
+def load(path: str, deadline: float) -> Project:
+    """The export's logic, read now or remembered from the last time.
+
+    One export is kept: browsing is one file at a time, and the logic of a
+    large project is tens of megabytes of strings.
+    """
+    stat = os.stat(paths.api(path))
+    key = (os.path.normcase(path), int(stat.st_size), float(stat.st_mtime))
+    if _loaded.get("key") == key:
+        return _loaded["project"]
+    if path.lower().endswith(".l5k"):
+        project = _load_l5k(path, deadline)
+    else:
+        project = _load_l5x(path, deadline)
+    _loaded.clear()
+    _loaded.update(key=key, project=project)
+    return project
+
+
+def _load_l5x(path: str, deadline: float) -> Project:
+    project = Project()
+    container: Container | None = None
+    routine: Routine | None = None
+    rung: dict | None = None
+    stack: list = []
+    count = 0
+    with open(paths.api(path), "rb") as handle:
+        for event, element in ElementTree.iterparse(handle, events=("start", "end")):
+            tag = element.tag
+            if event == "start":
+                stack.append(element)
+                if len(stack) == 1 and tag != "RSLogix5000Content":
+                    raise NotAnExport("not a Logix Designer export")
+                if tag == "Controller" and not project.controller:
+                    project.controller = element.attrib.get("Name", "")
+                elif tag == "Program":
+                    container = Container(element.attrib.get("Name", ""), "program")
+                    project.containers.append(container)
+                elif tag == "AddOnInstructionDefinition":
+                    container = Container(element.attrib.get("Name", ""), "aoi")
+                    project.containers.append(container)
+                elif tag == "Routine" and container is not None:
+                    routine = Routine(element.attrib.get("Name", ""),
+                                      element.attrib.get("Type", "RLL"))
+                    container.routines[routine.name] = routine
+                elif tag == "Rung" and routine is not None:
+                    rung = {"number": element.attrib.get("Number", ""),
+                            "comment": "", "text": ""}
+                elif tag == "EncodedData" and routine is not None:
+                    routine.protected = True
+                continue
+            stack.pop()
+            if tag == "Comment" and rung is not None:
+                rung["comment"] = (element.text or "").strip()
+            elif tag == "Text" and rung is not None:
+                rung["text"] = (element.text or "").strip()
+            elif tag == "Rung" and rung is not None and routine is not None:
+                try:
+                    number = int(rung["number"])
+                except ValueError:
+                    number = len(routine.rungs)
+                routine.rungs.append((number, rung["comment"], rung["text"]))
+                rung = None
+            elif tag == "Line" and routine is not None and routine.kind == "ST":
+                routine.lines.append(element.text or "")
+            elif tag == "Routine":
+                routine = None
+            elif tag in ("Program", "AddOnInstructionDefinition"):
+                container = None
+            element.clear()
+            if stack:
+                try:
+                    stack[-1].remove(element)
+                except ValueError:
+                    pass
+            count += 1
+            if count % 4096 == 0 and time.monotonic() > deadline:
+                raise TimeoutError("reading the export took too long")
+    if not project.controller and not project.containers:
+        raise NotAnExport("not a Logix Designer export")
+    # AOIs after programs: what a person browsing a project looks for first.
+    project.containers.sort(key=lambda c: c.kind != "program")
+    return project
+
+
+_ROUTINE_LINE = re.compile(r"^\s*(ROUTINE|ST_ROUTINE|FBD_ROUTINE|SFC_ROUTINE)\s+(\w+)")
+_RUNG_LINE = re.compile(r"^\s*N:\s*(.*?)\s*$")
+_COMMENT_LINE = re.compile(r'^\s*RC:\s*"(.*)$')
+
+
+def _load_l5k(path: str, deadline: float) -> Project:
+    project = Project()
+    container: Container | None = None
+    routine: Routine | None = None
+    comment: list[str] | None = None
+    pending = ""
+    with open(paths.api(path), "r", encoding="utf-8", errors="replace") as handle:
+        for number, line in enumerate(handle):
+            if number % 512 == 0 and time.monotonic() > deadline:
+                raise TimeoutError("reading the export took too long")
+            if comment is not None:
+                # A rung comment runs on until its closing `";`.
+                if line.rstrip().endswith('";'):
+                    comment.append(line.rstrip()[:-2])
+                    pending = " ".join(part.strip() for part in comment)
+                    comment = None
+                else:
+                    comment.append(line.strip())
+                continue
+            opening = _OPEN.match(line)
+            if opening and opening.group(1) == "CONTROLLER":
+                project.controller = opening.group(2)
+                continue
+            if opening and opening.group(1) == "PROGRAM":
+                container = Container(opening.group(2), "program")
+                project.containers.append(container)
+                continue
+            if opening and opening.group(1) == "ADD_ON_INSTRUCTION_DEFINITION":
+                container = Container(opening.group(2), "aoi")
+                project.containers.append(container)
+                continue
+            found = _ROUTINE_LINE.match(line)
+            if found and container is not None:
+                kind = {"ST_ROUTINE": "ST", "FBD_ROUTINE": "FBD",
+                        "SFC_ROUTINE": "SFC"}.get(found.group(1), "RLL")
+                routine = Routine(found.group(2), kind)
+                container.routines[routine.name] = routine
+                continue
+            closing = _CLOSE.match(line)
+            if closing:
+                kind = closing.group(1)
+                if kind.endswith("ROUTINE"):
+                    routine = None
+                elif kind in ("PROGRAM", "ADD_ON_INSTRUCTION_DEFINITION"):
+                    container = None
+                continue
+            if routine is None:
+                continue
+            if routine.kind == "RLL":
+                started = _COMMENT_LINE.match(line)
+                if started:
+                    rest = started.group(1).rstrip()
+                    if rest.endswith('";'):
+                        pending = rest[:-2]
+                    else:
+                        comment = [rest]
+                    continue
+                rung = _RUNG_LINE.match(line)
+                if rung:
+                    routine.rungs.append((len(routine.rungs), pending, rung.group(1)))
+                    pending = ""
+            elif routine.kind == "ST":
+                routine.lines.append(line.rstrip("\r\n"))
+    if not project.controller:
+        raise NotAnExport("not a Logix Designer export")
+    project.containers.sort(key=lambda c: c.kind != "program")
+    return project

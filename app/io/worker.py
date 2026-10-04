@@ -154,7 +154,7 @@ _ARCHIVE_WRITES = frozenset({Op.MKDIR, Op.RENAME, Op.RENAME_MANY, Op.DELETE,
 #: Reads that ask Windows about a real file, which a name inside an archive is
 #: not. Answered with a plain refusal; the callers already treat a failure as
 #: "no badge", "no icon", "no marks".
-_ARCHIVE_UNKNOWN = frozenset({Op.OVERLAY, Op.FILE_ICON, Op.GIT})
+_ARCHIVE_UNKNOWN = frozenset({Op.OVERLAY, Op.FILE_ICON, Op.GIT, Op.LOGIX})
 #: Reads about the place rather than the file, answered for the folder the
 #: archive is in: how much room there is, where a terminal opens.
 _ARCHIVE_HOST = frozenset({Op.FREE_SPACE, Op.RUN})
@@ -257,6 +257,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _preview(request, outbox)
     elif request.op is Op.THUMBNAIL:
         _thumbnails(request, outbox)
+    elif request.op is Op.LOGIX:
+        _logix(request, outbox)
     else:
         outbox.put(Reply(request.id, Status.ERROR, message=f"unknown op {request.op!r}"))
 
@@ -1114,6 +1116,37 @@ def _preview(request: Request, outbox: Any) -> None:
                             page=page, logix=bool(request.args.get("logix")),
                             details=bool(request.args.get("details")))
     outbox.put(Reply(request.id, Status.OK, payload=answer))
+
+
+def _logix(request: Request, outbox: Any) -> None:
+    """0.55: the F3 browser's questions about one Logix export.
+
+    The export is loaded whole the first time and kept (`logix.load`), so the
+    deadline matters on that first request and hardly at all after it.
+    """
+    from app.io import logix
+
+    deadline = time.monotonic() + request.timeout
+    what = str(request.args.get("what") or "outline")
+    try:
+        project = logix.load(request.path, deadline)
+    except TimeoutError as exc:
+        outbox.put(Reply(request.id, Status.TIMEOUT, message=str(exc)))
+        return
+    except logix.NotAnExport as exc:
+        outbox.put(Reply(request.id, Status.ERROR, message=str(exc)))
+        return
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+        return
+    if what == "routine":
+        payload = project.routine(str(request.args.get("program") or ""),
+                                  str(request.args.get("routine") or ""))
+    elif what == "search":
+        payload = project.search(str(request.args.get("text") or ""))
+    else:
+        payload = project.outline()
+    outbox.put(Reply(request.id, Status.OK, payload=payload))
 
 
 def _thumbnails(request: Request, outbox: Any) -> None:

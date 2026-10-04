@@ -758,6 +758,17 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
     would buy isolation from a hang and cost a wedged file on one share taking
     thumbnails down for every volume, which for a grid of a hundred cells is
     the worse trade.
+- **Logix exports are read twice, on purpose.** The preview's summary
+  (`logix.summarise`, 0.36 and 0.53) keeps counters and a handful of names and
+  throws the logic away, because it runs on every cursor move in quick view.
+  The F3 browser (0.55) needs the logic, so `Op.LOGIX` loads every rung and
+  structured-text line once (`logix.load`), keeps that one export in the
+  worker, and answers outline, routine and search from it; it runs in the
+  side lane like PREVIEW. `core/ladder.py` reads a rung's neutral text into
+  series and branches and returns None for anything it does not understand,
+  and `ui/ladderview.py` then shows the text rather than guess at a drawing.
+  The card (`ui/logixcard.py`) draws only what `core/logixview.py` works out
+  from the summary.
 - **A command that starts a program is a worker op, and the working directory
   is why.** `Op.RUN` looks like something the window could do with three lines
   of `subprocess` -- and a child process inherits its parent's working

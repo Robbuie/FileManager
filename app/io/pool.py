@@ -91,7 +91,7 @@ HOST_OPS = frozenset({Op.MENU, Op.MENU_INVOKE, Op.MENU_RELEASE})
 #: The side lane restarts and is marked unreachable on its own account, so a
 #: shell extension that wedges on a share costs the badges and not the folder.
 SIDE_OPS = frozenset({Op.OVERLAY, Op.FILE_ICON, Op.THUMBNAIL, Op.PREVIEW, Op.DIR_SIZE,
-                      Op.GIT})
+                      Op.GIT, Op.LOGIX})
 
 #: Appended to a volume's key to name its side lane.
 SIDE_SUFFIX = " +side"

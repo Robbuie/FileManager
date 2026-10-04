@@ -180,6 +180,11 @@ DEFAULTS: dict[str, Any] = {
     # overlay gets would mean the preview pane never works on the volume it is
     # most wanted on. Still bounded, because nothing is waiting on it.
     "timeout.preview": 20.0,
+    # 0.55: the F3 browser's first read of a Logix export, which loads the
+    # whole of its logic. Longer than a preview: a large export on a share is
+    # tens of megabytes, and every question after the first is answered from
+    # what that read kept.
+    "timeout.logix": 90.0,
     # A screenful of grid cells in one request. Longer than a preview because
     # it is up to a hundred and sixty files rather than one, and a timeout
     # still delivers the cells it reached.

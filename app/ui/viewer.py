@@ -227,6 +227,8 @@ class Viewer(Dialog):
         self._page = 0
         self._pages = 0
         self._answer: Preview | None = None
+        #: 0.55: the Logix browser, built the first time an export is viewed.
+        self._browser = None
 
         self.setWindowTitle("View")
         self.setProperty("role", "viewer")
@@ -318,6 +320,8 @@ class Viewer(Dialog):
             font.setFamilies([part.strip().strip('"')
                               for part in mono.split(",")])
             widget.setFont(font)
+        if self._browser is not None:
+            self._browser.apply_tokens(tokens)
         self.setWindowIcon(glyphs.icon("filter", colour=tokens.get("txt_1", ""),
                                        muted=tokens.get("txt_2", "")))
 
@@ -452,6 +456,15 @@ class Viewer(Dialog):
             return          # an answer for a file the viewer has stepped off
         self._answer = answer
         self._pages = answer.pages
+        from app.ui.preview import is_logix
+
+        if is_logix(answer):
+            # 0.55: an export is browsed rather than shown as its summary.
+            browser = self._logix_browser()
+            browser.open(path, answer.details)
+            self._stack.setCurrentWidget(browser)
+            self._render_footer()
+            return
         if answer.form is PreviewForm.IMAGE:
             picture = QPixmap()
             if picture.loadFromData(answer.image or b"", "PNG") \
@@ -472,6 +485,17 @@ class Viewer(Dialog):
             return
         self._render_footer()
 
+    def _logix_browser(self):
+        if self._browser is None:
+            from app.core.logixbrowse import LogixBrowse
+            from app.ui.logixbrowser import LogixBrowser
+
+            browse = LogixBrowse(self._previews.bridge, self._previews.config, self)
+            self._browser = LogixBrowser(browse, self._tokens)
+            self._browser._browse.routineReady.connect(self._render_footer)
+            self._stack.addWidget(self._browser)
+        return self._browser
+
     def _on_unavailable(self, path: str, why: str) -> None:
         if path == self.path:
             self._show_nothing(why)
@@ -489,6 +513,8 @@ class Viewer(Dialog):
         if answer is None:
             return
         line = describe(answer)
+        if self._browser is not None and self._stack.currentWidget() is self._browser:
+            line = f"{self._browser.status()}   {line}"
         if self._stack.currentWidget() is self._image:
             zoom = self._image.zoom
             shown = "fit" if self._image.fitting else f"{zoom * 100:.0f}%"
@@ -507,6 +533,8 @@ class Viewer(Dialog):
         they cost a line and answer the question without a menu.
         """
         keys = ["arrows  next file"]
+        if self._browser is not None and self._stack.currentWidget() is self._browser:
+            keys = ["Enter in Find  next place"]
         if self._stack.currentWidget() is self._image:
             keys.append("+ -  zoom")
             keys.append("F  fit")

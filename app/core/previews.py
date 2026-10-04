@@ -92,6 +92,15 @@ class Previews(QObject):
         self._timer.timeout.connect(self._fire)
 
     @property
+    def bridge(self) -> Any:
+        """For the viewer's Logix browser, which asks the same workers."""
+        return self._bridge
+
+    @property
+    def config(self) -> Any:
+        return self._config
+
+    @property
     def pending(self) -> str | None:
         """The file being decoded, or None. For a widget that wants to say so."""
         return self._path

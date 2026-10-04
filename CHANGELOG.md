@@ -5,6 +5,27 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.55.0]
+
+### Added
+- **F3 on a Logix export browses its programs and draws its rungs.** The
+  viewer shows an .L5X or .L5K as the export's card at first, with every
+  program and add-on instruction listed on the left with its routines.
+  Pick a routine and its ladder is drawn: power rails, contacts and coils
+  as their symbols with the tag above, other instructions as boxes with
+  their operands, branches as parallel paths, rung comments above each
+  rung, and coils against the right rail. Structured text routines show as
+  text; function block and SFC routines are listed but not drawn, and a
+  source-protected routine says that it is. Rung text shows each rung as
+  Logix's own text instead.
+- **Find in the browser searches every rung and line in the export.** Each
+  routine shows how many places it was found, matching tags are drawn in
+  the warning colour, and Enter steps through the places one by one.
+- The export is read once when the browser opens it and kept, so moving
+  between routines does not read the file again. A large export on a share
+  can take a few seconds the first time. Read only: nothing in the browser
+  can change the file.
+
 ## [0.54.0]
 
 ### Added
