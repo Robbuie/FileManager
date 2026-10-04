@@ -189,6 +189,9 @@ class LogixCard(QScrollArea):
         return self._summary
 
     def show_summary(self, summary: dict[str, Any], name: str = "") -> None:
+        if summary.get("kind") == "acd":
+            self.show_acd(summary, name)
+            return
         self._summary = dict(summary)
         self._folding = []
         self._columns = []
@@ -228,6 +231,46 @@ class LogixCard(QScrollArea):
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
         super().resizeEvent(event)
         self._reflow()
+
+    def show_acd(self, header: dict[str, Any], name: str = "") -> None:
+        """0.56: a project file -- only what its text header says."""
+        self._summary = dict(header)
+        self._body = None
+        self._folding, self._columns = [], []
+        content = QWidget()
+        content.setProperty("role", "lxcontent")
+        outer = QVBoxLayout(content)
+        outer.setContentsMargins(14, 12, 14, 14)
+        outer.setSpacing(12)
+        if name:
+            outer.addWidget(_label(name, "lxsub"))
+        outer.addWidget(_label("Logix Designer project", "lxname", wrap=True))
+        chips = []
+        if header.get("needs"):
+            chips.append(_chip(f"Last saved with {header['needs']}", accent=True))
+        if header.get("first") and header.get("first") != header.get("needs"):
+            chips.append(_chip(f"Earliest version listed {header['first']}"))
+        history = header.get("history") or []
+        if len(history) > 1:
+            chips.append(_chip(f"{len(history)} versions listed"))
+        if chips:
+            outer.addWidget(_Wrap(chips, 150, spacing=6, natural=True))
+        outer.addWidget(_label("WHAT THE FILE SAYS ABOUT ITSELF", "lxhead"))
+        box = QFrame()
+        box.setProperty("role", "lxbox")
+        lines = QVBoxLayout(box)
+        lines.setContentsMargins(12, 10, 12, 10)
+        lines.setSpacing(3)
+        for line in header.get("lines") or []:
+            label = _label(line, "lxmono", wrap=True)
+            lines.addWidget(label)
+        outer.addWidget(box)
+        outer.addWidget(_label(
+            "Only the plain-text header at the start of the file is read. Tags and "
+            "logic are in Rockwell's own format and need Logix Designer; an .L5X "
+            "export of the project shows them here.", "lxsub", wrap=True))
+        outer.addStretch(1)
+        self.setWidget(content)
 
     def _reflow(self) -> None:
         if self._body is None:

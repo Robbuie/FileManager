@@ -323,3 +323,44 @@ def test_the_card_draws_and_folds_without_overflowing(chassis_export):
     app.processEvents()
     assert card.widget().width() <= card.viewport().width() + 1
     card.hide()
+
+
+# ------------------------------------------------------------------ 0.56 .ACD
+
+def _acd(tmp_path, header: bytes, name="Line.ACD"):
+    path = tmp_path / name
+    path.write_bytes(header + b"\x00\x01\x02\xff" * 2000)
+    return str(path)
+
+
+def test_an_acd_header_is_read_and_nothing_past_it(tmp_path):
+    path = _acd(tmp_path, b"DO NOT ALTER THIS FILE\r\n"
+                          b"Created by RSLogix 5000 v20.04.00 on Mon Jan 13 09:11:02 2025\r\n"
+                          b"Saved by Logix Designer v33.01.00 on Thu Sep 24 13:58:40 2026\r\n")
+    header = logix.acd_header(path)
+    assert header["lines"][0] == "DO NOT ALTER THIS FILE" and len(header["lines"]) == 3
+    assert [h["version"] for h in header["history"]] == ["20.04", "33.01"]
+    assert header["needs"] == "33.01" and header["first"] == "20.04"
+    assert header["history"][1]["when"] == "Thu Sep 24 13:58:40 2026"
+
+
+def test_a_utf16_header_reads_the_same(tmp_path):
+    text = "DO NOT ALTER THIS FILE\r\nLogix Designer V32.02 1/13/2025 9:11 AM\r\n"
+    path = _acd(tmp_path, text.encode("utf-16-le"))
+    header = logix.acd_header(path)
+    assert header["needs"] == "32.02" and header["history"][0]["when"] == "1/13/2025 9:11 AM"
+
+
+def test_an_acd_that_starts_binary_gets_the_ordinary_preview(tmp_path):
+    path = _acd(tmp_path, b"\x00\x00\x00\x10binary")
+    assert logix.acd_header(path) is None
+    shown = decode.preview(path, box=256, deadline=time.monotonic() + 10, logix=True)
+    assert shown.source != "acd"
+
+
+def test_the_acd_preview_carries_the_header_for_the_card(tmp_path):
+    path = _acd(tmp_path, b"DO NOT ALTER THIS FILE\r\nSaved by Logix Designer v33.01.00\r\n")
+    shown = decode.preview(path, box=256, deadline=time.monotonic() + 10, logix=True)
+    assert shown.source == "acd" and shown.details["kind"] == "acd"
+    off = decode.preview(path, box=256, deadline=time.monotonic() + 10, logix=False)
+    assert off.source != "acd"

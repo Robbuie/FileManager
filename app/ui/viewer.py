@@ -458,7 +458,7 @@ class Viewer(Dialog):
         self._pages = answer.pages
         from app.ui.preview import is_logix
 
-        if is_logix(answer):
+        if is_logix(answer) and answer.details.get("kind") == "logix":
             # 0.55: an export is browsed rather than shown as its summary.
             browser = self._logix_browser()
             browser.open(path, answer.details)

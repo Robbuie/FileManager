@@ -180,6 +180,20 @@ def preview(path: str, *, box: int, deadline: float,
                            encoding="xml" if _suffix(path) == ".l5x" else "text",
                            truncated=bool(summary.get("partial")))
 
+    if logix and _suffix(path) == ".acd" and text_bytes > 0:
+        # 0.56: the text header at the start of a Logix Designer project --
+        # the versions it was saved with. Nothing past that is read.
+        try:
+            from app.io import logix as logix_reader
+
+            header = logix_reader.acd_header(path)
+        except Exception:  # noqa: BLE001 - an unreadable header is the ordinary preview
+            header = None
+        if header is not None:
+            return Preview(form=PreviewForm.TEXT, source="acd", size=size,
+                           details=header, text=logix_reader.render_acd(header),
+                           encoding="text")
+
     family = preview_family(os.path.basename(path))
     for attempt in _ladder(family, allow_shell=allow_shell):
         if time.monotonic() > deadline:

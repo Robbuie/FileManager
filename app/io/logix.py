@@ -658,3 +658,81 @@ def _load_l5k(path: str, deadline: float) -> Project:
         raise NotAnExport("not a Logix Designer export")
     project.containers.sort(key=lambda c: c.kind != "program")
     return project
+
+
+# ------------------------------------------------------------------ 0.56 .ACD
+#
+# A Logix Designer project file is Rockwell's own binary format and is not
+# documented. What is known, and what Rockwell's own support notes tell people
+# to look at in Notepad, is that the file starts with a block of plain text --
+# a "do not alter" banner and the list of Logix Designer versions the project
+# has been saved with, the last of which is the oldest version that can open
+# it. That block is read here and nothing past it.
+#
+# Deliberately literal. The lines are shown as the file has them; a save
+# history is drawn only from lines that plainly carry a version number, and
+# the "needs" version only from the last of those. A file whose start is not
+# text is not an .ACD this reader understands, and gets the ordinary preview.
+
+#: How much of the start of the file is looked at.
+ACD_HEAD = 64 * 1024
+#: The most lines of the header kept.
+ACD_LINES = 200
+
+_VERSION = re.compile(r"(?<![\d.])[vV]?(\d{1,2}\.\d{2})(?:\.\d+)*(?![\d.])")
+_DATES = (
+    re.compile(r"\b\w{3} \w{3} +\d{1,2} \d{2}:\d{2}:\d{2} \d{4}\b"),
+    re.compile(r"\b\d{1,2}/\d{1,2}/\d{2,4}(?: \d{1,2}:\d{2}(?::\d{2})?(?: ?[AP]M)?)?\b"),
+    re.compile(r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?\b"),
+)
+
+
+def _head_text(data: bytes) -> str:
+    """The leading text of a binary file, in whichever of two encodings it is."""
+    if len(data) > 64 and data[1:64:2].count(0) > 24:
+        text = data.decode("utf-16-le", "replace")
+    else:
+        text = data.decode("latin-1")
+    out = []
+    for char in text:
+        if char in "\r\n\t" or (" " <= char and char != "�" and ord(char) < 0x2500):
+            out.append(char)
+            continue
+        break
+    return "".join(out)
+
+
+def acd_header(path: str) -> dict[str, Any] | None:
+    """What an .ACD says about itself in its text header, or None."""
+    with open(paths.api(path), "rb") as handle:
+        data = handle.read(ACD_HEAD)
+    text = _head_text(data)
+    lines = [line.rstrip() for line in text.splitlines()]
+    lines = [line for line in lines if line.strip()][:ACD_LINES]
+    if len(lines) < 2 or sum(len(line) for line in lines) < 40:
+        return None
+    history = []
+    for line in lines:
+        version = _VERSION.search(line)
+        if not version:
+            continue
+        when = ""
+        for pattern in _DATES:
+            found = pattern.search(line)
+            if found:
+                when = found.group(0)
+                break
+        history.append({"version": version.group(1), "when": when, "line": line.strip()})
+    return {"kind": "acd", "lines": lines, "history": history,
+            "needs": history[-1]["version"] if history else "",
+            "first": history[0]["version"] if history else ""}
+
+
+def render_acd(header: dict[str, Any]) -> str:
+    """The header as text, for copying and for a surface that draws only text."""
+    out = ["Logix Designer project (.ACD)", ""]
+    if header.get("needs"):
+        out.append(f"Last saved with  {header['needs']}")
+    out.append("")
+    out.extend(header.get("lines") or [])
+    return "\n".join(out)

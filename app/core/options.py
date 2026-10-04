@@ -317,7 +317,8 @@ OPTIONS: tuple[Option, ...] = (
     Option("preview.logix", "previews", "Read Logix exports",
            "An .L5X shows its controller, processor, firmware, export date, "
            "counts of tags, programs, routines and modules, its tasks and "
-           "its I/O -- instead of its first screen of XML.", new=True),
+           "its I/O -- instead of its first screen of XML. An .ACD project "
+           "shows the versions its text header lists.", new=True),
     Option("preview.photo_details", "previews", "Photo details",
            "Beside a photograph: when it was taken, the camera and lens, "
            "the exposure, the location as numbers, and a brightness "

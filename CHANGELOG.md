@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.0]
+
+### Added
+- **An .ACD project shows the versions it was saved with.** A Logix
+  Designer project file is Rockwell's own binary format, but it starts with
+  a block of plain text that lists the Logix Designer versions the project
+  has been saved in. The preview now shows that block as the file has it,
+  with the last version listed (the one needed to open it) and the earliest
+  pulled out above it. Nothing past the header is read, and an .ACD whose
+  start is not text gets the ordinary preview. Written without a real .ACD
+  to check against: worth looking at a few of your own, and if the lines
+  are not what the file says in Notepad, that is the thing to report.
+
 ## [0.55.0]
 
 ### Added

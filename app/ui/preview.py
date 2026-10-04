@@ -226,7 +226,8 @@ class PreviewPanel(QFrame):
 def is_logix(answer: Preview) -> bool:
     """Whether an answer carries a Logix summary to draw as a card."""
     details = answer.details or {}
-    return answer.form is PreviewForm.TEXT and details.get("kind") == "logix"
+    # 0.56: an .ACD's header is drawn on the same card.
+    return answer.form is PreviewForm.TEXT and details.get("kind") in ("logix", "acd")
 
 
 def _short_dump(data: bytes) -> str:

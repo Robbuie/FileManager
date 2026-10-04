@@ -259,6 +259,8 @@ def describe(answer: Preview) -> str:
             parts.append(f"shown at {answer.shown} px")
         parts.append(_bytes(answer.size))
         return "  ".join(parts)
+    if answer.form is PreviewForm.TEXT and answer.source == "acd":
+        return f"the text header of a Logix Designer project  {_bytes(answer.size)}"
     if answer.form is PreviewForm.TEXT and answer.source == "logix":
         # 0.36: a summary rather than the file's text, so the line under it
         # says so -- "0 lines, xml" would describe a document nobody is shown.
