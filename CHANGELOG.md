@@ -5,6 +5,21 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.54.0]
+
+### Added
+- **Photo details beside a picture.** In the preview panel, the peek card
+  and quick view: when the photo was taken, the camera
+  and lens, the exposure (shutter, aperture, ISO), the focal length, the
+  location as latitude and longitude, and a brightness histogram. Read from
+  the file's own tags with the Pillow library the installer already ships
+  for HEIC; nothing is looked up online. In quick view they sit in a column
+  beside the picture when the pane is wide, and in a band under it when it
+  is not; I hides and shows them. Options > Previews > Photo details turns
+  the whole thing off.
+- **Quick view shows the pictures either side of the cursor** in a strip
+  under the photo, from the same thumbnails the grid uses.
+
 ## [0.53.0]
 
 ### Changed

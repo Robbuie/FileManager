@@ -130,6 +130,10 @@ class PreviewPanel(QFrame):
         self._about = QLabel("")
         self._about.setProperty("role", "space")
         self._about.setWordWrap(True)
+        # 0.54: a photograph's details, under it.
+        from app.ui.photoinfo import PhotoInfo
+
+        self._photo = PhotoInfo()
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 6, 8, 6)
@@ -137,12 +141,14 @@ class PreviewPanel(QFrame):
         layout.addWidget(self._name)
         layout.addWidget(self._stack, 1)
         layout.addWidget(self._about)
+        layout.addWidget(self._photo)
         self.clear("")
 
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         # No literal colour as a fallback. See `app/ui/viewer.py` for why a
         # fallback is the worst form of the rule CLAUDE.md states.
         self._thumb.set_backdrop(tokens.get("bg_1", ""))
+        self._photo.apply_tokens(tokens)
         mono = tokens.get("mono", "monospace")
         font = self._text.font()
         font.setFamilies([part.strip().strip('"') for part in mono.split(",")])
@@ -169,6 +175,7 @@ class PreviewPanel(QFrame):
         self._note.setText("reading...")
         self._stack.setCurrentWidget(self._note)
         self._about.setText("")
+        self._photo.show_details(None)
 
     def clear(self, why: str = "") -> None:
         self._path = ""
@@ -176,6 +183,7 @@ class PreviewPanel(QFrame):
         self._note.setText(why or "nothing selected")
         self._stack.setCurrentWidget(self._note)
         self._about.setText("")
+        self._photo.show_details(None)
 
     def show_preview(self, path: str, name: str, answer: Preview) -> None:
         self._path = path
@@ -202,6 +210,7 @@ class PreviewPanel(QFrame):
             self._note.setText(answer.note or "no preview")
             self._stack.setCurrentWidget(self._note)
         self._about.setText(describe(answer))
+        self._photo.show_details(answer.details if answer.form is PreviewForm.IMAGE else None)
 
     def problem(self, path: str, why: str) -> None:
         self._path = path

@@ -1799,11 +1799,51 @@ class MainWindow(QMainWindow):
             self._quick.not_a_file(entry.name if entry is not None else "..")
             return
         path, entry = target
+        self._quick_strip(widget)
         if path == self._quick.path and self._previews.pending == path:
             return
         self._quick.waiting(path, entry.name)
         self._previews.ask(path, box=PREVIEW_BOX, text_bytes=PREVIEW_TEXT_BYTES,
                            mtime=entry.mtime, size=entry.size)
+
+    def _quick_strip(self, widget) -> None:
+        """0.54: the pictures either side of the cursor, under quick view.
+
+        From the pane's own thumbnail cache, so they cost what the grid's
+        cells cost and arrive the same way. Only for a picture under the
+        cursor, and only in an ordinary listing -- a flat view's rows live in
+        many folders.
+        """
+        from app.io.protocol import draws_a_thumbnail
+
+        pane = self._current_pane()
+        thumbs = getattr(pane, "thumbnails", None)
+        row = widget.current_row()
+        model = pane.current.model
+        entry = model.entry(row) if row >= 0 else None
+        if thumbs is None or not thumbs.enabled or pane.current.flat \
+                or entry is None or not draws_a_thumbnail(entry):
+            self._quick.set_strip([])
+            return
+        if not getattr(self, "_quick_thumbs_wired", False):
+            thumbs.changed.connect(
+                lambda: self._quick_strip(self._current_widget())
+                if self.quick_view_on else None)
+            self._quick_thumbs_wired = True
+        folder = pane.current.path
+        before, after = [], []
+        for step, into in ((-1, before), (1, after)):
+            at = row + step
+            while 0 <= at < model.rowCount() and len(into) < 3:
+                found = model.entry(at)
+                if found is not None and not model.is_parent_row(at) \
+                        and draws_a_thumbnail(found):
+                    into.append(found)
+                at += step
+        cells = [(thumbs.picture(folder, e), False) for e in reversed(before)]
+        cells.append((thumbs.picture(folder, entry), True))
+        cells += [(thumbs.picture(folder, e), False) for e in after]
+        self._quick.set_strip(cells)
 
     def _on_quick_ready(self, path: str, answer) -> None:
         if self.quick_view_on:
@@ -2056,6 +2096,8 @@ class MainWindow(QMainWindow):
                                       else None, [p.ask_git() for p in panes],
                                       self._refilter()),
             "preview.logix": lambda _v: self._previews.clear()
+            if self._previews is not None else None,
+            "preview.photo_details": lambda _v: self._previews.clear()
             if self._previews is not None else None,
         }
 

@@ -173,7 +173,8 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
 
             card = window._peek  # noqa: SLF001
             answer = decode.preview(os.path.join(path, peek), box=1600,
-                                    deadline=_time.monotonic() + 10, logix=True)
+                                    deadline=_time.monotonic() + 10, logix=True,
+                                    details=True)
             card.show_answer(card.path, peek, answer)
             QTimer.singleShot(300, app.quit)
             app.exec()
@@ -196,7 +197,8 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
 
             panel = window._quick  # noqa: SLF001
             answer = decode.preview(os.path.join(path, quick), box=1600,
-                                    deadline=_time.monotonic() + 10, logix=True)
+                                    deadline=_time.monotonic() + 10, logix=True,
+                                    details=True)
             panel.show_answer(panel.path, quick, answer)
             QTimer.singleShot(300, app.quit)
             app.exec()

@@ -476,6 +476,12 @@ QFrame[role="lxslot"] {{
 }}
 QFrame[role="lxslot"][tone="accent"] {{ border: 1px solid {accent_line}; }}
 QFrame[role="lxslot"][tone="empty"] {{ background: transparent; border: 1px dashed {line}; }}
+
+/* 0.54: photo details. */
+QFrame[role="photoinfo"] {{ background: transparent; border: none; }}
+QFrame[role="photoinfo"] QLabel {{ background: transparent; }}
+QLabel[role="photokey"] {{ color: {txt_2}; font-size: 12px; }}
+QLabel[role="photovalue"] {{ color: {txt_0}; font-size: 12px; }}
 QFrame[role="peek"] QLabel {{ background: transparent; }}
 QLabel[role="previewname"] {{
     background: transparent;

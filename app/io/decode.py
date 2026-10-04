@@ -144,7 +144,7 @@ TEXT_CONTROLS = frozenset(b"\t\n\r\f\v\b\x1b")
 def preview(path: str, *, box: int, deadline: float,
             text_bytes: int = PREVIEW_TEXT_BYTES,
             allow_shell: bool = True, page: int = 0,
-            logix: bool = False) -> Preview:
+            logix: bool = False, details: bool = False) -> Preview:
     """Everything this module can say about one file, at one size.
 
     `box` is the longest edge wanted from a picture, `deadline` a
@@ -197,6 +197,21 @@ def preview(path: str, *, box: int, deadline: float,
             del exc
             continue
         if answer is not None:
+            if details and text_bytes > 0 and answer.form is PreviewForm.IMAGE \
+                    and answer.source in ("qt", "raw", "heif"):
+                # 0.54: what the photograph says about itself, beside it. Not
+                # for a grid cell (`text_bytes` 0) and not for a picture the
+                # shell drew -- a video frame or a page has no camera.
+                from app.io import photo
+
+                try:
+                    found = photo.details(path, answer.image)
+                except Exception:  # noqa: BLE001 - details are a bonus, never a failure
+                    found = None
+                if found:
+                    from dataclasses import replace
+
+                    answer = replace(answer, details=found)
             return answer
     return Preview(form=PreviewForm.NONE, size=size, note=_nothing(family))
 

@@ -318,6 +318,11 @@ OPTIONS: tuple[Option, ...] = (
            "An .L5X shows its controller, processor, firmware, export date, "
            "counts of tags, programs, routines and modules, its tasks and "
            "its I/O -- instead of its first screen of XML.", new=True),
+    Option("preview.photo_details", "previews", "Photo details",
+           "Beside a photograph: when it was taken, the camera and lens, "
+           "the exposure, the location as numbers, and a brightness "
+           "histogram. Read from the file itself; nothing is looked up.",
+           new=True, words=("exif", "camera", "gps", "histogram")),
     Option("preview.peek_motion", "previews", "Peek grows out of the row",
            "Off opens the card in place. Also off whenever animations are.",
            heading="Peek", needs=("listing.space", "peek"), new=True),

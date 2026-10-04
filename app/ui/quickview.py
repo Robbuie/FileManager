@@ -48,6 +48,11 @@ from app.ui.preview import is_logix
 from app.ui.viewer import ImageView, hex_dump
 
 
+#: Width of the photo details column, and the narrowest panel that shows it.
+SIDE_W = 250
+SIDE_FROM = 900
+
+
 class QuickView(QFrame):
     """The panel laid over the other pane."""
 
@@ -104,6 +109,15 @@ class QuickView(QFrame):
         for widget in (self._image, self._text, self._note, self._card):
             self._stack.addWidget(widget)
 
+        # 0.54: photo details in a column beside the picture, and the
+        # neighbouring files in a strip under it.
+        from app.ui.photoinfo import PhotoInfo, Strip
+
+        self._photo = PhotoInfo()
+        self._side_wanted = True
+        self._strip = Strip()
+        self._strip.hide()
+
         self._about = QLabel("")
         self._about.setProperty("role", "space")
         # Ignored, so a long line is cut at the panel's edge rather than
@@ -121,7 +135,13 @@ class QuickView(QFrame):
         layout.setContentsMargins(10, 10, 10, 8)
         layout.setSpacing(8)
         layout.addLayout(head)
-        layout.addWidget(self._stack, 1)
+        self._middle = QHBoxLayout()
+        self._middle.setSpacing(12)
+        self._middle.addWidget(self._stack, 1)
+        self._middle.addWidget(self._photo)
+        layout.addLayout(self._middle, 1)
+        self._layout = layout
+        layout.addWidget(self._strip)
         layout.addLayout(foot)
         self._sync_keys()
         self.hide()
@@ -131,6 +151,8 @@ class QuickView(QFrame):
     def apply_tokens(self, tokens: dict[str, str]) -> None:
         # No literal colour as a fallback; see `app/ui/viewer.py`.
         self._image.set_backdrop(tokens.get("bg_0", ""))
+        self._photo.apply_tokens(tokens)
+        self._strip.set_colours(tokens.get("accent", ""), tokens.get("bg_1", ""))
         mono = tokens.get("mono", "monospace")
         font = self._text.font()
         font.setFamilies([part.strip().strip('"') for part in mono.split(",")])
@@ -182,6 +204,8 @@ class QuickView(QFrame):
             self._say(answer.note or "no preview")
             return
         self._about.setText(describe(answer))
+        self._details = answer.details if answer.form is PreviewForm.IMAGE else None
+        self._sync_side()
         self._show_zoom()
 
     def problem(self, path: str, why: str) -> None:
@@ -196,7 +220,37 @@ class QuickView(QFrame):
         self._name.setText(name)
         self._say("a folder" if name and name != ".." else "nothing to show")
 
+    def set_strip(self, cells) -> None:
+        """The neighbouring files' pictures; empty hides the strip."""
+        self._strip.set_cells(cells)
+
+    def _sync_side(self) -> None:
+        """Beside the picture in a wide panel, under it in a narrower one."""
+        details = getattr(self, "_details", None)
+        side = self.width() >= SIDE_FROM
+        where = self._middle if side else self._layout
+        if self._photo.parentWidget() is not None:
+            self._middle.removeWidget(self._photo)
+            self._layout.removeWidget(self._photo)
+        if side:
+            self._middle.addWidget(self._photo)
+            self._photo.setFixedWidth(SIDE_W)
+        else:
+            # Under the picture, above the strip and the footer.
+            self._layout.insertWidget(2, self._photo)
+            self._photo.setMinimumWidth(0)
+            self._photo.setMaximumWidth(16777215)
+        del where
+        self._photo.set_band(not side)
+        self._photo.show_details(details if details and self._side_wanted else None)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._sync_side()
+
     def _say(self, why: str) -> None:
+        self._details = None
+        self._photo.show_details(None)
         self._answer = None
         self._note.setText(why)
         self._stack.setCurrentWidget(self._note)
@@ -212,7 +266,7 @@ class QuickView(QFrame):
 
     def _sync_keys(self) -> None:
         if self.hasFocus():
-            self._keys.setText("+ - zoom   F fit   1 one to one   Tab back")
+            self._keys.setText("+ - zoom   F fit   1 one to one   I details   Tab back")
         else:
             self._keys.setText("Tab zoom   Ctrl+Q close")
 
@@ -245,6 +299,10 @@ class QuickView(QFrame):
             return
         if key == Qt.Key_F3:
             self.viewRequested.emit()
+            return
+        if key == Qt.Key_I:
+            self._side_wanted = not self._side_wanted
+            self._sync_side()
             return
         if self._stack.currentWidget() is self._image:
             if key in (Qt.Key_Plus, Qt.Key_Equal):

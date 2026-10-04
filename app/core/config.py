@@ -212,6 +212,9 @@ DEFAULTS: dict[str, Any] = {
     # 0.36: an .L5X shown as what it is -- controller, firmware, counts,
     # tasks and I/O -- rather than as its first screen of XML.
     "preview.logix": True,
+    # 0.54: a photograph's date, camera, exposure and location, and a
+    # brightness histogram, beside the picture in the preview surfaces.
+    "preview.photo_details": True,
     # 0.36: what Space does on a file. "size" counts, as Space always has
     # (on a folder it always does); "peek" opens a large preview over the
     # window. And whether that card grows out of the row or just appears.

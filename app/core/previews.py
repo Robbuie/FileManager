@@ -179,7 +179,8 @@ class Previews(QObject):
             on_reply=self._replier(path, key),
             args={"box": box, "text_bytes": text_bytes,
                   "shell": bool(self._config.get("preview.shell")),
-                  "logix": bool(self._config.get("preview.logix"))},
+                  "logix": bool(self._config.get("preview.logix")),
+                  "details": bool(self._config.get("preview.photo_details"))},
         )
 
     def _replier(self, path: str, key: tuple):
