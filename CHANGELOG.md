@@ -5,6 +5,22 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.53.0]
+
+### Changed
+- **A Logix export is drawn as a card, not as a block of text.** The summary
+  of an .L5X or .L5K used to be lines lined up with spaces for a monospaced
+  font and drawn in the normal one, so the columns wandered. It is now the
+  controller name with its processor, firmware and Logix version, the
+  controller's address and last edit, the counts as tiles, each task with
+  its rate and the programs it runs (with their routine and rung counts),
+  the add-on instructions and data types, the local chassis drawn slot by
+  slot with empty slots shown, and the devices on Ethernet with their IP
+  addresses, grouped by the module they are reached through. The same card
+  is used in the preview panel, the peek card and quick view, and it folds
+  to fit a narrow panel. An .L5K has no network addresses in it, so only
+  its chassis is drawn.
+
 ## [0.52.0]
 
 ### Added

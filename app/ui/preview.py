@@ -119,8 +119,12 @@ class PreviewPanel(QFrame):
         self._note.setAlignment(Qt.AlignCenter)
         self._note.setWordWrap(True)
 
+        # 0.53: a Logix export drawn as a card rather than as text.
+        from app.ui.logixcard import LogixCard
+
+        self._card = LogixCard()
         self._stack = QStackedWidget()
-        for widget in (self._thumb, self._text, self._note):
+        for widget in (self._thumb, self._text, self._note, self._card):
             self._stack.addWidget(widget)
 
         self._about = QLabel("")
@@ -185,6 +189,9 @@ class PreviewPanel(QFrame):
             else:
                 self._stack.setCurrentWidget(self._note)
                 self._note.setText("the picture did not decode")
+        elif is_logix(answer):
+            self._card.show_summary(answer.details, "")
+            self._stack.setCurrentWidget(self._card)
         elif answer.form is PreviewForm.TEXT:
             self._text.setPlainText(answer.text)
             self._stack.setCurrentWidget(self._text)
@@ -205,6 +212,12 @@ class PreviewPanel(QFrame):
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt naming
         self.activated.emit()
         super().mousePressEvent(event)
+
+
+def is_logix(answer: Preview) -> bool:
+    """Whether an answer carries a Logix summary to draw as a card."""
+    details = answer.details or {}
+    return answer.form is PreviewForm.TEXT and details.get("kind") == "logix"
 
 
 def _short_dump(data: bytes) -> str:

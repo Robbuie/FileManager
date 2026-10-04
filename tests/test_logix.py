@@ -221,3 +221,105 @@ def test_the_preview_shows_the_l5k_summary_when_asked(l5k):
     assert shown.form == PreviewForm.TEXT
     assert shown.source == "logix"
     assert "1756-L83E" in shown.text and "Periodic_100ms" in shown.text
+
+
+# ------------------------------------------------------------------ 0.53 card
+
+CHASSIS = EXPORT.replace(
+    '<Controller Use="Target" Name="RPS_Main" ProcessorType="1756-L83E" MajorRev="33" MinorRev="11">',
+    '<Controller Use="Target" Name="RPS_Main" ProcessorType="1756-L83E" MajorRev="33" '
+    'MinorRev="11" CommPath="AB_ETHIP-1\\10.1.1.5\\Backplane\\0" '
+    'LastModificationDate="Thu Sep 24 13:58:40 2026">',
+).replace(
+    """ <Module Name="Local" CatalogNumber="1756-L83E"/>
+ <Module Name="ENET_Plant" CatalogNumber="1756-EN2T"/>
+ <Module Name="DI_Pumps" CatalogNumber="1756-IB32"/>""",
+    """ <Module Name="Local" CatalogNumber="1756-L83E/B" ParentModule="Local"><Ports>
+   <Port Id="1" Address="0" Type="ICP" Upstream="false"><Bus Size="7"/></Port></Ports></Module>
+ <Module Name="ENET_Plant" CatalogNumber="1756-EN2T/D" ParentModule="Local"><Ports>
+   <Port Id="1" Address="2" Type="ICP" Upstream="true"/>
+   <Port Id="2" Address="10.1.1.6" Type="Ethernet" Upstream="false"/></Ports></Module>
+ <Module Name="DI_Pumps" CatalogNumber="1756-IB32/B" ParentModule="Local"><Ports>
+   <Port Id="1" Address="3" Type="ICP" Upstream="true"/></Ports></Module>
+ <Module Name="Drive1" CatalogNumber="20-750-ENETR" ParentModule="ENET_Plant"><Ports>
+   <Port Id="2" Address="10.1.1.21" Type="Ethernet" Upstream="true"/></Ports></Module>
+ <Module Name="Rack1" CatalogNumber="1734-AENTR/B" ParentModule="ENET_Plant"><Ports>
+   <Port Id="1" Address="10.1.1.40" Type="Ethernet" Upstream="true"/>
+   <Port Id="2" Address="0" Type="PointIO" Upstream="false"/></Ports></Module>
+ <Module Name="Rack1_IB8" CatalogNumber="1734-IB8/C" ParentModule="Rack1"><Ports>
+   <Port Id="1" Address="1" Type="PointIO" Upstream="true"/></Ports></Module>""")
+
+
+@pytest.fixture
+def chassis_export(tmp_path):
+    path = tmp_path / "RPS_Main.L5X"
+    path.write_text(CHASSIS, encoding="utf-8")
+    return str(path)
+
+
+def test_the_summary_carries_what_the_card_draws(chassis_export):
+    from app.core import logixview
+
+    summary = logix.summarise(chassis_export, time.monotonic() + 10)
+    assert logixview.address(summary["comm_path"]) == "10.1.1.5, slot 0"
+    assert logixview.when(summary["modified"]) == "24 Sep 2026 13:58"
+    programs = {p["name"]: p for p in summary["program_list"]}
+    assert programs["MainProgram"]["routines"] == 1 and programs["MainProgram"]["rungs"] == 2
+    assert logixview.program_line(programs["MainProgram"]) == "1 routine · 2 rungs"
+    assert summary["aoi_list"] == [("Motor", "")] and summary["udt_list"] == ["PumpUDT"]
+
+    slots = logixview.chassis(summary)
+    assert len(slots) == 7
+    assert (slots[0].controller, slots[0].kind) == (True, "controller")
+    assert slots[1].empty
+    assert (slots[2].name, slots[2].kind) == ("ENET_Plant", "Ethernet")
+    assert logixview.short_catalog(slots[3].catalog) == "IB32" and slots[3].kind == "32 in"
+
+    [network] = logixview.networks(summary)
+    assert network.via == "ENET_Plant"
+    assert [(d.name, d.address, d.children) for d in network.devices] == [
+        ("Drive1", "10.1.1.21", 0), ("Rack1", "10.1.1.40", 1)]
+
+
+def test_the_preview_hands_the_summary_over_as_details(chassis_export):
+    shown = decode.preview(chassis_export, box=256, deadline=time.monotonic() + 10, logix=True)
+    assert shown.details["kind"] == "logix"
+    assert shown.details["controller"] == "RPS_Main"
+
+
+def test_an_l5k_fills_the_card_as_far_as_it_can(l5k):
+    from app.core import logixview
+
+    summary = logix.summarise_l5k(l5k, time.monotonic() + 10)
+    programs = {p["name"]: p for p in summary["program_list"]}
+    assert programs["MainProgram"]["rungs"] == 2
+    assert summary["udt_list"] == ["PumpUDT"]
+    assert summary["aoi_list"] == [("Motor", "1.0")]
+    assert logixview.networks(summary) == []
+
+
+def test_task_rates_read_as_words():
+    from app.core import logixview
+
+    assert logixview.task_rate({"type": "periodic", "rate": "10"}) == "every 10 ms"
+    assert logixview.task_rate({"type": "periodic", "rate": "2.5"}) == "every 2.5 ms"
+    assert logixview.task_rate({"type": "continuous"}) == "continuous"
+
+
+def test_the_card_draws_and_folds_without_overflowing(chassis_export):
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from app.ui.logixcard import LogixCard
+
+    app = QApplication.instance() or QApplication([])
+    card = LogixCard()
+    card.resize(320, 700)
+    card.show()
+    card.show_summary(logix.summarise(chassis_export, time.monotonic() + 10), "x.L5X")
+    app.processEvents()
+    assert card.widget().width() <= card.viewport().width() + 1
+    card.resize(1000, 700)
+    app.processEvents()
+    assert card.widget().width() <= card.viewport().width() + 1
+    card.hide()

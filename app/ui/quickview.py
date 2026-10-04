@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
 
 from app.core.previews import describe
 from app.io.protocol import Preview, PreviewForm
+from app.ui.preview import is_logix
 from app.ui.viewer import ImageView, hex_dump
 
 
@@ -95,9 +96,12 @@ class QuickView(QFrame):
         self._note.setProperty("role", "note")
         self._note.setAlignment(Qt.AlignCenter)
         self._note.setWordWrap(True)
+        from app.ui.logixcard import LogixCard
+
+        self._card = LogixCard()
         self._stack = QStackedWidget()
         self._stack.setProperty("role", "quickbody")
-        for widget in (self._image, self._text, self._note):
+        for widget in (self._image, self._text, self._note, self._card):
             self._stack.addWidget(widget)
 
         self._about = QLabel("")
@@ -165,6 +169,9 @@ class QuickView(QFrame):
             else:
                 self._say("the picture did not decode")
                 return
+        elif is_logix(answer):
+            self._card.show_summary(answer.details, "")
+            self._stack.setCurrentWidget(self._card)
         elif answer.form is PreviewForm.TEXT:
             self._text.setPlainText(answer.text)
             self._stack.setCurrentWidget(self._text)

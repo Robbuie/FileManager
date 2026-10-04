@@ -175,6 +175,7 @@ def preview(path: str, *, box: int, deadline: float,
             summary = None
         if summary is not None:
             return Preview(form=PreviewForm.TEXT, source="logix", size=size,
+                           details={"kind": "logix", **summary},
                            text=logix_reader.render(summary),
                            encoding="xml" if _suffix(path) == ".l5x" else "text",
                            truncated=bool(summary.get("partial")))

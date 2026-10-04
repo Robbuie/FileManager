@@ -41,6 +41,13 @@ from app.io import paths
 #: How many modules and tasks the summary names before it only counts.
 NAMED = 12
 
+#: 0.53: how many modules, programs, AOIs and types the card is given in
+#: detail. More than `NAMED` because the card lays the chassis and the network
+#: out rather than listing them, and a chassis of seventeen slots should not
+#: stop at twelve; still a bound, because a summary crosses a process boundary
+#: on every cursor move in quick view.
+DETAILED = 96
+
 
 def summarise(path: str, deadline: float) -> dict[str, Any] | None:
     """The export's controller, dates and counts, or None if it is not one.
@@ -49,13 +56,7 @@ def summarise(path: str, deadline: float) -> dict[str, Any] | None:
     or XML that merely ends in `.l5x` -- so the caller falls back to showing
     it as text.
     """
-    summary: dict[str, Any] = {
-        "controller": "", "processor": "", "firmware": "", "software": "",
-        "exported": "", "target": "", "target_type": "",
-        "tags": 0, "programs": 0, "routines": 0, "aois": 0, "modules": 0,
-        "udts": 0, "rungs": 0,
-        "tasks": [], "module_list": [], "partial": False,
-    }
+    summary = _empty()
     depth = 0
     root_seen = False
     #: The open elements, so a finished one can be taken off its parent.
@@ -63,6 +64,10 @@ def summarise(path: str, deadline: float) -> dict[str, Any] | None:
     #: and a 40 MB export is a few hundred thousand of those.
     stack: list = []
     task: dict[str, Any] | None = None
+    #: 0.53: the program and module being read, so a routine, a rung or a
+    #: port can be credited to it on the way past.
+    program: dict[str, Any] | None = None
+    module: dict[str, Any] | None = None
     with open(paths.api(path), "rb") as handle:
         events = ElementTree.iterparse(handle, events=("start", "end"))
         for event, element in events:
@@ -86,6 +91,45 @@ def summarise(path: str, deadline: float) -> dict[str, Any] | None:
                     major, minor = attrs.get("MajorRev", ""), attrs.get("MinorRev", "")
                     if major:
                         summary["firmware"] = f"{major}.{minor}" if minor else major
+                    summary["comm_path"] = attrs.get("CommPath", "")
+                    summary["modified"] = attrs.get("LastModificationDate", "")
+                    summary["created"] = attrs.get("ProjectCreationDate", "")
+                elif tag == "Program":
+                    program = {"name": element.attrib.get("Name", ""),
+                               "routines": 0, "rungs": 0, "kinds": {}}
+                    if len(summary["program_list"]) < DETAILED:
+                        summary["program_list"].append(program)
+                elif tag == "Module":
+                    attrs = element.attrib
+                    module = {"name": attrs.get("Name", ""),
+                              "catalog": attrs.get("CatalogNumber", ""),
+                              "parent": attrs.get("ParentModule", ""),
+                              "port": "", "address": "", "inhibited":
+                                  attrs.get("Inhibited", "false").lower() == "true"}
+                elif tag == "Port" and module is not None:
+                    attrs = element.attrib
+                    # The upstream port is how the module is reached: a slot
+                    # number on a backplane, an IP address on Ethernet. The
+                    # controller itself has no upstream port, so its first
+                    # port stands in.
+                    upstream = attrs.get("Upstream", "").lower() == "true"
+                    if upstream or not module["port"]:
+                        module["port"] = attrs.get("Type", "")
+                        module["address"] = attrs.get("Address", "")
+                        module["upstream"] = upstream
+                elif tag == "Bus" and module is not None:
+                    # A backplane port says how many slots the chassis has.
+                    try:
+                        module["bus"] = int(element.attrib.get("Size", "0") or 0)
+                    except ValueError:
+                        pass
+                elif tag == "AddOnInstructionDefinition":
+                    if len(summary["aoi_list"]) < DETAILED:
+                        summary["aoi_list"].append((element.attrib.get("Name", ""),
+                                                    element.attrib.get("Revision", "")))
+                elif tag == "DataType":
+                    if len(summary["udt_list"]) < DETAILED:
+                        summary["udt_list"].append(element.attrib.get("Name", ""))
                 elif tag == "Task":
                     attrs = element.attrib
                     task = {"name": attrs.get("Name", ""),
@@ -104,18 +148,29 @@ def summarise(path: str, deadline: float) -> dict[str, Any] | None:
                 summary["programs"] += 1
             elif tag == "Routine":
                 summary["routines"] += 1
+                if program is not None:
+                    program["routines"] += 1
+                    kind = element.attrib.get("Type", "RLL")
+                    program["kinds"][kind] = program["kinds"].get(kind, 0) + 1
             elif tag == "Rung":
                 summary["rungs"] += 1
+                if program is not None:
+                    program["rungs"] += 1
             elif tag == "AddOnInstructionDefinition":
                 summary["aois"] += 1
             elif tag == "DataType":
                 summary["udts"] += 1
+            elif tag == "Program":
+                program = None
             elif tag == "Module":
                 summary["modules"] += 1
                 if len(summary["module_list"]) < NAMED:
                     attrs = element.attrib
                     summary["module_list"].append(
                         (attrs.get("Name", ""), attrs.get("CatalogNumber", "")))
+                if module is not None and len(summary["module_detail"]) < DETAILED:
+                    summary["module_detail"].append(module)
+                module = None
             elif tag == "Task" and task is not None:
                 if len(summary["tasks"]) < NAMED:
                     summary["tasks"].append(task)
@@ -141,6 +196,9 @@ def _empty() -> dict[str, Any]:
         "tags": 0, "programs": 0, "routines": 0, "aois": 0, "modules": 0,
         "udts": 0, "rungs": 0,
         "tasks": [], "module_list": [], "partial": False,
+        # 0.53, for the card.
+        "comm_path": "", "modified": "", "created": "",
+        "program_list": [], "module_detail": [], "aoi_list": [], "udt_list": [],
     }
 
 
@@ -178,6 +236,7 @@ def summarise_l5k(path: str, deadline: float) -> dict[str, Any] | None:
     #: several lines until its closing parenthesis.
     header: tuple[str, dict[str, Any]] | None = None
     task: dict[str, Any] | None = None
+    program: dict[str, Any] | None = None
     seen_controller = False
     with open(paths.api(path), "r", encoding="utf-8", errors="replace") as handle:
         for number, line in enumerate(handle):
@@ -209,6 +268,8 @@ def summarise_l5k(path: str, deadline: float) -> dict[str, Any] | None:
                     if len(summary["tasks"]) < NAMED:
                         summary["tasks"].append(task)
                     task = None
+                if kind == "PROGRAM":
+                    program = None
                 continue
             opening = _OPEN.match(line)
             if opening:
@@ -220,10 +281,20 @@ def summarise_l5k(path: str, deadline: float) -> dict[str, Any] | None:
                     summary["controller"] = summary["controller"] or name
                 elif kind == "PROGRAM":
                     summary["programs"] += 1
+                    program = {"name": name, "routines": 0, "rungs": 0, "kinds": {}}
+                    if len(summary["program_list"]) < DETAILED:
+                        summary["program_list"].append(program)
                 elif kind == "ROUTINE":
                     summary["routines"] += 1
+                    if program is not None:
+                        program["routines"] += 1
+                        sort = {"ST_ROUTINE": "ST", "FBD_ROUTINE": "FBD",
+                                "SFC_ROUTINE": "SFC"}.get(opening.group(1), "RLL")
+                        program["kinds"][sort] = program["kinds"].get(sort, 0) + 1
                 elif kind == "DATATYPE":
                     summary["udts"] += 1
+                    if len(summary["udt_list"]) < DETAILED:
+                        summary["udt_list"].append(name)
                 elif kind == "ADD_ON_INSTRUCTION_DEFINITION":
                     summary["aois"] += 1
                 elif kind == "MODULE":
@@ -244,6 +315,8 @@ def summarise_l5k(path: str, deadline: float) -> dict[str, Any] | None:
                 summary["tags"] += 1
             elif inside == "ROUTINE" and _RUNG.match(line):
                 summary["rungs"] += 1
+                if program is not None:
+                    program["rungs"] += 1
             elif inside == "TASK" and task is not None:
                 scheduled = _SCHEDULED.match(line)
                 if scheduled:
@@ -255,12 +328,25 @@ def _header_done(summary: dict[str, Any], kind: str, attrs: dict[str, Any],
                  task: dict[str, Any] | None) -> None:
     """A block's header has been read whole; keep what the summary shows."""
     if kind == "CONTROLLER":
+        summary["comm_path"] = summary["comm_path"] or str(attrs.get("CommPath", ""))
+        summary["modified"] = summary["modified"] or str(attrs.get("LastModificationDate", ""))
         summary["processor"] = summary["processor"] or attrs.get("ProcessorType", "")
         major, minor = attrs.get("Major", ""), attrs.get("Minor", "")
         if major and not summary["firmware"]:
             summary["firmware"] = f"{major}.{minor}" if minor else major
-    elif kind == "MODULE" and len(summary["module_list"]) < NAMED:
-        summary["module_list"].append((attrs.get("Name", ""), attrs.get("CatalogNumber", "")))
+    elif kind == "MODULE":
+        if len(summary["module_list"]) < NAMED:
+            summary["module_list"].append((attrs.get("Name", ""), attrs.get("CatalogNumber", "")))
+        if len(summary["module_detail"]) < DETAILED:
+            # An .L5K names a module's slot but not its network address, so
+            # only the chassis can be drawn from one.
+            slot = str(attrs.get("Slot", ""))
+            summary["module_detail"].append({
+                "name": attrs.get("Name", ""), "catalog": attrs.get("CatalogNumber", ""),
+                "parent": attrs.get("Parent", ""), "port": "ICP" if slot.isdigit() else "",
+                "address": slot, "upstream": True, "inhibited": False})
+    elif kind == "ADD_ON_INSTRUCTION_DEFINITION" and len(summary["aoi_list"]) < DETAILED:
+        summary["aoi_list"].append((attrs.get("Name", ""), str(attrs.get("Revision", ""))))
     elif kind == "TASK" and task is not None:
         task["type"] = str(attrs.get("Type", "")).lower()
         task["rate"] = str(attrs.get("Rate", ""))

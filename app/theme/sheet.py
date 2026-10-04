@@ -437,6 +437,45 @@ QFrame[role="quickview"] QLabel[role="quicktag"] {{
     font-weight: 600;
 }}
 QLabel[role="quickname"] {{ color: {txt_0}; font-weight: 600; }}
+
+/* 0.53: the Logix card. Drawn on the panel's own ground; tiles, boxes and
+   slots one step up, chips one step further, the controller's slot and the
+   processor chip in the accent. */
+QScrollArea[role="lxcard"], QWidget[role="lxcontent"] {{ background: transparent; border: none; }}
+QWidget[role="lxcontent"] QLabel {{ background: transparent; }}
+QLabel[role="lxname"] {{ color: {txt_0}; font-size: 22px; font-weight: 600; }}
+QLabel[role="lxsub"] {{ color: {txt_2}; font-size: 11.5px; }}
+QLabel[role="lxfact"] {{ color: {txt_1}; font-size: 12px; }}
+QLabel[role="lxhead"] {{ color: {txt_2}; font-size: 11px; font-weight: 600; letter-spacing: 1px; }}
+QLabel[role="lxstrong"] {{ color: {txt_0}; font-weight: 600; }}
+QLabel[role="lxrow"] {{ color: {txt_1}; }}
+QLabel[role="lxmono"] {{ color: {txt_1}; font-family: {mono}; font-size: 11.5px; }}
+QLabel[role="lxwarn"] {{ color: {warn}; font-size: 12px; }}
+QLabel[role="lxnumber"] {{ color: {txt_0}; font-size: 19px; font-weight: 600; }}
+QWidget[role="lxcontent"] QLabel[role="lxchip"] {{
+    color: {txt_1};
+    background: {bg_3};
+    border: 1px solid {bg_4};
+    border-radius: {radius_sm};
+    padding: 2px 8px;
+    font-size: 12px;
+}}
+QWidget[role="lxcontent"] QLabel[role="lxchip"][tone="accent"] {{
+    color: {accent_text}; background: {accent_wash}; border: 1px solid {accent_line};
+}}
+QWidget[role="lxcontent"] QLabel[role="lxchip"][tone="warn"] {{ color: {warn}; }}
+QFrame[role="lxtile"], QFrame[role="lxbox"] {{
+    background: {bg_2};
+    border: 1px solid {line};
+    border-radius: {radius};
+}}
+QFrame[role="lxslot"] {{
+    background: {bg_2};
+    border: 1px solid {bg_4};
+    border-radius: {radius_sm};
+}}
+QFrame[role="lxslot"][tone="accent"] {{ border: 1px solid {accent_line}; }}
+QFrame[role="lxslot"][tone="empty"] {{ background: transparent; border: 1px dashed {line}; }}
 QFrame[role="peek"] QLabel {{ background: transparent; }}
 QLabel[role="previewname"] {{
     background: transparent;

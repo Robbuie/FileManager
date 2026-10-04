@@ -976,6 +976,14 @@ class Preview:
     #: "too large to preview", "no decoder for this kind".
     note: str = ""
 
+    #: 0.53: what a reader that understands the file found, as plain data --
+    #: the Logix summary today, photo details beside a picture from 0.54. A
+    #: dict rather than fields here so a kind can grow without the protocol
+    #: changing, and so it pickles across the boundary like everything else.
+    #: `text` still carries a plain rendering for copying and for any surface
+    #: that draws only text.
+    details: dict | None = None
+
 
 #: The longest edge a preview pane asks for. Generous rather than exact: the
 #: pane is resizable and a picture re-requested on every drag would be a read
