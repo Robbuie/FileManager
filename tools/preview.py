@@ -33,7 +33,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            backdrop: str = "solid",
            viewer: str = "", cell: int = 128, commands: bool = False,
            stale: bool = False, options: str = "", peek: str = "",
-           settings: dict | None = None) -> str:
+           settings: dict | None = None, quick: str = "") -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -175,6 +175,29 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
             answer = decode.preview(os.path.join(path, peek), box=1600,
                                     deadline=_time.monotonic() + 10, logix=True)
             card.show_answer(card.path, peek, answer)
+            QTimer.singleShot(300, app.quit)
+            app.exec()
+
+    if quick:
+        # 0.52: quick view over the right pane, on the named file in the left.
+        widget = window._widgets[0]  # noqa: SLF001
+        model = window._panes[0].current.model  # noqa: SLF001
+        row = model.row_of(quick)
+        window._set_active(0)  # noqa: SLF001
+        if row >= 0:
+            widget._go_to(row)  # noqa: SLF001
+        window.toggle_quick_view()
+        QTimer.singleShot(1200, app.quit)
+        app.exec()
+        if row >= 0:
+            import time as _time
+
+            from app.io import decode
+
+            panel = window._quick  # noqa: SLF001
+            answer = decode.preview(os.path.join(path, quick), box=1600,
+                                    deadline=_time.monotonic() + 10, logix=True)
+            panel.show_answer(panel.path, quick, answer)
             QTimer.singleShot(300, app.quit)
             app.exec()
 
@@ -676,6 +699,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="open this many tabs per pane, to see the strip")
     parser.add_argument("--commands", action="store_true",
                         help="the commands editor rather than the window")
+    parser.add_argument("--quick", default="", metavar="NAME",
+                        help="quick view over the right pane, on this file in the left")
     parser.add_argument("--peek", default="", metavar="NAME",
                         help="open the peek card on this file in the left pane")
     parser.add_argument("--options", default="", metavar="PAGE",
@@ -729,7 +754,8 @@ def main(argv: list[str] | None = None) -> int:
                      commands=args.commands,
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
                      cell=args.cell, backdrop=args.backdrop, stale=args.stale,
-                     options=args.options, peek=args.peek, settings=settings))
+                     options=args.options, peek=args.peek, settings=settings,
+                     quick=args.quick))
         return 0
 
     from app.theme.tokens import THEMES

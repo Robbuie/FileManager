@@ -419,6 +419,24 @@ QFrame[role="peekbody"] {{
     border-radius: {radius};
 }}
 QFrame[role="peek"] QLabel[role="previewname"] {{ font-size: 15px; padding: 4px 4px; }}
+/* 0.52: quick view, laid over the other pane. The border is the accent's
+   faint line until the panel has the keyboard, then its full glow -- the same
+   language as the active pane, because Tab moving into it is the same act. */
+QFrame[role="quickview"] {{
+    background: {bg_2};
+    border: 1px solid {line};
+    border-radius: 12px;
+}}
+QFrame[role="quickview"][focused="true"] {{ border: 1px solid {accent_glow}; }}
+QFrame[role="quickview"] QLabel {{ background: transparent; }}
+QFrame[role="quickview"] QLabel[role="quicktag"] {{
+    color: {accent_text};
+    background: {accent_wash};
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-weight: 600;
+}}
+QLabel[role="quickname"] {{ color: {txt_0}; font-weight: 600; }}
 QFrame[role="peek"] QLabel {{ background: transparent; }}
 QLabel[role="previewname"] {{
     background: transparent;

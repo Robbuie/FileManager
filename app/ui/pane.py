@@ -590,6 +590,9 @@ class PaneWidget(QFrame):
     #: for the window's `apply_setting`, which is the one place a change is
     #: applied.
     settingRequested = Signal(str, object)
+    #: 0.52: the cursor is on another row, or the tab in front changed. Quick
+    #: view in the other pane follows it; nothing else needs to.
+    cursorMoved = Signal()
 
     def __init__(self, pane, volumes, metrics: dict[str, int],
                  favorites=None, parent: QWidget | None = None):
@@ -2884,6 +2887,7 @@ class PaneWidget(QFrame):
         self._sync_tabs()
         self._sync_drives()
         self._ask_preview()
+        self.cursorMoved.emit()
         self._grouped_rows = []     # `setModel` put every row back to one height
         self._regroup()
         self._folder_header.follow(model, self._header_title())
@@ -3016,6 +3020,7 @@ class PaneWidget(QFrame):
         for everybody who never opens the panel.
         """
         self._ask_preview()
+        self.cursorMoved.emit()
 
     def _reveal(self, name: str) -> None:
         """Put the cursor on a name once its listing has arrived.

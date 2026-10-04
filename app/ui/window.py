@@ -315,6 +315,8 @@ class MainWindow(QMainWindow):
             widget.manageFavoritesRequested.connect(self._manage_favorites)
             widget.viewRequested.connect(self._on_view_requested)
             widget.peekRequested.connect(self._open_peek)
+            widget.cursorMoved.connect(
+                lambda w=widget: self._quick_follow(w))
             widget.basketRequested.connect(self._fill_basket)
             widget.commandRequested.connect(self._on_command)
         if self._commands is not None:
@@ -450,6 +452,10 @@ class MainWindow(QMainWindow):
         self._palette.chosen.connect(self._on_palette_chosen)
         #: 0.36: the peek card, built the first time Space peeks.
         self._peek = None
+        #: 0.52: quick view, built the first time Ctrl+Q is pressed, and the
+        #: index of the pane it is laid over (the one *not* being read).
+        self._quick = None
+        self._quick_over: int | None = None
         #: 0.38: the basket, and its tray over the bottom left.
         from app.core.basket import Basket
         from app.ui.basket import BasketTray
@@ -581,7 +587,9 @@ class MainWindow(QMainWindow):
         self._action(files, "Queue", "Ctrl+J", self._show_queue)
         self._hint(files, "Job history", self._show_history)
         files.addSeparator()
-        self._action(files, "Quit", "Ctrl+Q", self.close)
+        # 0.52: Alt+F4, which Windows closes a window with anyway. Ctrl+Q is
+        # quick view, as it is in Double Commander.
+        self._action(files, "Quit", "Alt+F4", self.close)
 
         self._undo_action = self._hint(edit, "Undo\tCtrl+Z", self._undo_last)
         self._undo_action.setEnabled(False)
@@ -782,6 +790,14 @@ class MainWindow(QMainWindow):
                                 "cursor rather than every row that goes past.")
         pane_preview.triggered.connect(self._set_preview_pane)
         view.addAction(pane_preview)
+        self._quick_action = QAction("Quick view in the other pane", self, checkable=True)
+        self._quick_action.setShortcut(QKeySequence("Ctrl+Q"))
+        self._quick_action.setShortcutContext(Qt.WindowShortcut)
+        self._quick_action.setToolTip("The other pane shows the file under the "
+                                      "cursor, as large as the pane. Tab moves "
+                                      "into it to zoom; Ctrl+Q again puts it away.")
+        self._quick_action.triggered.connect(self.toggle_quick_view)
+        view.addAction(self._quick_action)
         grid = QAction("Thumbnail grid", self, checkable=True)
         grid.setShortcut(QKeySequence("Ctrl+Shift+P"))
         grid.setShortcutContext(Qt.WindowShortcut)
@@ -1708,6 +1724,91 @@ class MainWindow(QMainWindow):
         if self._peek is not None and self._peek.isVisible():
             self._peek.show_answer(path, paths.leaf(path), answer)
 
+    # ---------------------------------------------------------- 0.52 quick view
+
+    @property
+    def quick_view_on(self) -> bool:
+        return self._quick is not None and self._quick.isVisible()
+
+    def toggle_quick_view(self, *_args) -> None:
+        """Ctrl+Q: lay quick view over the other pane, or take it away."""
+        if self.quick_view_on:
+            self.close_quick_view()
+            return
+        if self._previews is None:
+            self._quick_action.setChecked(False)
+            self.statusBar().showMessage(
+                "the previewer is not available in this window", 6000)
+            return
+        from app.ui.quickview import QuickView
+
+        if self._quick is None:
+            self._quick = QuickView(self)
+            self._quick.apply_tokens(self._tokens)
+            self._quick.backRequested.connect(self.focus_active_pane)
+            self._quick.stepRequested.connect(
+                lambda step: self._current_widget().step_cursor(step))
+            self._quick.openRequested.connect(
+                lambda: self._current_widget()._open_current())  # noqa: SLF001
+            self._quick.viewRequested.connect(
+                lambda: self._current_widget().view_current())
+            self._previews.ready.connect(self._on_quick_ready)
+            self._previews.unavailable.connect(
+                lambda path, why: self._quick.problem(path, why)
+                if self.quick_view_on else None)
+            for widget in self._widgets:
+                widget.installEventFilter(self)
+        self._place_quick(1 - self._active)
+        self._quick.show()
+        self._quick.raise_()
+        self._quick_action.setChecked(True)
+        self._quick_follow(self._current_widget())
+        self.focus_active_pane()
+
+    def close_quick_view(self) -> None:
+        if self._quick is None:
+            return
+        self._quick.hide()
+        self._quick_over = None
+        self._quick_action.setChecked(False)
+        if self._previews is not None and self._quick.path \
+                and self._previews.pending == self._quick.path:
+            self._previews.cancel()
+        self.focus_active_pane()
+
+    def _place_quick(self, over: int) -> None:
+        """Lay the panel exactly over one pane, in the window's coordinates."""
+        self._quick_over = over
+        widget = self._widgets[over]
+        self._quick.set_side("left" if over == 1 else "right")
+        top_left = widget.mapTo(self, widget.rect().topLeft())
+        self._quick.setGeometry(top_left.x(), top_left.y(), widget.width(), widget.height())
+        self._quick.raise_()
+
+    def _quick_follow(self, widget) -> None:
+        """The pane being read moved its cursor: show what it is on now."""
+        if not self.quick_view_on or widget is not self._current_widget():
+            return
+        from app.io.protocol import PREVIEW_BOX, PREVIEW_TEXT_BYTES
+
+        target = widget.peek_target()
+        if target is None:
+            row = widget.current_row()
+            pane = self._current_pane()
+            entry = pane.current.model.entry(row) if row >= 0 else None
+            self._quick.not_a_file(entry.name if entry is not None else "..")
+            return
+        path, entry = target
+        if path == self._quick.path and self._previews.pending == path:
+            return
+        self._quick.waiting(path, entry.name)
+        self._previews.ask(path, box=PREVIEW_BOX, text_bytes=PREVIEW_TEXT_BYTES,
+                           mtime=entry.mtime, size=entry.size)
+
+    def _on_quick_ready(self, path: str, answer) -> None:
+        if self.quick_view_on:
+            self._quick.show_answer(path, paths.leaf(path), answer)
+
     def _on_viewer_showing(self, path: str) -> None:
         widget = self._current_widget()
         name = os.path.basename(path.replace("\\", "/"))
@@ -2097,6 +2198,8 @@ class MainWindow(QMainWindow):
             self._options.apply_tokens(tokens)
         if self._peek is not None:
             self._peek.apply_tokens(tokens)
+        if self._quick is not None:
+            self._quick.apply_tokens(tokens)
         if self._viewer is not None:
             # And the fourth, for the same reason and with the same trap: the
             # backdrop behind a picture is painted, so a viewer left open behind
@@ -2796,6 +2899,15 @@ class MainWindow(QMainWindow):
         return self._widgets[self._active]
 
     def _switch_pane(self) -> None:
+        if self.quick_view_on:
+            # 0.52: the other pane is a picture for now, so Tab goes into it
+            # (to zoom and pan) and back, rather than into a listing nobody can
+            # see.
+            if self._quick.hasFocus():
+                self.focus_active_pane()
+            else:
+                self._quick.setFocus(Qt.TabFocusReason)
+            return
         self._set_active(1 - self._active)
         self._current_widget().focus_listing()
 
@@ -2803,6 +2915,10 @@ class MainWindow(QMainWindow):
         self._set_active(self._widgets.index(widget))
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802 - Qt naming
+        if self._quick_over is not None and self.quick_view_on \
+                and event.type() in (QEvent.Resize, QEvent.Move) \
+                and watched is self._widgets[self._quick_over]:
+            self._place_quick(self._quick_over)
         if event.type() == QEvent.MouseButtonPress and isinstance(watched, QWidget):
             self._follow_press(watched)
         return super().eventFilter(watched, event)
@@ -2869,6 +2985,13 @@ class MainWindow(QMainWindow):
         self._splitter.glow_on(self._widgets[index])
         self._sync_rail_mark()
         self._sync_flat_action()
+        if self.quick_view_on and self._quick_over == index:
+            # The pane under quick view became the one being read -- a swap, a
+            # click on its tab strip before the overlay covered it, a pane
+            # opened from the rail. Quick view moves to the other side rather
+            # than covering the listing somebody is now using.
+            self._place_quick(1 - index)
+            self._quick_follow(self._widgets[index])
 
     def _sync_flat_action(self) -> None:
         """The View menu's tick follows the tab in front of the active pane."""

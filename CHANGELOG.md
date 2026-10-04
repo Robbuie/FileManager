@@ -5,6 +5,21 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.52.0]
+
+### Added
+- **Quick view: Ctrl+Q turns the other pane into a large preview of the
+  file under the cursor**, as Double Commander's Ctrl+Q does. Arrow through
+  the folder and the picture, text or export follows. Tab moves into the
+  preview, where + and - zoom, F fits, 1 shows one to one and dragging pans;
+  Tab or Esc goes back to the list. Ctrl+Q again puts it away and the other
+  pane is exactly as it was. The preview panel inside a pane (Ctrl+P) is
+  still there; it was always going to be small, because it shares one pane
+  with that pane's listing.
+
+### Changed
+- **Quit is Alt+F4.** Ctrl+Q is quick view now.
+
 ## [0.51.0]
 
 ### Added

@@ -117,7 +117,11 @@ class Previews(QObject):
         """
         if not path:
             return
-        key = (paths.normalize(path).lower(), float(mtime), int(size), int(box))
+        # 0.52: the text budget is part of the key. The preview pane reads 16 KB
+        # of a text file and quick view a quarter of a megabyte, and the pane's
+        # short answer must not be what quick view is handed from the cache.
+        key = (paths.normalize(path).lower(), float(mtime), int(size), int(box),
+               int(text_bytes))
         known = self._cache.get(key)
         if known is not None:
             self.cancel()

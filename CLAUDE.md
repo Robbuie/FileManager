@@ -345,6 +345,8 @@ which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail
 F3   view the file under the cursor
 Ctrl+P  the preview pane      Ctrl+Shift+P  the thumbnail grid
+Ctrl+Q  quick view: the other pane shows the file under the cursor (0.52);
+        Tab into it to zoom, Tab or Esc back. Quit is Alt+F4
 
 External commands, which are a table rather than code (0.17)
 F9   PowerShell here       Shift+F9  Command prompt here
