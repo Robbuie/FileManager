@@ -57,10 +57,21 @@ jobs:
             exit 1
           fi
 
+      # pytest's verdict, and nothing after it. The v0.56.2 run reported
+      # "1745 passed" and still exited 1: the failure came after pytest had
+      # finished, while the interpreter was tearing down Qt and the rest, and
+      # said nothing about where. So the code pytest returned is printed, and
+      # the process leaves with exactly that code through `os._exit`, before a
+      # teardown that tests nothing can overrule it. faulthandler is on so
+      # that a crash *during* the tests still prints where it was. Bash rather
+      # than PowerShell, so the shell is not a second thing that can decide.
+      # `pytest.main` reads pyproject.toml the same as the bare command does.
       - name: Tests
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest -q
+        run: |
+          python -X faulthandler -c "import os, sys, pytest; code = int(pytest.main(['-q'])); print(f'pytest returned {code}', flush=True); sys.stderr.flush(); os._exit(code)"
 
       # Inno Setup 6 ships on the Windows runner image. Installing it here is
       # for the day it does not, which is the sort of thing that changes
