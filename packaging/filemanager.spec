@@ -97,6 +97,10 @@ analysis = Analysis(
     hiddenimports=[
         "win32api", "win32file", "win32wnet", "win32com.shell.shell",
         "win32com.shell.shellcon", "pywintypes", "pythoncom",
+        # The file-list drag (`app/ui/shelldrag.py`) serves its data object
+        # through these, imported inside the function that drags.
+        "win32com.server.util", "win32com.server.exception",
+        "win32com.server.policy",
         # Imported inside `_heif` rather than at module level, for the reason
         # every import in `decode.py` is, so PyInstaller cannot see them.
         "pi_heif", "pillow_heif", "PIL.Image", "PIL.ImageOps",

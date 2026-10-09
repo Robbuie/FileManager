@@ -228,8 +228,8 @@ class GridView(QListView):
     the cell size.
     """
 
-    #: 0.50.3: drags go to the shell, as the table's do. See shelldrag.py.
-    shell_drag = True
+    #: 0.50.3: drags go to Windows, as the table's do. See shelldrag.py.
+    drag_out = "files"
 
     def startDrag(self, actions) -> None:  # noqa: N802 - Qt naming
         from app.ui import shelldrag

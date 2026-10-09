@@ -28,13 +28,44 @@ Two rules this keeps:
 
 Everything here is ctypes against shell32 and ole32, and a no-op that says why
 anywhere else -- in which case the pane falls back to Qt's drag.
+
+0.56.2: that did not fix it on the machine it was reported from -- the file
+still arrived in Outlook as its name -- and nothing about the drop says whether
+the shell drag ran and Outlook declined it, or failed and Qt's drag ran in its
+place. So there is a third drag, and the default: `drag_file_list` hands
+Windows a data object of this application's own that carries the file list
+(`CF_HDROP`) and the preferred effect and nothing else. That is the shape of
+Double Commander's drag, which Outlook attaches from, and with no link and no
+text in it there is nothing else for a target to take. `listing.drag_out`
+picks between the three, so they can be tried against Outlook one after the
+other without a build in between, and a drag that fell back to Qt says so on
+the status bar.
 """
 
 from __future__ import annotations
 
+import struct
 import sys
 
 DROPEFFECT_COPY = 1
+
+#: The values `listing.drag_out` takes, in the order Options offers them.
+FILE_LIST = "files"
+SHELL = "shell"
+QT = "qt"
+DRAG_OUT = (FILE_LIST, SHELL, QT)
+
+CF_HDROP = 15
+#: What `IDropSource` answers. Success codes, not failures, which is why they
+#: are returned rather than raised.
+DRAGDROP_S_DROP = 0x00040100
+DRAGDROP_S_CANCEL = 0x00040101
+DRAGDROP_S_USEDEFAULTCURSORS = 0x00040102
+MK_LBUTTON = 0x0001
+MK_RBUTTON = 0x0002
+
+#: The size of `DROPFILES`: the offset of the names, a point, and two BOOLs.
+_DROPFILES_SIZE = 20
 
 _IID_IDATAOBJECT = "{0000010e-0000-0000-C000-000000000046}"
 
@@ -126,6 +157,132 @@ def drag(hwnd: int, files: list[str]) -> tuple[bool, str]:
             shell32.ILFree(pidl)
 
 
+def dropfiles(files: list[str]) -> bytes:
+    """`CF_HDROP` as the bytes Windows expects: a `DROPFILES` header, then
+    every path in UTF-16, each ended by a null and the list by one more.
+
+    Pure, so it is tested off Windows. The paths are the strings the listing
+    already holds; nothing here goes near the files.
+    """
+    header = struct.pack("<IiiII", _DROPFILES_SIZE, 0, 0, 0, 1)
+    names = "".join(f"{path}\0" for path in files) + "\0"
+    return header + names.encode("utf-16-le")
+
+
+def drag_file_list(files: list[str]) -> tuple[bool, str]:
+    """Run a drag of `files` carrying only the file list (0.56.2).
+
+    Returns `(ran, problem)` the way `drag` does. A data object and a drop
+    source of this application's own, served through pywin32's COM gateways;
+    `DoDragDrop` runs the drag on this thread, which Qt has already initialised
+    for OLE because its own drags need the same.
+    """
+    if not available():
+        return False, "not Windows"
+    if not files:
+        return False, "nothing to drag"
+    try:
+        import ctypes
+
+        import pythoncom
+        from win32com.server.exception import COMException
+        from win32com.server.util import NewEnum, wrap
+    except ImportError as exc:
+        return False, f"no pywin32: {exc}"
+
+    # Registered by name, so the value is whatever this session gave it.
+    preferred = ctypes.windll.user32.RegisterClipboardFormatW("Preferred DropEffect")
+    payload = {CF_HDROP: dropfiles(files)}
+    if preferred:
+        payload[preferred] = struct.pack("<I", DROPEFFECT_COPY)
+
+    E_NOTIMPL = -2147467263            # 0x80004001
+    DV_E_FORMATETC = -2147221404       # 0x80040064
+    DV_E_TYMED = -2147221399           # 0x80040069
+    DV_E_DVASPECT = -2147221397        # 0x8004006B
+    OLE_E_ADVISENOTSUPPORTED = -2147221501  # 0x80040003
+
+    class FileList:
+        _com_interfaces_ = [pythoncom.IID_IDataObject]
+        _public_methods_ = ["GetData", "GetDataHere", "QueryGetData",
+                            "GetCanonicalFormatEtc", "SetData", "EnumFormatEtc",
+                            "DAdvise", "DUnadvise", "EnumDAdvise"]
+
+        formats = [(cf, None, pythoncom.DVASPECT_CONTENT, -1, pythoncom.TYMED_HGLOBAL)
+                   for cf in payload]
+
+        def _check(self, fe):
+            cf, _target, aspect, _index, tymed = fe
+            if cf not in payload:
+                raise COMException(hresult=DV_E_FORMATETC)
+            if not aspect & pythoncom.DVASPECT_CONTENT:
+                raise COMException(hresult=DV_E_DVASPECT)
+            if not tymed & pythoncom.TYMED_HGLOBAL:
+                raise COMException(hresult=DV_E_TYMED)
+            return cf
+
+        def GetData(self, fe):  # noqa: N802 - COM naming
+            medium = pythoncom.STGMEDIUM()
+            medium.set(pythoncom.TYMED_HGLOBAL, payload[self._check(fe)])
+            return medium
+
+        def QueryGetData(self, fe):  # noqa: N802
+            self._check(fe)
+
+        def EnumFormatEtc(self, direction):  # noqa: N802
+            if direction != pythoncom.DATADIR_GET:
+                raise COMException(hresult=E_NOTIMPL)
+            return NewEnum(self.formats, iid=pythoncom.IID_IEnumFORMATETC)
+
+        # A target may offer things back (Explorer writes what it did, and
+        # its drag image helper writes pictures); declining them all is what
+        # a data object with nothing to remember does.
+        def GetDataHere(self, fe):  # noqa: N802
+            raise COMException(hresult=E_NOTIMPL)
+
+        def GetCanonicalFormatEtc(self, fe):  # noqa: N802
+            raise COMException(hresult=E_NOTIMPL)
+
+        def SetData(self, fe, medium, release):  # noqa: N802
+            raise COMException(hresult=E_NOTIMPL)
+
+        def DAdvise(self, fe, flags, sink):  # noqa: N802
+            raise COMException(hresult=OLE_E_ADVISENOTSUPPORTED)
+
+        def DUnadvise(self, connection):  # noqa: N802
+            raise COMException(hresult=OLE_E_ADVISENOTSUPPORTED)
+
+        def EnumDAdvise(self):  # noqa: N802
+            raise COMException(hresult=OLE_E_ADVISENOTSUPPORTED)
+
+    class Source:
+        _com_interfaces_ = [pythoncom.IID_IDropSource]
+        _public_methods_ = ["QueryContinueDrag", "GiveFeedback"]
+
+        def QueryContinueDrag(self, escape, keys):  # noqa: N802
+            # Esc, or the right button joining in, cancels -- Explorer's rule.
+            if escape or keys & MK_RBUTTON:
+                return DRAGDROP_S_CANCEL
+            if not keys & MK_LBUTTON:
+                return DRAGDROP_S_DROP
+            return 0
+
+        def GiveFeedback(self, effect):  # noqa: N802
+            return DRAGDROP_S_USEDEFAULTCURSORS
+
+    try:
+        data = wrap(FileList(), iid=pythoncom.IID_IDataObject, useDispatcher=0)
+        source = wrap(Source(), iid=pythoncom.IID_IDropSource, useDispatcher=0)
+    except Exception as exc:  # noqa: BLE001 - any failure here means use Qt
+        return False, f"data object: {exc}"
+    try:
+        pythoncom.DoDragDrop(data, source, DROPEFFECT_COPY)
+    except pythoncom.com_error as exc:
+        # It started, so it is not Qt's to run again; say what happened.
+        return True, f"DoDragDrop {exc}"
+    return True, ""
+
+
 def common_folder(files: list[str]) -> str:
     """The folder every file is directly in, or "" when they are not all in
     one. Compared case-blind, the way Windows names are."""
@@ -161,17 +318,20 @@ def _release(pointer) -> None:
 
 
 def start_from_view(view) -> bool:
-    """`QAbstractItemView.startDrag`, handed to the shell when it can be.
+    """`QAbstractItemView.startDrag`, handed to Windows when it can be.
 
-    True when the shell ran the drag. False leaves it to Qt: off Windows, with
-    `listing.shell_drag` off (the view's `shell_drag` attribute), for rows
+    True when Windows ran the drag. False leaves it to Qt: off Windows, with
+    `listing.drag_out` set to Qt (the view's `drag_out` attribute), for rows
     inside an archive -- which are not files Windows can take, so their drag
-    carries only this application's own format -- or if the shell would not
-    start one.
+    carries only this application's own format -- or if Windows would not
+    start one, in which case the status bar says why. That last is the line
+    worth reading when a file still arrives in Outlook as its name: Qt's drag
+    is the one that carries a link.
     """
     from app.core import drops
 
-    if not getattr(view, "shell_drag", False) or not available():
+    how = getattr(view, "drag_out", QT)
+    if how not in (FILE_LIST, SHELL) or not available():
         return False
     model = view.model()
     picker = view.selectionModel()
@@ -189,11 +349,16 @@ def start_from_view(view) -> bool:
         return False
     drops.outgoing = list(files)
     try:
-        ran, problem = drag(int(view.window().winId()), files)
+        if how == FILE_LIST:
+            ran, problem = drag_file_list(files)
+        else:
+            ran, problem = drag(int(view.window().winId()), files)
     finally:
         drops.outgoing = None
     if problem:
+        said = f"drag: {problem}" if ran else \
+            f"drag: {problem} -- used Qt's drag, which Outlook takes as a link"
         status = getattr(view.window(), "statusBar", None)
         if callable(status):
-            status().showMessage(f"drag: {problem}", 8000)
+            status().showMessage(said, 15000)
     return ran

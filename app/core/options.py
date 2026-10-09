@@ -183,11 +183,15 @@ OPTIONS: tuple[Option, ...] = (
             "How big each file is against the largest in the folder. Behind "
             "keeps the figure clear of the bar on every theme.",
             new=True, words=("bar", "size")),
-    Option("listing.shell_drag", "listing", "Drag files out like Explorer",
-           "A file dragged into Outlook or another program arrives as the "
-           "file, an attachment in an email. Off is the older drag, which "
-           "Outlook took as a link to the file.", new=True,
-           words=("drag", "outlook", "attach", "email")),
+    _choice("listing.drag_out", "listing", "Dragging files out",
+            (("files", "The file list only"),
+             ("shell", "Like Explorer"),
+             ("qt", "Qt's drag")),
+            "How a drag into Outlook or another program is made. The file "
+            "list only is the way Double Commander drags; Like Explorer hands "
+            "the drag to Windows' shell; Qt's drag is the oldest, and Outlook "
+            "takes it as a link to the file rather than an attachment.",
+            new=True, words=("drag", "outlook", "attach", "email", "shell")),
     Option("listing.stripes", "listing", "Striped rows",
            "Every other row a shade lighter, to keep the eye on one line "
            "from a long name across to its date.", new=True,

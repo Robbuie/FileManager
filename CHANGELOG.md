@@ -5,6 +5,27 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.2]
+
+### Fixed
+- **A file dragged into Outlook still arrived as its name.** 0.50.3 handed
+  the drag to Windows' shell, and on at least one machine that did not
+  change what Outlook received. A drag out of a listing now carries the
+  file list and nothing else -- the way Double Commander drags -- so there
+  is no link or text in it for Outlook to take instead of the file. Not
+  checked against Outlook here: drag a file into a new message and it
+  should arrive as an attachment.
+
+### Changed
+- **Options > Listing > "Dragging files out" is now a choice of three**:
+  the file list only (the new default), Like Explorer (0.50.3's shell
+  drag), and Qt's drag (the original, which Outlook takes as a link). If
+  the default misbehaves somewhere, the other two are a setting away. The
+  0.50.3 on/off switch is replaced by this; anyone who had turned it off is
+  back on the default.
+- When a drag cannot be started by Windows and falls back to Qt's, the
+  status bar now says so, and for fifteen seconds rather than eight.
+
 ## [0.56.1]
 
 ### Fixed

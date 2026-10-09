@@ -58,6 +58,28 @@ def test_the_setting() -> None:
     from app.core import options
     from app.core.config import DEFAULTS
 
-    assert DEFAULTS["listing.shell_drag"] is True
-    assert "listing.shell_drag" in {row.key for row in options.OPTIONS}
+    assert DEFAULTS["listing.drag_out"] == shelldrag.FILE_LIST
+    row = next(row for row in options.OPTIONS if row.key == "listing.drag_out")
+    assert tuple(value for value, _label in row.choices) == shelldrag.DRAG_OUT
+    assert "listing.shell_drag" not in DEFAULTS
     assert not options.check()
+
+
+def test_the_file_list_is_what_windows_reads() -> None:
+    """0.56.2: `CF_HDROP` built by hand -- a 20-byte `DROPFILES` saying the
+    names start straight after it and are wide, then each path ended by a
+    null and the list by one more."""
+    import struct
+
+    raw = shelldrag.dropfiles([r"C:\Jobs\a.dwg", r"\\fs01\data\b.pdf"])
+    offset, x, y, nc, wide = struct.unpack("<IiiII", raw[:20])
+    assert (offset, x, y, nc, wide) == (20, 0, 0, 0, 1)
+    names = raw[20:].decode("utf-16-le")
+    assert names == "C:\\Jobs\\a.dwg\0\\\\fs01\\data\\b.pdf\0\0"
+
+
+def test_off_windows_the_file_list_drag_steps_aside() -> None:
+    import sys
+
+    if sys.platform != "win32":
+        assert shelldrag.drag_file_list([r"C:\a.txt"]) == (False, "not Windows")

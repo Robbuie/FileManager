@@ -221,12 +221,12 @@ _DRAG_EVENTS = (QEvent.DragEnter, QEvent.DragMove, QEvent.DragLeave, QEvent.Drop
 
 
 class ListingTable(QTableView):
-    """The listing's table, with its drags handed to the shell (0.50.3).
+    """The listing's table, with its drags handed to Windows (0.50.3).
 
     See `app/ui/shelldrag.py` for why: Qt's drag offers a dragged file as a
-    link as well, and Outlook took the link."""
+    link as well, and Outlook took the link. `drag_out` is the setting."""
 
-    shell_drag = True
+    drag_out = "files"
 
     def startDrag(self, actions) -> None:  # noqa: N802 - Qt naming
         from app.ui import shelldrag
@@ -739,7 +739,7 @@ class PaneWidget(QFrame):
         self._rows.size_bar = str(pane.config.get("listing.size_bar"))
         self._rows.stripes = bool(pane.config.get("listing.stripes"))
         self._rows.date_chips = bool(pane.config.get("listing.date_chips"))
-        self._view.shell_drag = bool(pane.config.get("listing.shell_drag"))
+        self._view.drag_out = str(pane.config.get("listing.drag_out"))
         self._header.set_edges(self._rows.edges)
         # The line down the listing at the edge being hovered or dragged, and
         # the width while dragging. Children of the view rather than painted
@@ -824,7 +824,7 @@ class PaneWidget(QFrame):
         # widget go on asking `self._view.selectionModel()` without caring which
         # view is in front.
         self._grid = GridView(self._pane.thumbnails)
-        self._grid.shell_drag = bool(pane.config.get("listing.shell_drag"))
+        self._grid.drag_out = str(pane.config.get("listing.drag_out"))
         _drag_out(self._grid)
         self._grid.activated.connect(self._on_activated)
         self._grid.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -3067,9 +3067,9 @@ class PaneWidget(QFrame):
         text = f"{marked} selected" + (f"  ·  {format_size(total)}" if total else "")
         self._pill.show_selection(text)
 
-    def set_shell_drag(self, on: bool) -> None:
-        self._view.shell_drag = bool(on)
-        self._grid.shell_drag = bool(on)
+    def set_drag_out(self, how: str) -> None:
+        self._view.drag_out = str(how)
+        self._grid.drag_out = str(how)
 
     def set_placeholder_motion(self, on: bool) -> None:
         self._placeholders.set_motion(on)
