@@ -125,8 +125,16 @@ What to look at rather than what to run:
 `pytest` bare and `python -m pytest` have to behave the same, and by default
 they do not: the interpreter puts the working directory on the path and pytest
 does not, so a bare run cannot import `app` at all. `pythonpath = ["."]` in
-`pyproject.toml` is what makes the two agree, and the release workflow runs the
-bare form -- so removing that line breaks the build and nothing else.
+`pyproject.toml` is what makes the two agree, and the release workflow runs
+pytest through `pytest.main` (`tools/run_tests.py`), which reads the same
+setting -- so removing that line breaks the build and nothing else.
+
+The workflow goes through `tools/run_tests.py` rather than a bare `pytest`
+because on the Windows runner the suite passes and the interpreter then crashes
+in DLL teardown on the way out (found in 0.56.2: "pytest returned 0", then an
+access violation). The script prints pytest's code and ends the process with
+`TerminateProcess`, which runs no teardown. Do not "simplify" it back to
+`pytest -q` or `os._exit`; both still run the teardown that crashes.
 
 The tests run anywhere, including off Windows — the session table is injected
 rather than read, and a hung worker is reproduced with SIGSTOP. That makes them
