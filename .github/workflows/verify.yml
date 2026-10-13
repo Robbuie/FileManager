@@ -32,7 +32,14 @@ jobs:
       # Qt needs somewhere to draw even when nothing is shown. Without this the
       # model tests fail on the runner and pass everywhere else, which is the
       # least useful kind of failure.
+      #
+      # Through tools/run_tests.py, as release.yml does: on this runner the
+      # suite passes and the interpreter then crashes in DLL teardown on the
+      # way out, which a bare `pytest -q` reports as a failure. Bash rather
+      # than PowerShell, so the shell is not a second thing that can decide
+      # the result.
       - name: Tests
+        shell: bash
         env:
           QT_QPA_PLATFORM: offscreen
-        run: pytest -q
+        run: python tools/run_tests.py
