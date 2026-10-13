@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.6]
+
+### Fixed
+- **An overwrite failed with "access denied" when the file already there was
+  read-only.** Every copy is written beside its target and renamed onto it,
+  and Windows refuses that rename over a read-only file. It showed up most
+  with File Compare's syncs, which overwrite as a matter of course, but an F5
+  copy answered "overwrite" failed the same way. The read-only mark is now
+  cleared once the new file is complete, the way Explorer does it, and put
+  back if the replace still fails for some other reason. The new file keeps
+  the source's own attributes. Not checked here: mark a file read-only in the
+  destination and overwrite it, from File Compare and with F5.
+
 ## [0.56.5]
 
 ### Fixed

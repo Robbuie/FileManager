@@ -88,6 +88,7 @@ import queue
 import re
 import shutil
 import signal
+import stat
 import threading
 import time
 from collections import Counter
@@ -877,7 +878,7 @@ class Runner:
             else:
                 partial = _partial_name(target)
                 self._copy_portable(job, item, partial, progress)
-            os.replace(paths.api(partial), paths.api(target))
+            _replace_onto(partial, target)
         except BaseException:
             if partial is not None:
                 _discard(partial)
@@ -1503,6 +1504,40 @@ def _discard(path: str) -> None:
         os.remove(paths.api(path))
     except OSError:
         pass
+
+
+def _replace_onto(partial: str, target: str) -> None:
+    """Rename a finished partial onto its target, read-only or not.
+
+    Windows refuses to rename over a read-only file with ERROR_ACCESS_DENIED,
+    and until 0.56.6 that refusal reached the person as "access denied" on a
+    copy they had already said should overwrite. Explorer clears the attribute
+    without asking, and so does an erase here (`_unlink`), so an overwrite
+    does too. The attribute is cleared only after the new file is complete --
+    a cancel or a failed copy never touches the original -- and is put back
+    if the rename still fails, so a refusal for any other reason leaves the
+    old file exactly as it was. The new file carries the source's own
+    attributes, which `CopyFileEx` copied onto the partial.
+    """
+    try:
+        os.replace(paths.api(partial), paths.api(target))
+        return
+    except PermissionError:
+        try:
+            mode = os.stat(paths.api(target)).st_mode
+        except OSError:
+            mode = None
+        if mode is None or mode & stat.S_IWRITE:
+            raise           # not read-only: a real refusal, or somebody has it
+    os.chmod(paths.api(target), mode | stat.S_IWRITE)
+    try:
+        os.replace(paths.api(partial), paths.api(target))
+    except OSError:
+        try:
+            os.chmod(paths.api(target), mode)
+        except OSError:
+            pass
+        raise
 
 
 #: What `SHFileOperation` returns when it was not allowed: the Win32 code, and

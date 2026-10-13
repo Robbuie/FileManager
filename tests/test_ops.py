@@ -387,3 +387,66 @@ def test_a_rename_is_refused_on_more_than_one_source(pair):
                      str(destination), rename="x")
     assert final(events).payload["failed"] >= 1
     assert tree(destination) == {}
+
+
+# ------------------------------------------------- 0.56.6 read-only targets
+#
+# Windows refuses to rename over a read-only file; POSIX does not, so these
+# stand in a rename that refuses the way Windows does and check the rest.
+
+def _windows_rename(monkeypatch, *, refuse_always=False):
+    import stat as _stat
+    from app.io import ops
+    real = os.replace
+
+    def replace(src, dst):
+        if os.path.exists(dst) and (refuse_always
+                                    or not os.stat(dst).st_mode & _stat.S_IWRITE):
+            raise PermissionError(13, "Access is denied")
+        real(src, dst)
+
+    monkeypatch.setattr(ops.os, "replace", replace)
+
+
+def test_an_overwrite_goes_through_a_read_only_file(tmp_path, monkeypatch):
+    from app.io.ops import _replace_onto
+    target = tmp_path / "a.txt"
+    target.write_text("mine")
+    os.chmod(target, 0o444)
+    partial = tmp_path / "a.txt.partial"
+    partial.write_text("alpha")
+    _windows_rename(monkeypatch)
+
+    _replace_onto(str(partial), str(target))
+
+    assert target.read_text() == "alpha"
+    assert not partial.exists()
+
+
+def test_a_refusal_that_is_not_read_only_is_left_alone(tmp_path, monkeypatch):
+    from app.io.ops import _replace_onto
+    target = tmp_path / "a.txt"
+    target.write_text("mine")
+    partial = tmp_path / "a.txt.partial"
+    partial.write_text("alpha")
+    _windows_rename(monkeypatch, refuse_always=True)
+
+    with pytest.raises(PermissionError):
+        _replace_onto(str(partial), str(target))
+    assert target.read_text() == "mine"
+
+
+def test_a_read_only_file_that_still_refuses_stays_read_only(tmp_path, monkeypatch):
+    import stat as _stat
+    from app.io.ops import _replace_onto
+    target = tmp_path / "a.txt"
+    target.write_text("mine")
+    os.chmod(target, 0o444)
+    partial = tmp_path / "a.txt.partial"
+    partial.write_text("alpha")
+    _windows_rename(monkeypatch, refuse_always=True)
+
+    with pytest.raises(PermissionError):
+        _replace_onto(str(partial), str(target))
+    assert target.read_text() == "mine"
+    assert not os.stat(target).st_mode & _stat.S_IWRITE
