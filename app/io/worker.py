@@ -127,6 +127,12 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
     except (ValueError, OSError):  # not the main thread, or no such signal
         pass
 
+    # 0.56.5: and end with the window's process even when it crashed rather
+    # than exiting. See `app/io/orphans.py`.
+    from app.io.orphans import follow_parent
+
+    follow_parent()
+
     cancelled: set[int] = set()
     while True:
         try:

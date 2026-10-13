@@ -113,6 +113,12 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
     except (ValueError, OSError):
         pass
 
+    # 0.56.5: and end with the window's process even when it crashed rather
+    # than exiting. See `app/io/orphans.py`.
+    from app.io.orphans import follow_parent
+
+    follow_parent()
+
     state: dict[str, Any] = {"live": None, "hwnd": 0, "com": False, "watch": None}
     while True:
         try:

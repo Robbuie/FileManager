@@ -68,7 +68,13 @@ SolidCompression=yes
 ; shutting down. Inno waits for the executable rather than failing on a locked
 ; file, and does not relaunch anything afterwards -- the application decides
 ; when it restarts, not the installer.
-CloseApplications=yes
+;
+; 0.56.5: force. A copy of FileManager.exe with no window -- a worker left
+; running by a version that crashed -- cannot be asked to close, only ended,
+; and with plain "yes" a silent update found its files in use and rolled
+; itself back. Workers now end with their parent (app/io/orphans.py); this is
+; for the ones an older version already left behind.
+CloseApplications=force
 RestartApplications=no
 
 [Languages]

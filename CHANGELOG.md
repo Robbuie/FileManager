@@ -5,6 +5,19 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.5]
+
+### Fixed
+- **A crash left copies of FileManager.exe running, and the next update
+  rolled back.** The background workers -- one per drive, plus the one that
+  serves right-click menus -- were only ended when the window's process
+  exited normally. After a crash they kept running with no window, holding
+  the install folder's files open, so a silent update found them in use and
+  undid itself. Each worker now watches the window's process and ends the
+  moment it is gone, however it went.
+- The installer now ends any such leftover copy instead of giving up on it,
+  for the ones an older version has already left behind.
+
 ## [0.56.4]
 
 ### Fixed
