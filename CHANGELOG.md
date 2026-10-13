@@ -5,6 +5,24 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.3]
+
+### Fixed
+- **A drop inside the window could crash it**, more often with Ctrl held. A
+  drag out of a listing ran inside the view's own drag handling, and mouse
+  movement reaching the view during the drag started a second drag inside
+  the first, which Windows cannot survive. A drag now refuses to start while
+  one is already running. The transfer prompt a drop asks also now opens
+  after the drop has finished rather than from inside it.
+- **Dragging files out of the window did nothing.** Since 0.50.3 the drag
+  was handed to Windows straight from a pointer message, and Windows' drag
+  loop never saw the mouse move: the cursor did not follow and the drop
+  landed back where it started. Both Windows drags (the file list, and Like
+  Explorer) are now started the way Qt starts its own, on a real mouse move.
+  This is also a likely reason the 0.50.3 and 0.56.2 Outlook fixes seemed to
+  change nothing. Not checked here: drag a file onto the desktop, into
+  Outlook, and onto the other pane with and without Ctrl.
+
 ## [0.56.2]
 
 ### Fixed

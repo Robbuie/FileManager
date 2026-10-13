@@ -40,6 +40,28 @@ text in it there is nothing else for a target to take. `listing.drag_out`
 picks between the three, so they can be tried against Outlook one after the
 other without a build in between, and a drag that fell back to Qt says so on
 the status bar.
+
+0.56.3: two faults in all of the above, both in how the drag was *started*
+rather than in what it carried. Reported as crashes on a drop inside the
+window (more often with Ctrl held) and as drags that would not leave it.
+
+- **A drag must not start inside a drag.** `QAbstractItemView` stays in its
+  dragging state for as long as `startDrag` runs, and the drag runs inside
+  it. Any mouse movement Qt is handed in that time -- and it is handed some,
+  see the next point -- reaches `mouseMoveEvent` again, which calls
+  `startDrag` again, which started a second `DoDragDrop` inside the first.
+  OLE has no answer for that and the process went down. `start_from_view`
+  now refuses to start one while another is running (`_running`).
+- **`DoDragDrop` has to be started the way Qt starts it.** Qt 6 takes the
+  mouse as `WM_POINTER` messages, and a `DoDragDrop` called straight from a
+  pointer message never sees the mouse move: the cursor does not follow, and
+  when the button is let go the drop lands where the drag began -- on the
+  pane it came from -- instead of on Explorer or Outlook. Qt's own drag goes
+  through a small loop first (`startDoDragDrop` in `qwindowsdrag.cpp`) that
+  waits for the next pointer update, turns it into a real mouse move with
+  `SendInput`, and calls `DoDragDrop` on that. Qt's drag did this all along,
+  which is why dragging out worked before 0.50.3. `_when_the_mouse_moves` is
+  the same loop, and both drags here now go through it.
 """
 
 from __future__ import annotations
@@ -68,6 +90,25 @@ MK_RBUTTON = 0x0002
 _DROPFILES_SIZE = 20
 
 _IID_IDATAOBJECT = "{0000010e-0000-0000-C000-000000000046}"
+
+#: 0.56.3: True while a drag started here is running. See `start_from_view`.
+_running = False
+
+WM_MOUSEMOVE = 0x0200
+WM_POINTERUPDATE = 0x0245
+WM_POINTERLEAVE = 0x024A
+_ANY_BUTTON = 0x0001 | 0x0002 | 0x0010 | 0x0020 | 0x0040   # MK_L/R/M/X1/X2
+#: The button bits of a pointer message's high word.
+_POINTER_FIRST, _POINTER_SECOND, _POINTER_THIRD = 0x10, 0x20, 0x40
+_POINTER_FLAG_PRIMARY = 0x2000
+_MOUSEEVENTF_MOVE = 0x0001
+_MOUSEEVENTF_LEFTDOWN = 0x0002
+_MOUSEEVENTF_RIGHTDOWN = 0x0008
+_MOUSEEVENTF_MIDDLEDOWN = 0x0020
+_MOUSEEVENTF_VIRTUALDESK = 0x4000
+_MOUSEEVENTF_ABSOLUTE = 0x8000
+_SM_XVIRTUALSCREEN, _SM_YVIRTUALSCREEN = 76, 77
+_SM_CXVIRTUALSCREEN, _SM_CYVIRTUALSCREEN = 78, 79
 
 
 def available() -> bool:
@@ -142,11 +183,14 @@ def drag(hwnd: int, files: list[str]) -> tuple[bool, str]:
             return False, f"SHCreateDataObject {result & 0xFFFFFFFF:#x}"
         effect = wintypes.DWORD(0)
         # A null drop source is the shell's own: the usual cursors, and Esc
-        # or the right button cancels.
-        result = shell32.SHDoDragDrop(hwnd, data_object, None, DROPEFFECT_COPY,
-                                      ctypes.byref(effect))
-        if result < 0:
-            return True, f"SHDoDragDrop {result & 0xFFFFFFFF:#x}"
+        # or the right button cancels. Started on a real mouse move, the way
+        # Qt starts its own (0.56.3, see the module docstring).
+        outcome: list[int] = []
+        _when_the_mouse_moves(lambda: outcome.append(
+            shell32.SHDoDragDrop(hwnd, data_object, None, DROPEFFECT_COPY,
+                                 ctypes.byref(effect))))
+        if outcome and outcome[0] < 0:
+            return True, f"SHDoDragDrop {outcome[0] & 0xFFFFFFFF:#x}"
         return True, ""
     except OSError as exc:
         return False, str(exc)
@@ -276,11 +320,125 @@ def drag_file_list(files: list[str]) -> tuple[bool, str]:
     except Exception as exc:  # noqa: BLE001 - any failure here means use Qt
         return False, f"data object: {exc}"
     try:
-        pythoncom.DoDragDrop(data, source, DROPEFFECT_COPY)
+        # Started on a real mouse move, the way Qt starts its own (0.56.3).
+        _when_the_mouse_moves(
+            lambda: pythoncom.DoDragDrop(data, source, DROPEFFECT_COPY))
     except pythoncom.com_error as exc:
         # It started, so it is not Qt's to run again; say what happened.
         return True, f"DoDragDrop {exc}"
     return True, ""
+
+
+def _when_the_mouse_moves(start) -> bool:
+    """Call `start` -- which runs `DoDragDrop` -- on the next real mouse move.
+
+    A port of `startDoDragDrop` in Qt's `qwindowsdrag.cpp`, which is what Qt
+    runs before its own `DoDragDrop` and for the reason the module docstring
+    gives: the press arrived as a pointer message, and OLE's drag loop only
+    follows the mouse once it has seen a mouse message. So: wait for the next
+    message on the window that has the mouse; a mouse move with a button down
+    starts the drag; a pointer update is turned into one with `SendInput`;
+    anything else is handed on to the window as usual.
+
+    One departure from Qt's loop: a pointer update with no button down ends
+    the wait. That is the button having been let go before the drag got
+    going, and Qt's loop would sit there until the pointer left the window.
+
+    Returns whether the drag ran. False is a drag that ended before it began,
+    which is the same as a click: nothing to do, and nothing for Qt to redo.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+
+    class POINTER_INFO(ctypes.Structure):  # noqa: N801 - Win32 naming
+        _fields_ = [("pointerType", wintypes.DWORD), ("pointerId", ctypes.c_uint32),
+                    ("frameId", ctypes.c_uint32), ("pointerFlags", ctypes.c_uint32),
+                    ("sourceDevice", wintypes.HANDLE), ("hwndTarget", wintypes.HWND),
+                    ("ptPixelLocation", wintypes.POINT),
+                    ("ptHimetricLocation", wintypes.POINT),
+                    ("ptPixelLocationRaw", wintypes.POINT),
+                    ("ptHimetricLocationRaw", wintypes.POINT),
+                    ("dwTime", wintypes.DWORD), ("historyCount", ctypes.c_uint32),
+                    ("InputData", ctypes.c_int32), ("dwKeyStates", wintypes.DWORD),
+                    ("PerformanceCount", ctypes.c_uint64),
+                    ("ButtonChangeType", ctypes.c_int)]
+
+    class MOUSEINPUT(ctypes.Structure):  # noqa: N801
+        _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG),
+                    ("mouseData", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+    class INPUT(ctypes.Structure):  # noqa: N801
+        # MOUSEINPUT is the largest member of the union, so this is the size
+        # Windows expects.
+        _fields_ = [("type", wintypes.DWORD), ("mi", MOUSEINPUT)]
+
+    user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+                                   wintypes.UINT, wintypes.UINT]
+    user32.GetMessageW.restype = wintypes.BOOL
+    user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+    user32.GetCapture.restype = wintypes.HWND
+    user32.GetFocus.restype = wintypes.HWND
+    user32.GetPointerInfo.argtypes = [ctypes.c_uint32, ctypes.POINTER(POINTER_INFO)]
+    user32.GetPointerInfo.restype = wintypes.BOOL
+    user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int]
+
+    # Qt's choice: the window holding the mouse, which is the one the press
+    # was on, or failing that the one with the keyboard.
+    hwnd = user32.GetCapture() or user32.GetFocus()
+    starting = False
+    msg = wintypes.MSG()
+    while True:
+        got = user32.GetMessageW(ctypes.byref(msg), hwnd, 0, 0)
+        if got == 0:
+            # WM_QUIT: not ours to swallow.
+            user32.PostQuitMessage(int(msg.wParam))
+            return False
+        if got < 0:
+            return False
+        if msg.message == WM_MOUSEMOVE:
+            # Only the move this loop asked for, or a real one with a button
+            # down, starts it.
+            if not starting and not msg.wParam & _ANY_BUTTON:
+                return False
+            start()
+            return True
+        if msg.message == WM_POINTERUPDATE:
+            high = (msg.wParam >> 16) & 0xFFFF
+            flags = _MOUSEEVENTF_ABSOLUTE | _MOUSEEVENTF_VIRTUALDESK | _MOUSEEVENTF_MOVE
+            if high & _POINTER_FIRST:
+                flags |= _MOUSEEVENTF_LEFTDOWN
+            if high & _POINTER_SECOND:
+                flags |= _MOUSEEVENTF_RIGHTDOWN
+            if high & _POINTER_THIRD:
+                flags |= _MOUSEEVENTF_MIDDLEDOWN
+            buttons = high & (_POINTER_FIRST | _POINTER_SECOND | _POINTER_THIRD)
+            if not starting and not buttons:
+                return False
+            info = POINTER_INFO()
+            if not user32.GetPointerInfo(msg.wParam & 0xFFFF, ctypes.byref(info)):
+                return False
+            if info.pointerFlags & _POINTER_FLAG_PRIMARY and not starting:
+                cursor = wintypes.POINT()
+                where = info.ptPixelLocation
+                if user32.GetCursorPos(ctypes.byref(cursor)) \
+                        and (cursor.x, cursor.y) != (where.x, where.y):
+                    left = user32.GetSystemMetrics(_SM_XVIRTUALSCREEN)
+                    top = user32.GetSystemMetrics(_SM_YVIRTUALSCREEN)
+                    width = user32.GetSystemMetrics(_SM_CXVIRTUALSCREEN) or 1
+                    height = user32.GetSystemMetrics(_SM_CYVIRTUALSCREEN) or 1
+                    event = INPUT(type=0)  # INPUT_MOUSE
+                    event.mi.dx = int((where.x - left) * (65535.0 / width))
+                    event.mi.dy = int((where.y - top) * (65535.0 / height))
+                    event.mi.dwFlags = flags
+                    user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(INPUT))
+                    starting = True
+            continue
+        user32.DispatchMessageW(ctypes.byref(msg))
+        if msg.message == WM_POINTERLEAVE:
+            return False
 
 
 def common_folder(files: list[str]) -> str:
@@ -330,6 +488,11 @@ def start_from_view(view) -> bool:
     """
     from app.core import drops
 
+    global _running
+    if _running:
+        # 0.56.3: the view asking again from inside the drag that is already
+        # running. True, so it does not start Qt's drag instead.
+        return True
     how = getattr(view, "drag_out", QT)
     if how not in (FILE_LIST, SHELL) or not available():
         return False
@@ -348,12 +511,14 @@ def start_from_view(view) -> bool:
     if not files:
         return False
     drops.outgoing = list(files)
+    _running = True
     try:
         if how == FILE_LIST:
             ran, problem = drag_file_list(files)
         else:
             ran, problem = drag(int(view.window().winId()), files)
     finally:
+        _running = False
         drops.outgoing = None
     if problem:
         said = f"drag: {problem}" if ran else \

@@ -3694,7 +3694,13 @@ class PaneWidget(QFrame):
         if kind == QEvent.Drop:
             self._show_drop(-1, "")
             self._claim()
-            self.dropRequested.emit(list(sources), destination, move)
+            # 0.56.3: handed on once the drop has returned, not from inside
+            # it. The window answers a drop with the transfer prompt, a modal
+            # dialog, and a dialog opened here would run inside Windows' drag
+            # loop -- and, for a drag out of this window, inside the view's
+            # `startDrag` as well, which is where the crashes on a drop were.
+            dropped = (list(sources), destination, move)
+            QTimer.singleShot(0, self, lambda: self.dropRequested.emit(*dropped))
             return True
         into = row if destination != self._pane.current.path else -1
         verb = "move" if move else "copy"

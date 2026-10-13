@@ -83,3 +83,21 @@ def test_off_windows_the_file_list_drag_steps_aside() -> None:
 
     if sys.platform != "win32":
         assert shelldrag.drag_file_list([r"C:\a.txt"]) == (False, "not Windows")
+
+
+def test_a_drag_is_not_started_inside_the_one_running() -> None:
+    """0.56.3: the view's mouseMoveEvent can call startDrag again while the
+    drag runs. That second call is swallowed rather than nested."""
+    from app.ui import shelldrag
+
+    class View:
+        drag_out = shelldrag.FILE_LIST
+
+        def model(self):  # pragma: no cover - must not be reached
+            raise AssertionError("a second drag was started")
+
+    shelldrag._running = True
+    try:
+        assert shelldrag.start_from_view(View()) is True
+    finally:
+        shelldrag._running = False

@@ -309,7 +309,36 @@ def _drop(target, kind, point, sources, modifiers=Qt.NoModifier):
         event = QDropEvent(QPointF(point), Qt.CopyAction, mime, Qt.LeftButton,
                            modifiers, event_type)
     QApplication.sendEvent(target, event)
+    if kind == "drop":
+        # 0.56.3: the pane hands a drop on once it has returned.
+        QApplication.processEvents()
     return event
+
+
+def test_a_drop_is_handed_on_after_it_returns(window, declined):
+    """Not from inside the drop: the window answers one with a modal prompt,
+    and a prompt opened inside Windows' drag loop is where the crashes were."""
+    from PySide6.QtCore import QMimeData, QPoint, QPointF
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    from app.core import drops
+
+    got = []
+    widget = window._widgets[1]
+    widget.dropRequested.connect(lambda *args: got.append(args))
+    viewport = widget._view.viewport()
+    point = QPoint(20, viewport.height() - 5)
+    mime = QMimeData()
+    mime.setData(drops.DRAG_FORMAT, drops.encode([LEFT + "\\a.dwg"]))
+    QApplication.sendEvent(viewport, QDragEnterEvent(
+        point, Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier))
+    event = QDropEvent(QPointF(point), Qt.CopyAction, mime, Qt.LeftButton,
+                       Qt.NoModifier)
+    QApplication.sendEvent(viewport, event)
+    assert event.isAccepted()
+    assert got == []
+    QApplication.processEvents()
+    assert got == [([LEFT + "\\a.dwg"], RIGHT, False)]
 
 
 def test_rows_dropped_on_the_other_pane_ask_for_a_copy_there(window, declined):
