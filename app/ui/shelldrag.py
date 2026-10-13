@@ -252,9 +252,6 @@ def drag_file_list(files: list[str]) -> tuple[bool, str]:
                             "GetCanonicalFormatEtc", "SetData", "EnumFormatEtc",
                             "DAdvise", "DUnadvise", "EnumDAdvise"]
 
-        formats = [(cf, None, pythoncom.DVASPECT_CONTENT, -1, pythoncom.TYMED_HGLOBAL)
-                   for cf in payload]
-
         def _check(self, fe):
             cf, _target, aspect, _index, tymed = fe
             if cf not in payload:
@@ -276,18 +273,39 @@ def drag_file_list(files: list[str]) -> tuple[bool, str]:
         def EnumFormatEtc(self, direction):  # noqa: N802
             if direction != pythoncom.DATADIR_GET:
                 raise COMException(hresult=E_NOTIMPL)
-            return NewEnum(self.formats, iid=pythoncom.IID_IEnumFORMATETC)
+            # Built on each call: what a target stored with SetData is
+            # offered back alongside the file list.
+            formats = [(cf, None, pythoncom.DVASPECT_CONTENT, -1,
+                        pythoncom.TYMED_HGLOBAL) for cf in payload]
+            return NewEnum(formats, iid=pythoncom.IID_IEnumFORMATETC)
 
-        # A target may offer things back (Explorer writes what it did, and
-        # its drag image helper writes pictures); declining them all is what
-        # a data object with nothing to remember does.
+        # 0.56.4: a target writes things back while the drag is over it --
+        # Windows' drag image helper stores "DragContext", "DropDescription"
+        # and the rest on every data object it sees, Explorer, Outlook and
+        # this window's own panes alike -- and this must say yes.
+        #
+        # Until 0.56.4 it said E_NOTIMPL, and that was the crash on a drag
+        # out. Those writes come with fRelease set, and pywin32's gateway
+        # takes the medium and frees it whatever this method answers; the
+        # caller, told the write failed, frees it as well. One handle freed
+        # twice, every time the pointer crossed a window that draws drag
+        # images. Accepting is the only answer under which both sides agree
+        # on who frees it. What was written is kept and handed back on
+        # GetData, which is what the helper expects of the object it writes
+        # to.
+        def SetData(self, fe, medium, release):  # noqa: N802
+            cf, _target, aspect, _index, _tymed = fe
+            if (cf != CF_HDROP and aspect & pythoncom.DVASPECT_CONTENT
+                    and medium.tymed == pythoncom.TYMED_HGLOBAL):
+                try:
+                    payload[cf] = bytes(medium.data)
+                except Exception:  # noqa: BLE001 - unreadable is not kept
+                    pass
+
         def GetDataHere(self, fe):  # noqa: N802
             raise COMException(hresult=E_NOTIMPL)
 
         def GetCanonicalFormatEtc(self, fe):  # noqa: N802
-            raise COMException(hresult=E_NOTIMPL)
-
-        def SetData(self, fe, medium, release):  # noqa: N802
             raise COMException(hresult=E_NOTIMPL)
 
         def DAdvise(self, fe, flags, sink):  # noqa: N802

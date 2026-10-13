@@ -137,6 +137,13 @@ class HangRecorder(QObject):
         except OSError:
             self._file = None
             return
+        # 0.56.4: and where it was when it died. A crash inside Windows -- an
+        # access violation in a drag, say -- ends the process with nothing
+        # said; this writes every thread's stack to the same file first.
+        try:
+            faulthandler.enable(file=self._file, all_threads=True)
+        except Exception:  # noqa: BLE001 - a recorder that fails stays quiet
+            pass
         self.beat()
         self._timer.start()
         self._thread = threading.Thread(target=self._watch, name="fm-hangs",
@@ -181,6 +188,7 @@ class HangRecorder(QObject):
         self._timer.stop()
         try:
             faulthandler.cancel_dump_traceback_later()
+            faulthandler.disable()
         except Exception:  # noqa: BLE001
             pass
         if self._file is not None:

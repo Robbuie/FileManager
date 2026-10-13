@@ -5,6 +5,23 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.56.4]
+
+### Fixed
+- **A drag out of the window still crashed it.** Windows' drag image
+  helper writes a few things of its own onto a dragged file list as the
+  pointer crosses Explorer, Outlook or the panes here, and the file-list drag
+  (the default since 0.56.2) turned those writes down. Turning one down meant
+  the same piece of memory was freed twice, once by each side. It now takes
+  them, which is what Explorer's own drags do. Not checked here: drag a file
+  onto the desktop, into Outlook, and onto the other pane, and wave it over
+  each on the way.
+
+### Added
+- A crash now leaves every thread's stack in `hangs.log`, beside the
+  settings, the way a freeze already did. If the window ever disappears
+  again, the end of that file says where it was.
+
 ## [0.56.3]
 
 ### Fixed
