@@ -68,7 +68,7 @@ def summarise(path: str, deadline: float) -> dict[str, Any] | None:
     #: port can be credited to it on the way past.
     program: dict[str, Any] | None = None
     module: dict[str, Any] | None = None
-    with open(paths.api(path), "rb") as handle:
+    with paths.open_shared(path, "rb") as handle:
         events = ElementTree.iterparse(handle, events=("start", "end"))
         for event, element in events:
             tag = element.tag
@@ -238,7 +238,7 @@ def summarise_l5k(path: str, deadline: float) -> dict[str, Any] | None:
     task: dict[str, Any] | None = None
     program: dict[str, Any] | None = None
     seen_controller = False
-    with open(paths.api(path), "r", encoding="utf-8", errors="replace") as handle:
+    with paths.open_shared(path, "r", encoding="utf-8", errors="replace") as handle:
         for number, line in enumerate(handle):
             if number % 256 == 0 and time.monotonic() > deadline:
                 summary["partial"] = True
@@ -527,7 +527,7 @@ def _load_l5x(path: str, deadline: float) -> Project:
     rung: dict | None = None
     stack: list = []
     count = 0
-    with open(paths.api(path), "rb") as handle:
+    with paths.open_shared(path, "rb") as handle:
         for event, element in ElementTree.iterparse(handle, events=("start", "end")):
             tag = element.tag
             if event == "start":
@@ -597,7 +597,7 @@ def _load_l5k(path: str, deadline: float) -> Project:
     routine: Routine | None = None
     comment: list[str] | None = None
     pending = ""
-    with open(paths.api(path), "r", encoding="utf-8", errors="replace") as handle:
+    with paths.open_shared(path, "r", encoding="utf-8", errors="replace") as handle:
         for number, line in enumerate(handle):
             if number % 512 == 0 and time.monotonic() > deadline:
                 raise TimeoutError("reading the export took too long")
@@ -704,7 +704,7 @@ def _head_text(data: bytes) -> str:
 
 def acd_header(path: str) -> dict[str, Any] | None:
     """What an .ACD says about itself in its text header, or None."""
-    with open(paths.api(path), "rb") as handle:
+    with paths.open_shared(path, "rb") as handle:
         data = handle.read(ACD_HEAD)
     text = _head_text(data)
     lines = [line.rstrip() for line in text.splitlines()]

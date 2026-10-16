@@ -5,6 +5,28 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.58.1]
+
+### Fixed
+- **A queued delete could leave some of the files behind.** Marking a
+  batch of .L5K or .ACD files and deleting them sometimes left a few, and
+  the job said only "the shell refused the delete (code 32)". Code 32 means
+  a file was in use, and the program using it was File Manager: the preview
+  of the file under the cursor was still reading it, and Windows will not
+  delete a file that is open that way. The shell treats the whole list as
+  one operation and stops at that file, so everything after it stayed too.
+  Previews, thumbnails, checksums, content search and archive browsing now
+  open files in a way that lets a delete go through while they read. A
+  delete also stops the preview of a file it is removing.
+- **A delete now says which files it left.** After the Recycle Bin call,
+  each file is checked. Anything still there gets one more try after a
+  second's pause. Whatever still won't go is listed by name in the queue,
+  with the program holding it when Windows can say. Retry runs just those
+  files. A share that stops answering before the check counts as "still
+  there", not "deleted". Not checked here: mark a dozen large .L5K files on
+  a share with the preview panel open and recycle them; also delete a file
+  that is open in Logix Designer, which should be named as left behind.
+
 ## [0.58.0]
 
 ### Changed

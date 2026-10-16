@@ -240,14 +240,18 @@ def _read_index(archive: str, deadline: float) -> Index:
             index.add(member)
         return index
     if index.kind == "zip":
-        with zipfile.ZipFile(paths.api(archive)) as handle:
+        # 0.58.1: through `open_shared`, so browsing an archive does not stop
+        # it being deleted. A ZipFile handed a file does not close it, hence
+        # the second name in the `with`.
+        with paths.open_shared(archive, "rb") as raw, zipfile.ZipFile(raw) as handle:
             for number, info in enumerate(handle.infolist()):
                 if number % 2048 == 0 and time.monotonic() > deadline:
                     raise TimeoutError("reading the archive took too long")
                 index.add(Member(info.filename, info.file_size, _zip_time(info),
                                  info.is_dir()))
         return index
-    with tarfile.open(paths.api(archive), "r:*") as handle:
+    with paths.open_shared(archive, "rb") as raw, \
+            tarfile.open(fileobj=raw, mode="r:*") as handle:
         for number, info in enumerate(handle):
             if number % 512 == 0 and time.monotonic() > deadline:
                 raise TimeoutError("reading the archive took too long")
@@ -373,14 +377,25 @@ def _open_member(archive: str, kind: str, member: Member) -> _Closing:
     if kind == "7z":
         return _SevenStream(archive, member)
     if kind == "zip":
-        handle = zipfile.ZipFile(paths.api(archive))
-        return _Closing(handle.open(member.name), handle)
-    handle = tarfile.open(paths.api(archive), "r:*")
+        raw = paths.open_shared(archive, "rb")
+        try:
+            handle = zipfile.ZipFile(raw)
+            return _Closing(handle.open(member.name), handle, raw)
+        except BaseException:
+            raw.close()
+            raise
+    raw = paths.open_shared(archive, "rb")
+    try:
+        handle = tarfile.open(fileobj=raw, mode="r:*")
+    except BaseException:
+        raw.close()
+        raise
     stream = handle.extractfile(member.name)
     if stream is None:
         handle.close()
+        raw.close()
         raise FileNotFoundError(member.name)
-    return _Closing(stream, handle)
+    return _Closing(stream, handle, raw)
 
 
 # ------------------------------------------------------------- 7-Zip (0.51)

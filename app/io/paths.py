@@ -287,6 +287,95 @@ def api(path: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# Reading without standing in a delete's way (0.58.1).
+# --------------------------------------------------------------------------
+
+_GENERIC_READ = 0x80000000
+_SHARE_ALL = 0x1 | 0x2 | 0x4          # FILE_SHARE_READ | WRITE | DELETE
+_OPEN_EXISTING = 3
+_FILE_ATTRIBUTE_NORMAL = 0x80
+_FILE_FLAG_SEQUENTIAL_SCAN = 0x08000000
+
+
+_kernel32_cache = None
+
+
+def _kernel32():
+    """kernel32 with CreateFileW typed, made once: a preview pane asks for a
+    file on every row the cursor stops on."""
+    global _kernel32_cache
+    if _kernel32_cache is None:
+        import ctypes
+        from ctypes import wintypes
+
+        library = ctypes.WinDLL("kernel32", use_last_error=True)
+        library.CreateFileW.argtypes = (
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+        library.CreateFileW.restype = wintypes.HANDLE
+        library.CloseHandle.argtypes = (wintypes.HANDLE,)
+        library.CloseHandle.restype = wintypes.BOOL
+        _kernel32_cache = library
+    return _kernel32_cache
+
+
+def open_shared(path: str, mode: str = "rb", *, encoding: str | None = None,
+                errors: str | None = None):
+    """Open a file for reading the way a delete can get past.
+
+    Python's `open` on Windows lets others read and write the file while it
+    has it, but not delete or rename it: the C runtime leaves FILE_SHARE_DELETE
+    out. So a preview halfway through a 40 MB .L5K was enough to make a
+    recycle of that file fail -- and since the shell takes the whole list as
+    one operation, the files after it with it. The Recycle Bin is a rename, so
+    it needs the same share bit a delete does.
+
+    With FILE_SHARE_DELETE the read carries on against the file it opened and
+    the delete goes through; Windows removes the name at once and the data
+    when the last handle closes. Everything in `app/io` that reads a file the
+    user might be about to delete -- previews, thumbnails, checksums, content
+    search, archive indexes -- opens it through here.
+
+    Read modes only: a write that let the file be deleted under it would be a
+    copy that could report success into a file that no longer has a name.
+    Off Windows this is `open`, which never had the problem.
+    """
+    if "r" not in mode or any(flag in mode for flag in "wax+"):
+        raise ValueError(f"open_shared reads only, not {mode!r}")
+    target = api(path)
+    if os.name != "nt":
+        return open(target, mode, encoding=encoding, errors=errors)  # noqa: SIM115
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = _kernel32()
+    handle = kernel32.CreateFileW(target, _GENERIC_READ, _SHARE_ALL, None,
+                                  _OPEN_EXISTING,
+                                  _FILE_ATTRIBUTE_NORMAL | _FILE_FLAG_SEQUENTIAL_SCAN,
+                                  None)
+    if handle is None or handle == wintypes.HANDLE(-1).value:
+        # WinError carries the Windows code, so a missing file still arrives
+        # as FileNotFoundError and a refused one as PermissionError -- the
+        # same exceptions `open` raised, which is what every caller catches.
+        error = ctypes.WinError(ctypes.get_last_error())
+        error.filename = path
+        raise error
+    try:
+        # O_BINARY is not optional. Without it the C runtime reads in text
+        # mode -- CRLF folded and Ctrl+Z taken as the end of the file -- and a
+        # checksum or an image decode would quietly be of different bytes.
+        descriptor = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except OSError:
+        kernel32.CloseHandle(handle)
+        raise
+    # From here the descriptor owns the handle, and the file object owns the
+    # descriptor: closing the file closes both.
+    return os.fdopen(descriptor, mode, encoding=encoding, errors=errors)
+
+
+# --------------------------------------------------------------------------
 # The letter -> UNC table.
 #
 # Cached because it is read on every resolve and changes only when the user

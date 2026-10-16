@@ -104,7 +104,7 @@ def read_exif(path: str) -> dict[str, Any]:
         return {}
     _register_heif()
     try:
-        with Image.open(paths.api(path)) as picture:
+        with paths.open_shared(path, "rb") as raw, Image.open(raw) as picture:
             exif = picture.getexif()
             if not exif:
                 return {}

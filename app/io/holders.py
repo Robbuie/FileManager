@@ -114,6 +114,20 @@ def describe(exc: BaseException) -> str:
     return _MARK.format(name=name, pid=pid)
 
 
+def note(path: str) -> str:
+    """`describe` for a path rather than an exception (0.58.1).
+
+    A recycle goes through the shell, which says only that it stopped, never
+    which file or why. What is left behind is found afterwards by looking, and
+    this is the same question asked of each file that is still there.
+    """
+    found = holding(path)
+    if not found:
+        return ""
+    pid, name = found[0]
+    return _MARK.format(name=name, pid=pid)
+
+
 def parse(message: str) -> tuple[int, str] | None:
     """`(pid, name)` back out of a message `describe` added to, or None."""
     match = _READ.search(message or "")

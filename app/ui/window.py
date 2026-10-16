@@ -329,6 +329,10 @@ class MainWindow(QMainWindow):
             self._ejector.finished.connect(self._on_ejected)
         transfers.conflict.connect(self._on_conflict)
         transfers.finished.connect(self._on_transfer_finished)
+        # 0.58.1: a delete lets go of the preview it is about to remove.
+        removing = getattr(transfers, "removing", None)
+        if removing is not None and self._previews is not None:
+            removing.connect(self._previews.withdraw)
         if updates is not None:
             updates.available.connect(self._on_update_available)
             updates.uptodate.connect(self._on_up_to_date)

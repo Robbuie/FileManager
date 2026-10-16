@@ -159,6 +159,24 @@ class Previews(QObject):
         self._request_id = None
         self._path = None
 
+    def withdraw(self, removed) -> None:
+        """Stop reading a file that is about to be deleted (0.58.1).
+
+        The decode for the row under the cursor is very often the file that has
+        just been marked and deleted. The worker's read no longer stands in the
+        delete's way -- `paths.open_shared` -- but there is no reason to keep
+        reading something that is going, or to let its answer arrive and be
+        drawn for a row that has gone. Anything else being decoded is left
+        alone: a delete in one pane says nothing about the file the other pane
+        is showing.
+        """
+        doomed = {paths.normalize(path).lower() for path in removed}
+        queued = self._queued[0] if self._queued is not None else None
+        for path in (self._path, queued):
+            if path and paths.normalize(path).lower() in doomed:
+                self.cancel()
+                return
+
     def clear(self) -> None:
         """Forget every decoded picture. What a theme change does not need and
         a settings change that alters the box does."""

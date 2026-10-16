@@ -128,6 +128,12 @@ from app.io.protocol import (
 #: user something they need to act on.
 RETRY_DELAYS = (0.5, 1.5, 3.0)
 
+#: Seconds between a recycle that left files behind and the one attempt made
+#: at what it left (0.58.1). A preview's read or a scanner's look at a file
+#: just touched is over in well under this; something holding a file for
+#: longer is a program with it open, and waiting longer would not help.
+RECYCLE_SETTLE = 1.0
+
 #: Files at least this big are copied past the system cache. A multi-gigabyte
 #: file pushed through the cache evicts everything else in it and then gets
 #: written twice, which is what Microsoft's own guidance on `CopyFileEx` says
@@ -518,21 +524,45 @@ class Runner:
             "name": "", "done": 0, "total": len(job.sources),
             "interruptible": False,
         })
+        sources = list(job.sources)
         try:
             from app.io import worker  # deferred: it imports pywin32 on Windows
-            deleted, problem, code = worker.recycle(list(job.sources))
+            _deleted, problem, code = worker.recycle(sources)
+            if problem and code == 0:
+                # Not the shell refusing -- the shell was never asked (no
+                # pywin32). Nothing was touched, so there is nothing to look at.
+                self._emit(job.id, Progress.FAILED_ITEM, {"name": ""}, message=problem)
+                self._emit(job.id, Progress.DONE, {
+                    "copied": 0, "skipped": 0, "failed": len(sources),
+                    "bytes": 0, "cancelled": False})
+                return
+            # 0.58.1: what is still there, looked at rather than inferred. The
+            # shell takes the list as one operation and stops at the first file
+            # it cannot move -- one somebody has open, most often -- so a
+            # refusal can mean "the first eleven went and the last four did
+            # not", and the old account of it was "0 deleted" with nothing
+            # named. Whatever is left gets one more attempt after a pause long
+            # enough for a preview or a virus scanner to let go of it.
+            left = _still_there(sources)
+            if left:
+                time.sleep(RECYCLE_SETTLE)
+                _again, later, later_code = worker.recycle(left)
+                if later:
+                    problem, code = later, later_code
+                left = _still_there(left)
         except Exception as exc:  # noqa: BLE001 - a job must always end
-            self._emit(job.id, Progress.DONE, {"failed": len(job.sources)},
+            self._emit(job.id, Progress.DONE, {"failed": len(sources)},
                        message=_describe(exc))
             return
-        if problem:
-            self._emit(job.id, Progress.FAILED_ITEM,
-                       {"name": "", "denied": code in _DENIED_CODES},
-                       message=problem)
+        for source in left:
+            reason = problem or "still there after the delete"
+            self._emit(job.id, Progress.FAILED_ITEM, {
+                **_retryable(source, ""), "path": source,
+                "denied": code in _DENIED_CODES,
+            }, message=reason + holders.note(paths.api(source)))
         self._emit(job.id, Progress.DONE, {
-            "copied": deleted, "skipped": 0,
-            "failed": len(job.sources) - deleted if problem else 0,
-            "bytes": 0, "cancelled": False,
+            "copied": len(sources) - len(left), "skipped": 0,
+            "failed": len(left), "bytes": 0, "cancelled": False,
         })
 
     def _erase(self, job: Job) -> None:
@@ -1317,6 +1347,26 @@ class _Destination:
             except OSError:
                 self._names[folder] = None
         return self._names[folder]
+
+
+def _still_there(sources: Iterable[str]) -> list[str]:
+    """The sources a delete did not remove, in their order.
+
+    Gone means the name is not there. A path that cannot be asked about -- the
+    share stopped answering between the delete and the look -- is counted as
+    still there: claiming a file was deleted because nobody could check is the
+    wrong way round to be wrong.
+    """
+    left = []
+    for source in sources:
+        try:
+            os.lstat(paths.api(source))
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            pass
+        left.append(source)
+    return left
 
 
 def _retryable(source: str, into: str) -> dict:

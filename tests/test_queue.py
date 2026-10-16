@@ -242,25 +242,31 @@ def test_a_recycle_says_it_cannot_be_interrupted_before_it_starts(monkeypatch):
     assert first.payload["interruptible"] is False
 
 
-def test_a_refused_recycle_is_marked_denied(monkeypatch):
-    from app.io import worker
+def test_a_refused_recycle_is_marked_denied(tmp_path, monkeypatch):
+    from app.io import ops, worker
 
+    # 0.58.1: a refusal is reported for what is still there, so the file has
+    # to exist for there to be anything to report.
+    (tmp_path / "a").write_text("x")
+    monkeypatch.setattr(ops, "RECYCLE_SETTLE", 0)
     monkeypatch.setattr(worker, "recycle",
                         lambda targets: (0, "the shell refused it", 5))
     runner = Runner(Inbox(), queue.Queue())
-    runner._recycle(job(1, JobKind.RECYCLE, ["a"]))
+    runner._recycle(job(1, JobKind.RECYCLE, [tmp_path / "a"]))
 
     failed = kinds(drain(runner), Progress.FAILED_ITEM)[0]
     assert failed.payload["denied"] is True
 
 
-def test_a_recycle_that_failed_for_another_reason_is_not_denied(monkeypatch):
-    from app.io import worker
+def test_a_recycle_that_failed_for_another_reason_is_not_denied(tmp_path, monkeypatch):
+    from app.io import ops, worker
 
+    (tmp_path / "a").write_text("x")
+    monkeypatch.setattr(ops, "RECYCLE_SETTLE", 0)
     monkeypatch.setattr(worker, "recycle",
                         lambda targets: (0, "something else went wrong", 124))
     runner = Runner(Inbox(), queue.Queue())
-    runner._recycle(job(1, JobKind.RECYCLE, ["a"]))
+    runner._recycle(job(1, JobKind.RECYCLE, [tmp_path / "a"]))
 
     failed = kinds(drain(runner), Progress.FAILED_ITEM)[0]
     assert failed.payload["denied"] is False

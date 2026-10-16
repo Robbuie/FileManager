@@ -323,6 +323,10 @@ class TransferQueue(QObject):
     conflict = Signal(int, dict)        # job id, what collided
     finished = Signal(object)           # JobState, when a job ends
     history_changed = Signal()          # an entry was added to `history`
+    #: 0.58.1: the paths a recycle or an erase is about to remove, sent before
+    #: the job is submitted. For whatever is reading one of them -- the preview
+    #: under the cursor, most often -- to let go first.
+    removing = Signal(tuple)
 
     def __init__(self, parent: QObject | None = None, *, history_path: str = "",
                  past: list[dict] | None = None) -> None:
@@ -392,10 +396,14 @@ class TransferQueue(QObject):
 
     def recycle(self, sources: Iterable[str]) -> int:
         """To the Recycle Bin. No destination: the shell knows where that is."""
+        sources = tuple(sources)
+        self.removing.emit(sources)
         return self._start(JobKind.RECYCLE, sources, "")
 
     def erase(self, sources: Iterable[str]) -> int:
         """Permanently, item by item."""
+        sources = tuple(sources)
+        self.removing.emit(sources)
         return self._start(JobKind.ERASE, sources, "")
 
     def retry(self, job_id: int) -> int | None:

@@ -323,7 +323,7 @@ def _raw(path: str, size: int, box: int, deadline: float,
     avoid.
     """
     del text_bytes, page
-    with open(paths.api(path), "rb") as handle:
+    with paths.open_shared(path, "rb") as handle:
         head = handle.read(min(size, RAW_SCAN_BYTES))
     best: tuple[int, int] | None = None          # (length, start)
     at = head.find(JPEG_START)
@@ -404,7 +404,7 @@ def _heif(path: str, size: int, box: int, deadline: float,
         break
 
     store = BytesIO()
-    with Image.open(paths.api(path)) as picture:
+    with paths.open_shared(path, "rb") as raw, Image.open(raw) as picture:
         # A live photograph or a burst is several images in one container. The
         # count is worth reporting for the same reason a PDF's page count is:
         # the viewer offers keys for it.
@@ -598,7 +598,7 @@ def _bytes(path: str, size: int, box: int, deadline: float,
     """
     del box, deadline, page
     want = max(text_bytes, PREVIEW_HEX_BYTES)
-    with open(paths.api(path), "rb") as handle:
+    with paths.open_shared(path, "rb") as handle:
         head = handle.read(min(size, want) or PREVIEW_HEX_BYTES)
 
     encoding = _bom(head)

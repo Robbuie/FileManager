@@ -423,7 +423,7 @@ def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                     continue
                 if keep is not None:
                     try:
-                        wanted = keep(name, row, lambda p=entry.path: open(paths.api(p), "rb"),
+                        wanted = keep(name, row, lambda p=entry.path: paths.open_shared(p, "rb"),
                                       beat)
                     except _WalkCancelled:
                         cancelled.discard(request.id)
@@ -2240,7 +2240,7 @@ def _duplicates(request: Request, outbox: Any, control: Any, cancelled: set[int]
 def _digest(path: str, beat, *, head: int | None = None) -> str | None:
     hasher = hashlib.sha256()
     try:
-        with open(paths.api(path), "rb") as handle:
+        with paths.open_shared(path, "rb") as handle:
             if head is not None:
                 hasher.update(handle.read(head))
             else:
@@ -2315,7 +2315,7 @@ def _hash(request: Request, outbox: Any, control: Any, cancelled: set[int], *,
             hasher = hashlib.new(algorithm)
             try:
                 stream = opener(name) if opener is not None else \
-                    open(paths.api(os.path.join(request.path, name)), "rb")
+                    paths.open_shared(os.path.join(request.path, name), "rb")
                 with stream:
                     while True:
                         beat()
