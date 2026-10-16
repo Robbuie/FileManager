@@ -109,12 +109,6 @@ SHELL_VERBS_WE_HAVE = frozenset({
     "open", "delete", "rename", "refresh", "cut", "copy", "paste",
 })
 
-#: Milliseconds of not typing before a quick search forgets what was typed.
-#: Long enough to think about the next letter of a long name, short enough
-#: that coming back to the keyboard starts a new search rather than extending
-#: one nobody remembers making.
-SEARCH_FORGETS_AFTER = 1500
-
 #: 0.34: how long the scrollbar map waits after the last change before it is
 #: worked out again. Long enough to swallow a run of Ins presses and the
 #: batches of a streaming listing; short enough to look immediate.
@@ -701,8 +695,14 @@ class PaneWidget(QFrame):
         self._filter.setProperty("role", "filter")
         self._filter.setPlaceholderText(
             "Filter this folder -- a name, or ext:dwg  size:>10mb  modified:week  (Esc clears)")
-        self._filter.textChanged.connect(self._pane.set_filter)
+        self._filter.textChanged.connect(self._on_filter_text)
         self._filter.hide()
+        #: 0.57: how many rows the filter is letting through, beside the box.
+        #: The status line says it too, but that is at the other end of the
+        #: pane, and the box is where somebody typing is looking.
+        self._filter_count = QLabel("")
+        self._filter_count.setProperty("role", "space")
+        self._filter_count.hide()
 
         self._view = ListingTable()
         self._header = SortHeader(self._view)
@@ -986,7 +986,12 @@ class PaneWidget(QFrame):
         layout.addLayout(controls)
         layout.addWidget(self._folder_header)
         layout.addWidget(self._stale_bar)
-        layout.addWidget(self._filter)
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(4)
+        filter_row.addWidget(self._filter, 1)
+        filter_row.addWidget(self._filter_count)
+        layout.addLayout(filter_row)
         layout.addWidget(self._body, 1)
         layout.addLayout(footer)
 
@@ -1069,20 +1074,12 @@ class PaneWidget(QFrame):
         #: answers its own keys and nothing else.
         self._command_keys: dict[str, str] = {}
 
-        #: What has been typed into the listing so far, and the timer that
-        #: forgets it. A quick search that never expires means the letters
-        #: typed a minute ago are still narrowing the next one.
-        self._search = ""
-        #: The same term, kept past that timeout, so Ctrl+G has something to
-        #: step. The timeout is about not extending a search nobody remembers
-        #: typing; it is not a statement that the search is over. Cleared by
-        #: Escape and by a change of folder, which are.
-        self._last_search = ""
-        self._search_state = "idle"
-        self._search_timer = QTimer(self)
-        self._search_timer.setSingleShot(True)
-        self._search_timer.setInterval(SEARCH_FORGETS_AFTER)
-        self._search_timer.timeout.connect(self._clear_search)
+        #: 0.57: names marked while the filter hides them, lower-cased. Every
+        #: change of filter text resets the model, which drops the selection;
+        #: carrying the marks by name is what lets somebody mark, narrow, mark
+        #: again and clear without losing the first lot. Only rows on screen
+        #: are ever in the selection, so an operation acts on what can be seen.
+        self._hidden_marks: set[str] = set()
         #: 0.34: the scrollbar map is worked out after the dust settles --
         #: marking with Ins held down is dozens of selection changes a second,
         #: and a streaming listing is one insert per batch.
@@ -1499,8 +1496,104 @@ class PaneWidget(QFrame):
         self._path.setFocus(Qt.ShortcutFocusReason)
         self._path.selectAll()
 
-    def focus_filter(self) -> None:
+    def _show_filter(self) -> None:
         self._filter.show()
+        self._filter_count.show()
+        self._update_filter_count()
+
+    def _hide_filter(self) -> None:
+        self._filter.hide()
+        self._filter_count.hide()
+
+    def _update_filter_count(self) -> None:
+        """"12 of 4,301" beside the box, or that nothing matched."""
+        if self._filter.isHidden():
+            return
+        shown, total = self._pane.current.model.filter_counts()
+        if not self._filter.text().strip():
+            text = "Esc closes"
+        elif shown:
+            text = f"{shown:,} of {total:,}  ·  Esc clears"
+        else:
+            text = f"no match in {total:,}  ·  Esc clears"
+        self._filter_count.setText(text)
+
+    def _on_filter_text(self, text: str) -> None:
+        """The filter changed, typed into the box or into the listing.
+
+        Marks are carried across by name, because the model resets on every
+        keystroke and a reset drops the selection. The cursor goes to the first
+        match while narrowing, so Enter opens it; once the filter is cleared it
+        goes back to the file it was on, so the one somebody filtered to find
+        is the one in front of them in the whole folder.
+        """
+        model = self._pane.current.model
+        marked = set(self._hidden_marks)
+        for row in self._selected_rows():
+            entry = model.entry(row)
+            if entry is not None:
+                marked.add(entry.name.lower())
+        cursor = model.entry(self.current_row())
+        self._pane.set_filter(text)
+        rows = model.all_rows()
+        visible = {model.entry(row).name.lower() for row in rows}
+        self._hidden_marks = marked - visible
+        if marked & visible:
+            self._apply_selection(model.rows_named(marked & visible), on=True)
+        if text.strip():
+            if rows:
+                self._go_to(rows[0])
+        elif cursor is not None:
+            row = model.row_of(cursor.name)
+            if row >= 0:
+                self._go_to(row)
+        self._update_filter_count()
+        self._render_status()
+        self._schedule_map()
+
+    def _on_filter_key(self, event) -> bool:
+        """Typing in the listing filters it. True means the key was ours.
+
+        A printable character opens the filter with that character in it and
+        narrows straight away; the keyboard stays on the listing, so the
+        arrows, Enter and the function keys go on acting on the rows. Space
+        joins in only once something has been typed -- before that it is the
+        folder-size key. Backspace shortens the filter and closes it when it
+        runs out, and while the filter is open it never leaves the folder:
+        losing the folder to one mistyped letter is not what anybody meant.
+        Escape is answered in `keyPressEvent`, behind the walk and the counting
+        it would rather stop first.
+        """
+        held = event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
+        if event.key() == Qt.Key_Backspace and not held \
+                and not self._filter.isHidden():
+            text = self._filter.text()[:-1]
+            if text:
+                self._filter.setText(text)
+            else:
+                self.clear_filter()
+            return True
+        if not self._is_type_key(event, space=bool(self._filter.text())):
+            return False
+        if self._filter.isHidden():
+            self._show_filter()
+        self._filter.setText(self._filter.text() + event.text())
+        return True
+
+    def _is_type_key(self, event, *, space: bool = False) -> bool:
+        """Whether a keystroke is somebody typing a name.
+
+        A printable character with no Ctrl or Alt held. Shift is allowed
+        through because it is how capitals and most punctuation are typed, and
+        the filter is case-insensitive anyway. Space only when `space` says so.
+        """
+        text = event.text()
+        if not text or not text.isprintable() or (text == " " and not space):
+            return False
+        return not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
+
+    def focus_filter(self) -> None:
+        self._show_filter()
         self._filter.setFocus(Qt.ShortcutFocusReason)
         self._filter.selectAll()
 
@@ -1510,7 +1603,7 @@ class PaneWidget(QFrame):
         box is kept, with the cursor at its end, rather than added twice."""
         from app.core.colfilter import FIELDS
 
-        self._filter.show()
+        self._show_filter()
         text = self._filter.text()
         found = None
         for part in text.split():
@@ -2148,7 +2241,7 @@ class PaneWidget(QFrame):
 
     def clear_filter(self) -> None:
         self._filter.clear()   # the model is told through textChanged
-        self._filter.hide()
+        self._hide_filter()
         self.focus_listing()
 
     # ------------------------------------------------------------------ events
@@ -2403,17 +2496,14 @@ class PaneWidget(QFrame):
         if self._path.isVisible() and not self._path.hasFocus():
             self._show_crumbs()
         self._clear_hover()
-        # A search is about the rows on screen, and these are about to be
-        # different rows -- so the term goes too, not just the narrowing. A
-        # Ctrl+G in a new folder stepping a name typed in the last one would be
-        # the cursor jumping for a reason nothing on screen explains.
-        self._clear_search(forget=True)
-        # Navigating clears the model's filter; the box has to agree with it.
+        # Navigating clears the model's filter; the box has to agree with it,
+        # and marks hidden by a filter in the last folder mean nothing here.
+        self._hidden_marks = set()
         if self._filter.text():
             self._filter.blockSignals(True)
             self._filter.clear()
             self._filter.blockSignals(False)
-        self._filter.hide()
+        self._hide_filter()
         self._sync_drives()
 
     def _on_drive_chosen(self, index: int) -> None:
@@ -2865,8 +2955,17 @@ class PaneWidget(QFrame):
         self._pane.ask_git()
 
     def _sync_current(self) -> None:
-        self._clear_search(forget=True)
         model = self._pane.current.model
+        # Each tab's model keeps its own filter; the one box shows whichever
+        # tab is in front, quietly, because the model already has the text.
+        self._hidden_marks = set()
+        self._filter.blockSignals(True)
+        self._filter.setText(model.filter_text)
+        self._filter.blockSignals(False)
+        if model.filter_text:
+            self._show_filter()
+        else:
+            self._hide_filter()
         self._view.setModel(model)
         self._grid.setModel(model)
         # Deliberately *not* laying the columns out again. Widths belong to the
@@ -2904,9 +3003,8 @@ class PaneWidget(QFrame):
     def _update_map(self) -> None:
         """Work out the scrollbar's ticks for the tab in front.
 
-        Three passes over rows already in memory -- the marks, today, and the
-        name being looked for -- and none over the filesystem. Nothing at all
-        when the map is off.
+        Two passes over rows already in memory -- the marks and today -- and
+        none over the filesystem. Nothing at all when the map is off.
         """
         if not bool(self._pane.config.get("listing.scrollmap")):
             self._map.set_marks({})
@@ -2914,11 +3012,9 @@ class PaneWidget(QFrame):
         model = self._pane.current.model
         picker = self._view.selectionModel()
         marked = [index.row() for index in picker.selectedRows()] if picker else []
-        term = self._search or self._last_search
         self._map.set_marks(core_scrollmap.build(
             model.rowCount(), marked=marked,
-            today=model.rows_modified(when.window("today")),
-            hits=model.rows_containing(term) if term else ()))
+            today=model.rows_modified(when.window("today"))))
 
     def update_rows(self) -> None:
         self._view.viewport().update()
@@ -3085,6 +3181,7 @@ class PaneWidget(QFrame):
     def _sync_status(self, text: str, state: str) -> None:
         self._summary = (text, state)
         self.update_placeholders()
+        self._update_filter_count()
         self._render_status()
         self._back.setEnabled(self._pane.current.can_go_back)
         self._forward.setEnabled(self._pane.current.can_go_forward)
@@ -3103,12 +3200,6 @@ class PaneWidget(QFrame):
             outstanding = sizes.busy
             text = (f"counting {outstanding:,} folder(s)  ·  {text}"
                     if outstanding > 1 else f"counting  ·  {text}")
-        if self._search:
-            # In front of everything, because it is the thing that changes as
-            # the user types and the thing they are looking at the line for.
-            found = "" if self._search_state != "bad" else "  (no match)"
-            text = f"search: {self._search}{found}  ·  {text}"
-            state = self._search_state if self._search_state == "bad" else state
         picker = self._view.selectionModel()
         rows = {index.row() for index in picker.selectedRows()} if picker else set()
         model = self._pane.current.model
@@ -3310,144 +3401,7 @@ class PaneWidget(QFrame):
     def measure_all(self) -> None:
         self._pane.measure_all()
 
-    # ------------------------------------------------------------ quick search
-
-    def _on_search_key(self, event) -> bool:
-        """Answer a key on behalf of the quick search. True means it was ours.
-
-        Only the keys the search actually uses are taken. Everything else --
-        the arrows, Enter, the function keys, Delete -- reaches the view and
-        then this widget exactly as before, so a live search does not quietly
-        change what the rest of the keyboard does.
-        """
-        key = event.key()
-        if key == Qt.Key_G and event.modifiers() & Qt.ControlModifier:
-            # Ctrl+G, not F3. F3 was find-next until 0.16 and is the viewer
-            # now, which is what Double Commander does with it and what these
-            # fingers already expect -- and a viewer is worth a bare function
-            # key in a way that stepping a quick search is not. Ctrl+G is what
-            # every editor uses for the same thing, so the move is to a key that
-            # was already the second guess.
-            #
-            # It steps the *last* term as well as a live one, which the F3 it
-            # replaced did not, and the difference matters more than it sounds.
-            # A quick search stops narrowing after `SEARCH_FORGETS_AFTER` --
-            # that timeout is about not extending a search nobody remembers
-            # typing, and it has nothing to do with finding the next match. So
-            # without this, find-next only worked within a second and a half of
-            # the last keystroke, and pressing it at any other time did nothing
-            # at all. Which is not a key that reads as unavailable; it reads as
-            # a key that is broken.
-            if not self._search and not self._last_search:
-                return False
-            if not self._search:
-                self._revive_search()
-            self._step_search(-1 if event.modifiers() & Qt.ShiftModifier else 1)
-            return True
-        if key in (Qt.Key_Return, Qt.Key_Enter) and self._search \
-                and not event.modifiers() & Qt.ControlModifier:
-            # And Enter while a search is live, which is the key a hand already
-            # on the letters actually reaches for. Only while one is live: with
-            # no search, Enter opens what the cursor is on and must keep doing
-            # so. Ctrl+Enter is excluded because it opens a folder in a new tab.
-            self._step_search(-1 if event.modifiers() & Qt.ShiftModifier else 1)
-            return True
-        if not self._search:
-            if not self._is_search_key(event):
-                return False
-            self._set_search(event.text())
-            return True
-        if key == Qt.Key_Escape:
-            self._clear_search(forget=True)
-            return True
-        if key == Qt.Key_Backspace:
-            # Shortens the search rather than leaving the folder. Leaving is
-            # what Backspace does the rest of the time, and losing the folder
-            # to one mistyped letter is not what anybody meant by it.
-            self._set_search(self._search[:-1])
-            return True
-        if self._is_search_key(event):
-            self._set_search(self._search + event.text())
-            return True
-        return False
-
-    def _is_search_key(self, event) -> bool:
-        """Whether a keystroke is somebody typing a name.
-
-        A printable character with no Ctrl or Alt held. Shift is allowed
-        through because it is how capitals and most punctuation are typed, and
-        the search is case-insensitive anyway. Space is deliberately excluded:
-        it is the folder-size key, and a name with a space in it is reachable
-        by typing past it.
-        """
-        text = event.text()
-        if not text or not text.isprintable() or text == " ":
-            return False
-        return not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier)
-
-    def _set_search(self, text: str) -> None:
-        if not text:
-            self._clear_search()
-            return
-        self._search = text
-        # Remembered separately, and this is the copy the timeout does not
-        # touch. `_search` is "what is being typed right now" and expires;
-        # `_last_search` is "what was looked for", and it lives until somebody
-        # presses Escape or leaves the folder.
-        self._last_search = text
-        self._search_timer.start()
-        model = self._pane.current.model
-        # From the row the cursor is on, so a second letter narrows the answer
-        # rather than restarting the walk.
-        row = model.find(text, start=max(0, self.current_row()))
-        self._search_state = "idle" if row >= 0 else "bad"
-        if row >= 0:
-            self._go_to(row)
-        self._render_status()
-        self._schedule_map()
-
-    def _step_search(self, direction: int) -> None:
-        """The next match, or the previous one. Wraps, because the model does."""
-        model = self._pane.current.model
-        start = self.current_row() + direction
-        row = model.find(self._search, start=max(0, start), forward=direction > 0)
-        self._search_timer.start()
-        self._search_state = "idle" if row >= 0 else "bad"
-        if row >= 0:
-            self._go_to(row)
-        self._render_status()
-
-    def _revive_search(self) -> None:
-        """Put the last term back, without moving the cursor.
-
-        Without moving it, which is the whole point: `_set_search` jumps to the
-        first match from where the cursor is, and reviving is always followed by
-        a step -- so going through `_set_search` would make one Ctrl+G move two
-        matches. This only makes the term live again; `_step_search` does the
-        moving, from wherever the cursor actually is now.
-        """
-        self._search = self._last_search
-        self._search_state = "idle"
-        self._search_timer.start()
-
-    def _clear_search(self, *, forget: bool = False) -> None:
-        """Stop narrowing. `forget` also drops the term Ctrl+G would step.
-
-        Two callers and two meanings. The timer means "somebody stopped typing",
-        which ends the accumulation and nothing else -- the term is still what
-        they were looking for. Escape and a change of folder mean "done with
-        this", and those forget it.
-        """
-        if forget:
-            self._last_search = ""
-            self._schedule_map()
-        if not self._search:
-            self._render_status()
-            return
-        self._search = ""
-        self._search_state = "idle"
-        self._search_timer.stop()
-        self._render_status()
+    # ----------------------------------------------------------- the cursor
 
     def _go_to(self, row: int) -> None:
         """Put the cursor on a row without marking it.
@@ -3608,8 +3562,10 @@ class PaneWidget(QFrame):
         if watched in (self._view, self._grid) and event.type() == QEvent.KeyPress:
             # Space, before the view: `QAbstractItemView` answers it by
             # toggling the selection, so a key press that never reaches this
-            # widget would mark a row instead of counting it.
-            if event.key() == Qt.Key_Space and not event.modifiers():
+            # widget would mark a row instead of counting it. Not while
+            # something is typed into the filter, where it is part of a name.
+            if event.key() == Qt.Key_Space and not event.modifiers() \
+                    and not self._filter.text():
                 if self._pane.config.get("listing.space") == "peek" \
                         and self.peek_target() is not None:
                     self.peekRequested.emit()
@@ -3618,7 +3574,7 @@ class PaneWidget(QFrame):
                 return True
             if self._on_selection_key(event):
                 return True
-            if self._on_search_key(event):
+            if self._on_filter_key(event):
                 return True
         if watched is self._tabs and event.type() in (QEvent.MouseMove,
                                                        QEvent.Leave):

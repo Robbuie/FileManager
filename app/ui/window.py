@@ -657,8 +657,8 @@ class MainWindow(QMainWindow):
         # shortcut would take select-all away from the path bar and the filter
         # box, which is the same failure the function keys are kept off the
         # window for; and the keypad keys have to be told apart from the same
-        # characters typed into a quick search, which only the widget holding
-        # the search can do. The pane handles all of them where focus makes
+        # characters typed into the filter, which only the widget holding
+        # the filter can do. The pane handles all of them where focus makes
         # that safe.
         select = edit
         widget = self._current_widget

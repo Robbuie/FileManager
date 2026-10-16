@@ -33,7 +33,7 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
            backdrop: str = "solid",
            viewer: str = "", cell: int = 128, commands: bool = False,
            stale: bool = False, options: str = "", peek: str = "",
-           settings: dict | None = None, quick: str = "") -> str:
+           settings: dict | None = None, quick: str = "", typed: str = "") -> str:
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication
 
@@ -151,6 +151,21 @@ def render(path: str, out: str, *, theme: str, accent: str, density: str,
     if stale:
         _mark_stale(window)
         QTimer.singleShot(200, app.quit)
+        app.exec()
+
+    if typed:
+        # 0.57: typed into the left pane's listing, which filters it -- the
+        # bar, the count beside it and the narrowed rows.
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QKeyEvent
+
+        widget = window._widgets[0]  # noqa: SLF001
+        widget.focus_listing()
+        for char in typed:
+            key = Qt.Key_Space if char == " " else Qt.Key_A
+            widget.eventFilter(widget._view,  # noqa: SLF001
+                               QKeyEvent(QKeyEvent.KeyPress, key, Qt.NoModifier, char))
+        QTimer.singleShot(300, app.quit)
         app.exec()
 
     if peek:
@@ -703,6 +718,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="the commands editor rather than the window")
     parser.add_argument("--quick", default="", metavar="NAME",
                         help="quick view over the right pane, on this file in the left")
+    parser.add_argument("--type", default="", metavar="TEXT", dest="typed",
+                        help="type this into the left pane's listing, which filters it")
     parser.add_argument("--peek", default="", metavar="NAME",
                         help="open the peek card on this file in the left pane")
     parser.add_argument("--options", default="", metavar="PAGE",
@@ -757,7 +774,7 @@ def main(argv: list[str] | None = None) -> int:
                      pane_preview=args.preview_pane, viewer=args.viewer, flat=args.flat,
                      cell=args.cell, backdrop=args.backdrop, stale=args.stale,
                      options=args.options, peek=args.peek, settings=settings,
-                     quick=args.quick))
+                     quick=args.quick, typed=args.typed))
         return 0
 
     from app.theme.tokens import THEMES

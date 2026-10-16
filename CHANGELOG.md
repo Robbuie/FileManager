@@ -5,6 +5,38 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.57.0]
+
+### Changed
+- **Typing in a listing filters it.** It used to jump the cursor to the
+  first name that matched and forget what was typed after a second and a
+  half, which mostly looked like nothing happening. Now the first letter
+  opens the filter bar with that letter in it, and the folder narrows to the
+  names containing what has been typed, anywhere in the name and in any case.
+  Nothing times out. Beside the box: how many of the folder's rows are
+  showing, or that nothing matched.
+- The keyboard stays on the listing while filtering, so the arrows, Enter,
+  F3, F5 and the rest act on the rows. The cursor goes to the first match, so
+  three letters and Enter opens it. Space becomes part of the filter once
+  something is typed; before that it still counts folders.
+- **Getting out:** Esc clears the filter and leaves the cursor on the file it
+  was on, now showing the whole folder. Backspace takes off one letter at a
+  time and closes the filter when it runs out; while the filter is open it
+  never goes up a folder. Opening a folder or going anywhere else clears it,
+  as before.
+- Marks survive filtering. The marks on screen are the ones an operation acts
+  on; marks hidden by the filter come back when it is cleared. Before this,
+  every change to the filter -- Ctrl+F's box included -- dropped them all.
+- Switching tabs shows that tab's own filter in the box, rather than the
+  last tab's text over a folder it was not filtering.
+- Ctrl+F is unchanged and still opens the box with the keyboard in it, for
+  the `ext:` `size:` `modified:` terms.
+
+### Removed
+- The jump-to-name search, and with it Ctrl+G and Ctrl+Shift+G, Enter
+  stepping matches, and the scrollbar map's match ticks. Ctrl+G and
+  Ctrl+Shift+G can be given to a command in the commands editor.
+
 ## [0.56.6]
 
 ### Fixed

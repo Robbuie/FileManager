@@ -569,6 +569,16 @@ class ListingModel(QAbstractTableModel):
     def _filtering(self) -> bool:
         return bool(self._filter) or not (self._show_hidden and self._show_system)
 
+    def filter_counts(self) -> tuple[int, int]:
+        """`(shown, total)`: rows the filter lets through, and how many there
+        would be with nothing typed.
+
+        Hidden and system files the settings keep out are in neither number,
+        so "3 of 40" never counts files nobody could have seen anyway.
+        """
+        total = sum(1 for e in self._all if self._allowed(e))
+        return len(self._rows), total
+
     def set_filter(self, text: str) -> None:
         """Show only the rows whose name matches.
 
@@ -658,7 +668,7 @@ class ListingModel(QAbstractTableModel):
 
     def rows_containing(self, text: str) -> list[int]:
         """Every row whose own name contains `text`, for the scrollbar map's
-        search ticks -- the rows Ctrl+G would step through, all at once."""
+        search ticks."""
         wanted = (text or "").lower()
         if not wanted:
             return []
@@ -1035,10 +1045,16 @@ class ListingModel(QAbstractTableModel):
 
     # ---------------------------------------------------------------- filter
 
-    def _passes(self, entry: Entry) -> bool:
+    def _allowed(self, entry: Entry) -> bool:
+        """Whether the hidden and system settings let a row be seen at all."""
         if not self._show_hidden and entry.attributes & ATTRIBUTE_HIDDEN:
             return False
         if not self._show_system and entry.attributes & ATTRIBUTE_SYSTEM:
+            return False
+        return True
+
+    def _passes(self, entry: Entry) -> bool:
+        if not self._allowed(entry):
             return False
         if not self._filter:
             return True

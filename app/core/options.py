@@ -244,8 +244,8 @@ OPTIONS: tuple[Option, ...] = (
             "through the folder behind it. Space on a folder always counts it.",
             heading="Keys", new=True),
     Option("listing.scrollmap", "listing", "Scrollbar map",
-           "Ticks on the scrollbar for marked rows, today's rows and the "
-           "rows matching a quick search -- the ones not on screen.",
+           "Ticks on the scrollbar for marked rows and today's rows -- the "
+           "ones not on screen.",
            heading="Extras", new=True),
     Option("archives.browse", "listing", "Open archives like folders",
            "Enter on a .zip or a .tar (also .tar.gz, .tgz, .tar.bz2, .tar.xz) "

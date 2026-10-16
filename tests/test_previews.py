@@ -827,97 +827,131 @@ def test_f3_asks_for_the_viewer_rather_than_stepping_a_search(window):
     assert asked and asked[0][0] == ["a.jpg", "b.jpg", "c.jpg"]
 
 
-def test_the_quick_search_still_steps_on_ctrl_g(window):
-    """The other half of that move. Losing find-next entirely would be the
-    change quietly costing something."""
+def _type(widget, view, text):
+    """Keystrokes into a view, the way a person typing in the listing sends them."""
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
 
-    widget = window._widgets[0]
-    fill(window._panes[0], ["alpha.txt", "apple.txt", "avocado.txt"])
-    widget._set_search("a")
-    first = widget.current_row()
-    handled = widget._on_search_key(
-        QKeyEvent(QKeyEvent.KeyPress, Qt.Key_G, Qt.ControlModifier))
-    assert handled
-    assert widget.current_row() != first
+    for char in text:
+        key = Qt.Key_Space if char == " " else Qt.Key(ord(char.upper()))
+        widget.eventFilter(view, QKeyEvent(QKeyEvent.KeyPress, key, Qt.NoModifier, char))
 
 
-def test_ctrl_g_with_nothing_ever_searched_is_not_taken(window):
-    """Only the keys the search actually uses are taken, so a key pressed
-    before anything has been looked for goes on reaching everything it reached
-    before."""
+def _backspace(widget):
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
 
-    widget = window._widgets[0]
-    fill(window._panes[0], ["a.txt"])
-    assert not widget._on_search_key(
-        QKeyEvent(QKeyEvent.KeyPress, Qt.Key_G, Qt.ControlModifier))
+    return widget.eventFilter(
+        widget._view, QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Backspace, Qt.NoModifier))
 
 
-def test_ctrl_g_still_steps_after_the_search_has_stopped_narrowing(window):
-    """Reported from the window as "Ctrl+G doesn't seem to bring anything up".
+def _names_on_screen(pane):
+    model = pane.current.model
+    return sorted(model.entry(row).name for row in model.all_rows())
 
-    The quick search stops accumulating 1.5 seconds after the last keystroke,
-    which is about not extending a search nobody remembers typing. Find-next
-    was reading that as "there is no search", so the key worked only within a
-    second and a half of typing and did nothing at any other time -- which is
-    not a key that reads as unavailable, it reads as a key that is broken.
-    """
+
+def test_typing_in_the_listing_filters_it(window):
+    """0.57: typing narrows the folder to what matches, anywhere in the name,
+    and nothing forgets it after a second and a half."""
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["Pump datasheet.pdf", "valve.dwg", "pump list.xlsx", "motor.dwg"])
+    _type(widget, widget._view, "pump")
+    assert not widget._filter.isHidden()
+    assert widget._filter.text() == "pump"
+    assert _names_on_screen(pane) == ["Pump datasheet.pdf", "pump list.xlsx"]
+    # The cursor is on the first match, so Enter opens it.
+    assert widget.current_row() == pane.current.model.all_rows()[0]
+
+
+def test_space_joins_the_filter_only_once_something_is_typed(window):
+    """Before anything is typed Space is the folder-size key; after, it is
+    part of a name like "pump list"."""
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["pump datasheet.pdf", "pump list.xlsx"])
+    _type(widget, widget._view, " ")
+    assert widget._filter.isHidden()
+    _type(widget, widget._view, "pump l")
+    assert widget._filter.text() == "pump l"
+    assert _names_on_screen(pane) == ["pump list.xlsx"]
+
+
+def test_backspace_shortens_then_closes_and_never_leaves_the_folder(window):
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["alpha.txt", "beta.txt"])
+    where = pane.current.path
+    _type(widget, widget._view, "al")
+    assert _backspace(widget)
+    assert widget._filter.text() == "a"
+    assert _backspace(widget)
+    assert widget._filter.isHidden()
+    assert pane.current.model.filter_text == ""
+    assert pane.current.path == where
+    assert len(_names_on_screen(pane)) == 2
+
+
+def test_clearing_puts_the_cursor_back_on_the_file(window):
+    """Filter to find it, clear, and it is the one in front of you."""
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["a.txt", "b.txt", "c.txt", "target.dwg", "z.txt"])
+    _type(widget, widget._view, "target")
+    widget.clear_filter()
+    assert pane.current.model.entry(widget.current_row()).name == "target.dwg"
+    assert len(_names_on_screen(pane)) == 5
+
+
+def test_escape_in_the_listing_clears_the_filter(window):
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
 
-    widget = window._widgets[0]
-    fill(window._panes[0], ["alpha.txt", "apple.txt", "avocado.txt", "zebra.txt"])
-    widget._set_search("a")
-    widget._clear_search()          # what the timer does, and only that
-    assert widget._search == ""
-    at = widget.current_row()
-    assert widget._on_search_key(
-        QKeyEvent(QKeyEvent.KeyPress, Qt.Key_G, Qt.ControlModifier))
-    assert widget.current_row() != at
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["alpha.txt", "beta.txt"])
+    _type(widget, widget._view, "al")
+    widget.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    assert widget._filter.isHidden()
+    assert len(_names_on_screen(pane)) == 2
 
 
-def test_reviving_a_search_steps_exactly_one_match(window):
-    """Reviving must not also jump. `_set_search` moves to the first match from
-    the cursor, so going through it would make one Ctrl+G move two."""
-    from PySide6.QtCore import Qt
-    from PySide6.QtGui import QKeyEvent
-
-    widget = window._widgets[0]
-    fill(window._panes[0], ["a1.txt", "a2.txt", "a3.txt", "a4.txt"])
-    widget._set_search("a")
-    first = widget.current_row()
-    widget._clear_search()
-    widget._on_search_key(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_G, Qt.ControlModifier))
-    assert widget.current_row() == first + 1
-
-
-def test_escape_forgets_the_term_and_the_timeout_does_not(window):
-    """The two callers of `_clear_search` mean different things. Escape is
-    somebody saying they are done; the timer is somebody having stopped typing.
-    """
-    widget = window._widgets[0]
-    fill(window._panes[0], ["alpha.txt"])
-    widget._set_search("a")
-    widget._clear_search()
-    assert widget._last_search == "a"
-    widget._clear_search(forget=True)
-    assert widget._last_search == ""
+def test_marks_survive_narrowing_and_clearing(window):
+    """The model resets on every keystroke; the marks are carried by name.
+    Only the marks on screen are selected while filtering, so an operation
+    acts on what can be seen."""
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["one.dwg", "two.dwg", "three.txt"])
+    widget.select_names(["one.dwg"])
+    _type(widget, widget._view, "t")
+    assert widget.marked_names() == []
+    widget.select_names(["three.txt"])
+    widget.clear_filter()
+    assert sorted(widget.marked_names()) == ["one.dwg", "three.txt"]
 
 
-def test_leaving_the_folder_forgets_the_term(window):
-    """A Ctrl+G in a new folder stepping a name typed in the last one would be
-    the cursor jumping for a reason nothing on screen explains."""
+def test_the_count_beside_the_box_says_how_many(window):
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["a.dwg", "b.dwg", "c.txt"])
+    _type(widget, widget._view, "dwg")
+    assert widget._filter_count.text().startswith("2 of 3")
+    _type(widget, widget._view, "x")
+    assert widget._filter_count.text().startswith("no match in 3")
+
+
+def test_leaving_the_folder_closes_the_filter(window):
     from PySide6.QtWidgets import QApplication
 
-    widget = window._widgets[0]
-    fill(window._panes[0], ["alpha.txt"])
-    widget._set_search("a")
-    window._panes[0].open_tab("C:\\Jobs\\elsewhere")
+    widget, pane = window._widgets[0], window._panes[0]
+    fill(pane, ["alpha.txt"])
+    _type(widget, widget._view, "a")
+    pane.open_tab("C:\\Jobs\\elsewhere")
     QApplication.processEvents()
-    assert widget._last_search == ""
+    assert widget._filter.isHidden()
+    assert widget._filter.text() == ""
+
+
+def test_ctrl_g_is_no_longer_the_panes(window):
+    """The jump-to-name search went in 0.57, and Ctrl+G with it -- so the key
+    is free for a command again rather than reserved for nothing."""
+    from app.core.commands import RESERVED
+
+    assert "Ctrl+G" not in RESERVED and "Ctrl+Shift+G" not in RESERVED
 
 
 def test_the_grid_gets_the_keys_that_have_to_beat_the_view(window):
@@ -938,7 +972,7 @@ def test_the_grid_gets_the_keys_that_have_to_beat_the_view(window):
     widget.set_view_mode("grid")
     typed = QKeyEvent(QKeyEvent.KeyPress, Qt.Key_A, Qt.NoModifier, "a")
     assert widget.eventFilter(widget._grid, typed)
-    assert widget._search == "a"
+    assert widget._filter.text() == "a"
 
 
 def test_the_viewer_walks_files_and_not_folders(window):
@@ -1008,3 +1042,20 @@ def _png_bytes() -> bytes:
     image.save(buffer, "PNG")
     buffer.close()
     return bytes(store.data())
+
+
+def test_escape_sent_to_the_listing_reaches_the_filter(window):
+    """Through the view rather than straight to the pane: the view must let
+    Escape go, or the only way out of a filter typed in the listing would be
+    Backspace."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    widget, pane = window._widgets[0], window._panes[0]
+    window.show()
+    fill(pane, ["alpha.txt", "beta.txt"])
+    _type(widget, widget._view, "al")
+    QApplication.sendEvent(
+        widget._view, QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Escape, Qt.NoModifier))
+    assert widget._filter.isHidden()

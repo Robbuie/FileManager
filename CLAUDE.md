@@ -64,6 +64,7 @@ python tools/preview.py --grid --cell 128 --out grid.png
 python tools/preview.py --viewer image --out viewer.png   # also text, hex
 python tools/preview.py --commands --out commands.png    # the commands editor
 python tools/preview.py --stale --out stale.png          # a share that stopped answering
+python tools/preview.py --type pump --out filter.png     # typing in the listing filters it
 python tools/diagnose_network.py        # where Windows keeps a network location
 
 python packaging/build.py               # dist/: the folder, the setup exe, latest.json
@@ -411,10 +412,12 @@ arrows  the next file, the previous one   Home / End  the first, the last
 PgUp / PgDn  the pages of a document
 
 Finding and marking
-type a name  jump to it    Ctrl+G / Ctrl+Shift+G  the next, the previous match
-Ctrl+G steps the last name looked for, not only one still being typed; Enter
-steps while the search is live. Esc forgets it, and so does leaving the folder.
-F3 became the viewer in 0.16
+type a name  filter the listing to names containing it (0.57); the keyboard
+stays on the rows and the cursor goes to the first match. Space joins once
+something is typed. Backspace shortens it and closes it when empty, never
+going up a folder while it is open. Esc clears it with the cursor left on the
+same file; leaving the folder clears it too. Jump-to-name and Ctrl+G went in
+0.57
 Space   count what is under the marked folders -- or, with Space set to
         peek (0.36, off by default), open the peek card on a file under the
         cursor; Up/Down step it, Space/Esc close, Enter opens, F3 the viewer
@@ -428,7 +431,7 @@ Ctrl+= / Ctrl+- / Ctrl+8  the group keys on a keyboard with no pad
 The selection and search keys are the pane's for the same reason the function
 keys are. `Ctrl+A` as a window shortcut takes select-all away from the path bar
 and the filter box; a bare `+` is either the keypad key or a character being
-typed into a quick search, and only the widget holding the search can tell
+typed into the filter, and only the widget holding the filter can tell
 those apart -- it does it by insisting the keypad ones carry `KeypadModifier`.
 Two of them have to be intercepted *before* the view rather than allowed to
 bubble to the pane: `QAbstractItemView` answers a printable key with its own
