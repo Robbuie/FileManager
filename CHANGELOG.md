@@ -5,6 +5,20 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.58.0]
+
+### Changed
+- **A copy sent from File Compare goes straight into the queue.** The window
+  no longer comes to the front, asks "Queue them?" a second time, or opens
+  the queue panel over what you were doing. The jobs join the queue where
+  they are. The pill and the taskbar button show them running, and File
+  Compare reads its folders again when they finish. If File Manager was not
+  running, it starts minimised on the taskbar instead of opening over File
+  Compare. Settings > Transfers > "Ask before running a sync from File
+  Compare" brings back the old go-ahead (and the window coming forward) for
+  anything that removes or replaces. Needs File Compare 1.23 for picked rows
+  to be sent without File Compare's own preview.
+
 ## [0.57.0]
 
 ### Changed

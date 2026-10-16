@@ -337,6 +337,9 @@ DEFAULTS: dict[str, Any] = {
     "listing.placeholders": True,
     # 0.49: the app's taskbar button fills while a transfer runs.
     "transfers.taskbar": True,
+    # 0.58: a sync File Compare sends goes into the queue without this window
+    # coming forward to ask again; on, it asks before removing or replacing.
+    "transfers.ask_outside": False,
     # 0.40: a folder sorted by clicking a heading keeps that order, and gets it
     # back the next time it is opened (`core/sorts.py`). `listing.sorts` is the
     # memory itself, by lower-cased path: [column, 0 ascending / 1 descending].

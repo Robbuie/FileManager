@@ -337,6 +337,11 @@ OPTIONS: tuple[Option, ...] = (
            "The application's button on the taskbar fills during a copy, "
            "turns amber when one is waiting on you and red when one failed.",
            new=True, words=("taskbar", "progress")),
+    Option("transfers.ask_outside", "transfers", "Ask before running a sync from File Compare",
+           "Off, a copy or removal sent from File Compare goes straight into "
+           "the queue and this window stays where it is. On, the window comes "
+           "forward and asks once more before anything is removed or replaced.",
+           new=True, words=("file compare", "queue", "confirm", "handoff")),
     Option("transfers.speedline", "transfers", "Speed line in the pill",
            "The running job's speed as a line beside its readout. Click the "
            "pill for the last minute in full.", heading="The pill", new=True),

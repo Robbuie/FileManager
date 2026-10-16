@@ -194,11 +194,12 @@ def window(tmp_path):
     made.hide()
 
 
-def test_the_window_asks_before_removing_and_queues_nothing_when_declined(
+def test_with_asking_on_the_window_asks_before_removing_and_queues_nothing_when_declined(
         window, handoff_dir, monkeypatch):
     from app.ui import dialogs
 
     made, queue = window
+    made._config.set("transfers.ask_outside", True)  # noqa: SLF001
     asked = []
     monkeypatch.setattr(dialogs, "confirm", lambda *a, **k: asked.append(k) or False)
     monkeypatch.setattr(queue._transfers, "submit",  # noqa: SLF001
@@ -271,3 +272,31 @@ def test_a_refused_request_says_why_and_queues_nothing(window, monkeypatch):
                         lambda *a, **k: pytest.fail("nothing is queued"))
     made.queue_from_outside(handoff.Refused("the request has no jobs"))
     assert "refused: the request has no jobs" in made.statusBar().currentMessage()
+
+
+def test_by_default_a_request_is_queued_without_asking_or_coming_forward(
+        window, handoff_dir, monkeypatch):
+    """0.58: File Compare's Copy is the go-ahead. Nothing here asks again,
+    and the queue panel is not opened over whatever the person is doing."""
+    from app.ui import dialogs
+
+    made, queue = window
+    monkeypatch.setattr(dialogs, "confirm",
+                        lambda *a, **k: pytest.fail("the default does not ask"))
+    monkeypatch.setattr(made, "_show_queue",
+                        lambda: pytest.fail("the queue panel is not opened"))
+    monkeypatch.setattr(made, "activateWindow",
+                        lambda: pytest.fail("the window does not take the focus"))
+    submitted = []
+    monkeypatch.setattr(queue._transfers, "submit",  # noqa: SLF001
+                        lambda kind, *a, **k: submitted.append(kind.value) or 500 + len(submitted))
+    path = handoff_dir / "plan-5.json"
+    path.write_bytes(request())
+    made.queue_from_outside(handoff.read(str(path)))
+    assert submitted == ["copy", "recycle"]
+    taken = handoff_dir / "plan-5.taken.json"
+    for _ in range(100):
+        if taken.exists():
+            break
+        time.sleep(0.02)
+    assert taken.exists()

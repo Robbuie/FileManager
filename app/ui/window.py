@@ -2595,21 +2595,29 @@ class MainWindow(QMainWindow):
         `request` is a `handoff.Request` already read and checked off the UI
         thread, or the `handoff.Refused` saying why it was not. Somebody saw
         these jobs in File Compare's preview before they were written, so
-        they go into the queue as they are, as ordinary jobs; the queue panel
-        opens so the person who pressed the button watches them run.
+        they go into the queue as they are, as ordinary jobs.
+
+        0.58: quietly. The person pressed Copy in File Compare and is still
+        looking at File Compare; this window used to come to the front, ask
+        again and open the queue panel, which made one copy three clicks in
+        two programs. Now the jobs join the queue where they are, the pill
+        and the taskbar button show them running, and File Compare reads its
+        folders again when they finish. "Ask before running a sync from File
+        Compare" puts the old go-ahead back, and only then is the window
+        brought forward to ask it.
         """
         from app.core import handoff
 
-        if self.isMinimized():
-            self.showNormal()
-        self.show()
-        self.raise_()
-        self.activateWindow()
         if isinstance(request, handoff.Refused) or not isinstance(request, handoff.Request):
             self.statusBar().showMessage(f"A request for the queue was refused: {request}",
                                          15000)
             return
-        if request.removals or request.replaces:
+        if (request.removals or request.replaces) and self._config.get("transfers.ask_outside"):
+            if self.isMinimized():
+                self.showNormal()
+            self.show()
+            self.raise_()
+            self.activateWindow()
             # 0.46.1: this is the application that removes and overwrites, so
             # it asks itself, once, naming the folder -- File Compare's
             # preview was the plan; this is the go-ahead.
@@ -2654,7 +2662,6 @@ class MainWindow(QMainWindow):
             self._handoff_jobs[job_id] = request
         self.statusBar().showMessage(request.summary(), 10000)
         self._answer_later(request.path, None)
-        self._show_queue()
 
     def _answer_later(self, path: str, result: dict | None) -> None:
         """Write an answer beside a request, off this thread: the result

@@ -204,7 +204,19 @@ def main() -> int:
                         folder_map=FolderMap(bridge, config))
     # 0.50.5: maximised by Windows, not by being made the size of the screen,
     # so that Restore has a smaller size to go back to.
-    if config.get("window.maximized"):
+    if queue_file and not folder and not config.get("transfers.ask_outside"):
+        # 0.58: started only to take File Compare's jobs. The person is in
+        # File Compare; a window opening over it is the interruption the
+        # handoff no longer makes. It runs on the taskbar, where the button
+        # fills while the copy runs.
+        from PySide6.QtCore import Qt
+
+        state = Qt.WindowMinimized
+        if config.get("window.maximized"):
+            state |= Qt.WindowMaximized         # restored, it comes back maximised
+        window.setWindowState(state)
+        window.show()
+    elif config.get("window.maximized"):
         window.showMaximized()
     else:
         window.show()
