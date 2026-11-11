@@ -342,6 +342,14 @@ OPTIONS: tuple[Option, ...] = (
            "the queue and this window stays where it is. On, the window comes "
            "forward and asks once more before anything is removed or replaced.",
            new=True, words=("file compare", "queue", "confirm", "handoff")),
+    Option("duplicate.logix_clean_original", "transfers",
+           "Duplicate Logix clears the backups out of the original",
+           "After the copy, the .BAK, .Sem and .Wrk files under the folder it was copied from "
+           "go to the Recycle Bin, as Clean up Logix backups would. On a "
+           "network share there is no Recycle Bin and they are deleted. Off, "
+           "the original is left as it was.",
+           heading="Duplicate Logix", new=True,
+           words=("logix", "bak", "backup", "duplicate", "clean")),
     Option("transfers.speedline", "transfers", "Speed line in the pill",
            "The running job's speed as a line beside its readout. Click the "
            "pill for the last minute in full.", heading="The pill", new=True),

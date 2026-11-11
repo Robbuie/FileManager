@@ -580,7 +580,9 @@ class MainWindow(QMainWindow):
         logix = self._hint(files, "Duplicate Logix\tCtrl+Shift+F5",
                            lambda: self._current_widget().duplicate_current(logix=True))
         logix.setToolTip("Duplicate, and inside the copy give dated names the new "
-                         "date and leave out Logix Designer's .BAK backups.")
+                         "date and leave out Logix Designer's .BAK, .Sem and .Wrk files.")
+        self._hint(files, "Clean up Logix backups...",
+                   lambda: self._current_widget().clean_backups())
         files.addSeparator()
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",

@@ -298,3 +298,70 @@ def test_the_queue_says_what_a_delete_is_about_to_remove(monkeypatch):
     mirror.recycle([r"C:\Jobs\a.L5K"])
     mirror.erase([r"C:\Jobs\b.L5K"])
     assert heard == [(r"C:\Jobs\a.L5K",), (r"C:\Jobs\b.L5K",)]
+
+
+# ------------------------------------------------- 0.60: clean up Logix backups
+
+
+class Quiet:
+    """An inbox with nothing in it: a clean-up walks first, and the walk looks
+    for a cancel between entries."""
+
+    def get_nowait(self):
+        raise queue.Empty
+
+    def get(self, timeout=None):
+        raise queue.Empty
+
+
+def test_a_clean_up_recycles_only_the_backups_under_its_folders(tmp_path, monkeypatch):
+    day = tmp_path / "2026-11-10"
+    (day / "Site_A").mkdir(parents=True)
+    keep = [day / "Mixer_20261110.ACD", day / "Site_A" / "Line3_20261110.ACD",
+            day / "notes.txt"]
+    backups = [day / "Mixer_20261110.BAK000.acd",
+               day / "Site_A" / "Line3_20261110.bak017.ACD"]
+    for path in keep + backups:
+        path.write_text("x")
+    shell = Shell({path.name for path in backups})
+    monkeypatch.setattr(worker, "recycle", shell)
+
+    runner = Runner(Quiet(), queue.Queue())
+    runner._recycle(Job(id=1, kind=JobKind.RECYCLE, sources=(str(day),),
+                        destination="", conflict=Conflict.SKIP,
+                        only=("*.BAK*.acd",)))
+
+    assert sorted(shell.calls[0]) == sorted(str(path) for path in backups)
+    assert all(path.exists() for path in keep)
+    assert not any(path.exists() for path in backups)
+    finished = done(runner)
+    assert finished["copied"] == 2 and finished["failed"] == 0
+
+
+def test_a_clean_up_with_nothing_to_clear_never_calls_the_shell(tmp_path, monkeypatch):
+    (tmp_path / "Line3.ACD").write_text("x")
+    calls = []
+    monkeypatch.setattr(worker, "recycle", lambda targets: calls.append(targets))
+    runner = Runner(Quiet(), queue.Queue())
+    runner._recycle(Job(id=1, kind=JobKind.RECYCLE, sources=(str(tmp_path),),
+                        destination="", conflict=Conflict.SKIP,
+                        only=("*.BAK*.acd",)))
+    assert calls == []
+    assert (tmp_path / "Line3.ACD").exists()
+    assert done(runner)["copied"] == 0
+
+
+def test_the_default_patterns_take_the_lock_files_too(tmp_path, monkeypatch):
+    """A `.Sem` and a `.Wrk` left by a Logix session that did not close."""
+    from app.core.config import DEFAULTS
+
+    names = ["Line3.ACD", "Line3.BAK002.acd", "Line3.Sem", "Line3.WRK", "notes.txt"]
+    for name in names:
+        (tmp_path / name).write_text("x")
+    shell = Shell({"Line3.BAK002.acd", "Line3.Sem", "Line3.WRK"})
+    monkeypatch.setattr(worker, "recycle", shell)
+    runner = Runner(Quiet(), queue.Queue())
+    runner._recycle(Job(id=1, kind=JobKind.RECYCLE, sources=(str(tmp_path),),
+                        destination="", conflict=Conflict.SKIP,
+                        only=tuple(DEFAULTS["duplicate.logix_skip"])))
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["Line3.ACD", "notes.txt"]

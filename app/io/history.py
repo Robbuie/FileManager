@@ -40,7 +40,7 @@ def default_path(config_path: str) -> str:
 
 def entry(kind: str, sources: tuple[str, ...], destination: str, *,
           started: float, seconds: float, payload: dict, message: str,
-          problems: list[str]) -> dict[str, Any]:
+          problems: list[str], only: tuple[str, ...] = ()) -> dict[str, Any]:
     """One finished job as it is kept: plain values only, bounded lists."""
     return {
         "at": started,
@@ -57,6 +57,9 @@ def entry(kind: str, sources: tuple[str, ...], destination: str, *,
         # 0.59: Duplicate Logix's backups left out and names redated.
         "left_out": int(payload.get("left_out", 0) or 0),
         "redated": int(payload.get("redated", 0) or 0),
+        # 0.60: a clean-up's patterns, so the history says it cleared backups
+        # from a folder rather than that it recycled the folder.
+        "only": list(only),
         "message": message,
         "problems": problems[:PROBLEMS],
     }

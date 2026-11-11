@@ -342,9 +342,19 @@ DEFAULTS: dict[str, Any] = {
     # Designer writes a `.BAKnnn.acd` beside the project every time it saves,
     # and a copy made to carry on working in has no use for yesterday's
     # dozen of them. Not in the Options dialog, which has no row for a list
-    # of text; add to it here, e.g. "*.Sem" for the lock file Logix leaves
-    # beside a project that is open.
-    "duplicate.logix_skip": ["*.BAK*.acd"],
+    # of text; edit it here.
+    #
+    # 0.60: the same patterns are what Clean up Logix backups sends to the
+    # Recycle Bin, and what Duplicate Logix clears out of the day it copied
+    # when `duplicate.logix_clean_original` is on. And `.Sem` and `.Wrk`
+    # with them: Logix Designer makes both beside a project while it is open
+    # and removes them when it closes cleanly, so one left behind is from a
+    # crash or a lost connection to the share, and copied into tomorrow's
+    # folder it is a lock on a project nobody has open. A project that *is*
+    # open holds its own, and Windows refuses to remove them; the queue names
+    # them rather than anything being taken from under Logix.
+    "duplicate.logix_skip": ["*.BAK*.acd", "*.Sem", "*.Wrk"],
+    "duplicate.logix_clean_original": True,
     # 0.58: a sync File Compare sends goes into the queue without this window
     # coming forward to ask again; on, it asks before removing or replacing.
     "transfers.ask_outside": False,

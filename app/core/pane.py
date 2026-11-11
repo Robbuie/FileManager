@@ -1146,12 +1146,44 @@ class Pane(QObject):
             new = naming.date_span(name)
             if old and new and old[2] != new[2]:
                 rules["redate"] = (old[2].isoformat(), new[2].isoformat())
-            skip = self._config.get("duplicate.logix_skip") or ()
-            if isinstance(skip, str):
-                skip = (skip,)
-            rules["skip"] = tuple(str(pattern) for pattern in skip if pattern)
+            rules["skip"] = self.logix_patterns()
         self._set_status(tab, f"duplicating to {name}", BUSY)
         self.transfers.duplicate(source, tab.path, name, **rules)
+        # 0.60: and the day copied from loses its backups too, after the copy
+        # in the queue. Its own job, so it is seen, can be cancelled, and
+        # names a backup it could not remove. A folder only: a file
+        # duplicated on its own has no backups under it.
+        if (logix and rules["skip"] and entry is not None and entry.is_dir
+                and self._config.get("duplicate.logix_clean_original")):
+            self.transfers.clean([source], rules["skip"])
+        return True
+
+    def logix_patterns(self) -> tuple[str, ...]:
+        """0.59: the file names Duplicate Logix leaves out of a copy and Clean
+        up Logix backups recycles -- `duplicate.logix_skip`, read forgivingly
+        because it is a setting edited by hand."""
+        skip = self._config.get("duplicate.logix_skip") or ()
+        if isinstance(skip, str):
+            skip = (skip,)
+        return tuple(str(pattern) for pattern in skip if pattern)
+
+    def clean_targets(self, names: list[str]) -> list[str]:
+        """0.60: the folders Clean up Logix backups works on: the named rows
+        that are folders, or this folder when none of them is one."""
+        tab = self.current
+        folders = [paths.join(tab.path, name) for name in names
+                   if (entry := tab.model.entry_named(name)) is not None
+                   and entry.is_dir]
+        return folders or [tab.path]
+
+    def clean_backups(self, folders: list[str]) -> bool:
+        """0.60: Logix Designer's backups under `folders` to the Recycle Bin,
+        through the queue. The walk that finds them is the ops process's."""
+        patterns = self.logix_patterns()
+        if not folders or not patterns or self.transfers is None:
+            return False
+        self._set_status(self.current, "clearing Logix backups", BUSY)
+        self.transfers.clean(folders, patterns)
         return True
 
     def delete(self, names: list[str], *, permanent: bool = False) -> None:

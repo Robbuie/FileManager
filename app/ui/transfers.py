@@ -211,6 +211,12 @@ class JobRow(QWidget):
                        and job.total > 0 and job.interruptible)
 
         title = f"{VERBS[job.kind][1]} {job.files:,} item(s)"
+        if getattr(job, "only", ()):
+            # 0.60: a clean-up's sources are folders that stay; saying it
+            # recycles them would describe the opposite of what it does.
+            leaf = job.sources[0].replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1]
+            title = (f"Clear backups from {shorten(leaf)}" if job.files == 1
+                     else f"Clear backups from {job.files:,} folders")
         if job.destination:
             title += f" to {job.destination}"
         width = rect.width() - (self.PERCENT_WIDTH if drawing_bar else 0)

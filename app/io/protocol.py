@@ -645,6 +645,13 @@ class Job:
     #: backups, which are worth nothing in a copy made to keep working in.
     #: Folders are never left out by this; only files.
     skip: tuple[str, ...] = ()
+    #: 0.60: for a recycle, wildcard patterns that turn it into a clean-up:
+    #: `sources` are folders, and what goes to the Recycle Bin is only the
+    #: files under them, at any depth, whose names match -- the folders and
+    #: everything else in them stay. Clean up Logix backups, and Duplicate
+    #: Logix clearing them out of the day it was copied from. A source that is
+    #: a file goes only if it matches too.
+    only: tuple[str, ...] = ()
 
 
 def destination_of(job: Job, source: str) -> str:

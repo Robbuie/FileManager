@@ -131,6 +131,8 @@ class JobState:
     #: it ends, how many files were left out and how many names redated.
     redate: tuple[str, str] = ()
     skip: tuple[str, ...] = ()
+    #: 0.60: a clean-up's patterns; see `clean`.
+    only: tuple[str, ...] = ()
     left_out: int = 0
     redated: int = 0
 
@@ -179,6 +181,10 @@ class JobState:
         correctness.
         """
         touched = {os.path.dirname(source) for source in self.sources}
+        if self.only:
+            # 0.60: a clean-up changes what is inside its folders, not the
+            # folders' own parent.
+            touched.update(self.sources)
         if self.destination:
             touched.add(self.destination)
         return {folder for folder in touched if folder}
@@ -198,7 +204,7 @@ class JobState:
         return self._label(self.current)
 
     def _label(self, current: str) -> str:
-        verb = VERBS[self.kind][0]
+        verb = "Clearing backups" if self.only else VERBS[self.kind][0]
         if self.state == "done":
             return "Finished"
         if self.held:
@@ -263,6 +269,9 @@ def describe_entry(item: dict) -> tuple[str, str, str, str]:
     first = ntpath.basename(sources[0]) if sources else ""
     what = f"{VERBS[kind][1] if kind else '?'} {first}" if count == 1 and first \
         else f"{VERBS[kind][1] if kind else '?'} {count:,} {noun}"
+    if item.get("only"):
+        what = (f"Clear backups from {first}" if count == 1 and first
+                else f"Clear backups from {count:,} folders")
     where = item.get("destination") or (ntpath.dirname(sources[0]) if sources else "")
     verb = "removed" if kind is not None and kind.removes else "copied"
     if item.get("cancelled"):
@@ -429,6 +438,17 @@ class TransferQueue(QObject):
         self.removing.emit(sources)
         return self._start(JobKind.RECYCLE, sources, "")
 
+    def clean(self, folders: Iterable[str], patterns: Iterable[str]) -> int:
+        """0.60: to the Recycle Bin, the files under `folders` whose names match
+        `patterns` -- Logix Designer's backups -- and nothing else.
+
+        A recycle job, so it has the queue, the check of what is still there
+        afterwards, and Retry. It does not say `removing` about the folders,
+        unlike `recycle`: the folders stay, and a pane that took their rows
+        away on that word would be showing a folder as gone that is not.
+        """
+        return self._start(JobKind.RECYCLE, tuple(folders), "", only=patterns)
+
     def erase(self, sources: Iterable[str]) -> int:
         """Permanently, item by item."""
         sources = tuple(sources)
@@ -450,13 +470,15 @@ class TransferQueue(QObject):
             return None
         # 0.59: a Duplicate Logix's rules go with its retry, so a file that
         # failed is written under the new date like the ones that did not.
-        rules = {"redate": job.redate, "skip": job.skip}
+        # 0.60: and a clean-up's patterns with its own, so a retry of one
+        # still recycles only the backups.
+        rules = {"redate": job.redate, "skip": job.skip, "only": job.only}
         if job.retry_all:
             return self._start(job.kind, job.sources, job.destination, **rules)
         pairs = list(dict.fromkeys(job.retry))
         sources = [source for source, _ in pairs]
         if job.kind.removes:
-            return self._start(job.kind, sources, "")
+            return self._start(job.kind, sources, "", only=job.only)
         folders = [folder for _, folder in pairs]
         if len(set(folders)) == 1:
             return self._start(job.kind, sources, folders[0], **rules)
@@ -651,7 +673,8 @@ class TransferQueue(QObject):
     def _start(self, kind: JobKind, sources: Iterable[str], destination: str, *,
                conflict: Conflict = Conflict.ASK, rename: str = "",
                into: Iterable[str] = (), part_size: int = 0,
-               redate: tuple[str, str] = (), skip: Iterable[str] = ()) -> int:
+               redate: tuple[str, str] = (), skip: Iterable[str] = (),
+               only: Iterable[str] = ()) -> int:
         """Start a job. `conflict` is the rule the process applies without
         asking; `ASK` is the default and the only one that stops.
 
@@ -673,13 +696,17 @@ class TransferQueue(QObject):
             extra["redate"] = redate
         if skip:
             extra["skip"] = skip
+        only = tuple(only)
+        if only:
+            extra["only"] = only
         job_id = self._transfers.submit(kind, sources, destination,
                                         conflict=conflict, **extra)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
                                      sources=sources, files=len(sources),
                                      total=len(sources) if kind.removes else 0,
                                      conflict=Conflict(conflict).value, rename=rename,
-                                     into=tuple(into), redate=redate, skip=skip)
+                                     into=tuple(into), redate=redate, skip=skip,
+                                     only=only)
         self.order.append(job_id)
         self.changed.emit()
         return job_id

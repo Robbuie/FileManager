@@ -1825,7 +1825,9 @@ class PaneWidget(QFrame):
         label = f"Duplicate {names[0]} here as"
         if logix:
             label += ("\nDated names inside take the new date; "
-                      ".BAK backups are left out")
+                      "Logix .BAK, .Sem and .Wrk files are left out")
+            if self._pane._config.get("duplicate.logix_clean_original"):
+                label += " and cleared from the original"
         name = dialogs.ask_name(
             self.window(), title=title, label=label, initial=suggestion,
             ok_text="Duplicate", taken=self._pane.name_taken,
@@ -1836,6 +1838,36 @@ class PaneWidget(QFrame):
                 self._pane.duplicate(row, name, logix=True)
             else:
                 self._pane.duplicate(row, name)
+
+    def clean_backups(self) -> None:
+        """0.60: Logix Designer's `.BAK` files under the marked folders, or
+        under this folder when no folder is marked, to the Recycle Bin.
+
+        For the day before: Duplicate Logix leaves them out of the copy, and
+        this is the way to clear them from a folder that was not just
+        duplicated. Asked first, because the files it removes are not on
+        screen -- they are found by a walk, in the queue, after the answer.
+        """
+        if self._read_only():
+            return
+        if self._pane.in_archive:
+            self._pane.say("inside an archive is read-only here", "bad")
+            return
+        folders = self._pane.clean_targets(self.selected_names())
+        patterns = self._pane.logix_patterns()
+        if not patterns:
+            self._pane.say("no backup patterns set -- duplicate.logix_skip is empty", "bad")
+            return
+        shown = [self._pane.display(folder) for folder in folders]
+        text = (f"Send only Logix's leftover files ({', '.join(patterns)}) found in "
+                f"{'this folder' if len(folders) == 1 else 'these folders'} and the "
+                "folders inside to the Recycle Bin? The folders themselves and "
+                "every other file stay where they are. A project open in Logix "
+                "keeps its own; Windows will not remove those. On a network "
+                "share these are deleted, as there is no Recycle Bin.")
+        if dialogs.confirm(self.window(), title="Clean up Logix backups", text=text,
+                           action="Clean up", names=shown):
+            self._pane.clean_backups(folders)
 
     def delete_selection(self, *, permanent: bool = False) -> None:
         if self._read_only():
@@ -1983,6 +2015,7 @@ class PaneWidget(QFrame):
             more.addAction("Duplicate\tShift+F5", self.duplicate_current)
             more.addAction("Duplicate Logix\tCtrl+Shift+F5",
                            lambda: self.duplicate_current(logix=True))
+            more.addAction("Clean up Logix backups...", self.clean_backups)
             if len(names) > 1:
                 more.addAction("Rename several...\tCtrl+M", self.rename_several)
             more.addAction("Attributes and dates...", self.attributes)

@@ -42,11 +42,16 @@ class FakeQueue:
     def __init__(self):
         self.duplicates = []
         self.rules = []
+        self.cleans = []
 
     def duplicate(self, source, folder, name, **rules):
         self.duplicates.append((source, folder, name))
         self.rules.append(rules)
         return 1
+
+    def clean(self, folders, patterns):
+        self.cleans.append((list(folders), tuple(patterns)))
+        return 2
 
 
 def entry(name, *, is_dir=True):
@@ -192,7 +197,7 @@ def test_ctrl_shift_f5_is_duplicate_logix(window, monkeypatch) -> None:
     assert offered["title"] == "Duplicate Logix"
     assert [d[2] for d in queue.duplicates] == ["2026-11-11"]
     assert queue.rules == [{"redate": ("2026-11-10", "2026-11-11"),
-                            "skip": ("*.BAK*.acd",)}]
+                            "skip": ("*.BAK*.acd", "*.Sem", "*.Wrk")}]
 
     press(widget._view, Qt.Key_F5, Qt.ShiftModifier)
     assert queue.rules[-1] == {}
@@ -202,4 +207,55 @@ def test_duplicate_logix_without_a_date_still_leaves_the_backups(window, monkeyp
     widget, queue, _ = prepare(window, monkeypatch, [entry("Line 3")],
                                cursor="Line 3", answer="Line 3 copy")
     press(widget._view, Qt.Key_F5, Qt.ShiftModifier | Qt.ControlModifier)
-    assert queue.rules == [{"skip": ("*.BAK*.acd",)}]
+    assert queue.rules == [{"skip": ("*.BAK*.acd", "*.Sem", "*.Wrk")}]
+
+
+def test_duplicate_logix_clears_the_backups_from_the_original(window, monkeypatch) -> None:
+    """0.60: queued after the copy, on the folder copied from."""
+    widget, queue, _ = prepare(window, monkeypatch, [entry("2026-11-10")],
+                               cursor="2026-11-10", answer="2026-11-11")
+    press(widget._view, Qt.Key_F5, Qt.ShiftModifier | Qt.ControlModifier)
+    source = queue.duplicates[0][0]
+    assert queue.cleans == [([source], ("*.BAK*.acd", "*.Sem", "*.Wrk"))]
+
+    press(widget._view, Qt.Key_F5, Qt.ShiftModifier)
+    assert len(queue.cleans) == 1, "plain Duplicate cleaned something"
+
+
+def test_the_original_is_left_alone_with_the_option_off(window, monkeypatch) -> None:
+    widget, queue, _ = prepare(window, monkeypatch, [entry("2026-11-10")],
+                               cursor="2026-11-10", answer="2026-11-11")
+    widget._pane._config.set("duplicate.logix_clean_original", False)
+    press(widget._view, Qt.Key_F5, Qt.ShiftModifier | Qt.ControlModifier)
+    assert len(queue.duplicates) == 1
+    assert queue.cleans == []
+
+
+def test_clean_up_works_on_the_marked_folder_or_this_one(window, monkeypatch) -> None:
+    from app.ui import dialogs
+
+    widget, queue, _ = prepare(window, monkeypatch,
+                               [entry("2026-11-10"), entry("plan.ACD", is_dir=False)],
+                               cursor="2026-11-10", answer=None)
+    asked = []
+    monkeypatch.setattr(dialogs, "confirm", lambda parent, **kw: asked.append(kw) or True)
+    pane = widget._pane
+
+    widget.clean_backups()
+    assert queue.cleans[-1][0] == [pane.row_path(pane.current.model.row_of("2026-11-10"))]
+
+    widget._view.setCurrentIndex(pane.current.model.index(
+        pane.current.model.row_of("plan.ACD"), 0))
+    widget.clean_backups()
+    assert queue.cleans[-1][0] == [pane.current.path]
+    assert len(asked) == 2 and asked[0]["action"] == "Clean up"
+
+
+def test_a_declined_clean_up_queues_nothing(window, monkeypatch) -> None:
+    from app.ui import dialogs
+
+    widget, queue, _ = prepare(window, monkeypatch, [entry("2026-11-10")],
+                               cursor="2026-11-10", answer=None)
+    monkeypatch.setattr(dialogs, "confirm", lambda parent, **kw: False)
+    widget.clean_backups()
+    assert queue.cleans == []

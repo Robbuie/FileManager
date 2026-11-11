@@ -403,7 +403,8 @@ class Runner:
             payload = {**payload, "history": history.entry(
                 done_job.kind.value, done_job.sources, done_job.destination,
                 started=started, seconds=time.monotonic() - began,
-                payload=payload, message=message, problems=failures)}
+                payload=payload, message=message, problems=failures,
+                only=done_job.only)}
             if self.history_path:
                 history.record(self.history_path, payload["history"])
         try:
@@ -529,11 +530,22 @@ class Runner:
         clicking them does. Cancelling before it starts still works; that is
         what the queue is for.
         """
+        sources = list(job.sources)
+        unreadable = 0
+        if job.only:
+            found = self._backups(job)
+            if found is None:
+                return
+            sources, unreadable = found
         self._emit(job.id, Progress.REMOVING, {
-            "name": "", "done": 0, "total": len(job.sources),
+            "name": "", "done": 0, "total": len(sources),
             "interruptible": False,
         })
-        sources = list(job.sources)
+        if not sources:
+            self._emit(job.id, Progress.DONE, {
+                "copied": 0, "skipped": 0, "failed": unreadable, "bytes": 0,
+                "cancelled": False})
+            return
         try:
             from app.io import worker  # deferred: it imports pywin32 on Windows
             _deleted, problem, code = worker.recycle(sources)
@@ -571,8 +583,38 @@ class Runner:
             }, message=reason + holders.note(paths.api(source)))
         self._emit(job.id, Progress.DONE, {
             "copied": len(sources) - len(left), "skipped": 0,
-            "failed": len(left), "bytes": 0, "cancelled": False,
+            "failed": len(left) + unreadable, "bytes": 0, "cancelled": False,
         })
+
+    def _backups(self, job: Job) -> tuple[list[str], int] | None:
+        """0.60: the files a clean-up recycles -- those under its folders whose
+        names match `job.only` -- and how many places could not be read; or
+        None when the job has already ended.
+
+        The same walk a copy makes, so a link is not followed out of the
+        folder and an unreadable folder is reported rather than skipped
+        silently. Walked here, in the ops process, rather than listed by the
+        window: the window never touches the filesystem, and a day folder of
+        site folders on a share is exactly the walk that can hang.
+
+        Before the shell call, so a cancel during the walk still stops it
+        with nothing removed.
+        """
+        self._emit(job.id, Progress.SCANNING)
+        try:
+            items, unreadable = self._scan(job, job.sources, destination="")
+        except _Cancelled:
+            self.cancelled.discard(job.id)
+            self._emit(job.id, Progress.DONE, {
+                "copied": 0, "skipped": 0, "failed": 0, "bytes": 0,
+                "cancelled": True})
+            return None
+        for source, problem, _folder in unreadable:
+            self._emit(job.id, Progress.FAILED_ITEM,
+                       _retryable(source, ""), message=problem)
+        return ([item.source for item in items
+                 if not item.is_dir and _matches(_leaf(item.source), job.only)],
+                len(unreadable))
 
     def _erase(self, job: Job) -> None:
         """Delete permanently, item by item, so it can be watched and stopped.
@@ -1220,11 +1262,12 @@ class Transfers:
     def submit(self, kind: JobKind, sources: Iterable[str], destination: str = "", *,
                conflict: Conflict = Conflict.ASK, rename: str = "",
                into: Iterable[str] = (), part_size: int = 0,
-               redate: tuple[str, str] = (), skip: Iterable[str] = ()) -> int:
+               redate: tuple[str, str] = (), skip: Iterable[str] = (),
+               only: Iterable[str] = ()) -> int:
         job = Job(id=next(self._ids), kind=kind, sources=tuple(sources),
                   destination=destination, conflict=conflict, rename=rename,
                   into=tuple(into), part_size=int(part_size),
-                  redate=tuple(redate), skip=tuple(skip))
+                  redate=tuple(redate), skip=tuple(skip), only=tuple(only))
         with self._lock:
             self._ensure()
             self._inbox.put(("enqueue", job))
@@ -1414,10 +1457,15 @@ def _left_out(job: Job, name: str) -> bool:
     """0.59: whether a file of this name is one the job's skip patterns keep
     out of the copy. Case-blind, as Windows is: Logix writes `.BAK000.acd`
     and a person typing the pattern writes `*.bak*.ACD`."""
-    if not job.skip:
-        return False
+    return _matches(name, job.skip)
+
+
+def _matches(name: str, patterns: Iterable[str]) -> bool:
+    """Whether a file name matches any of these wildcard patterns, ignoring
+    case. Empty patterns match nothing."""
     lowered = name.lower()
-    return any(fnmatch.fnmatchcase(lowered, pattern.lower()) for pattern in job.skip)
+    return any(fnmatch.fnmatchcase(lowered, pattern.lower())
+               for pattern in patterns if pattern)
 
 
 def _redated(job: Job, name: str) -> str:

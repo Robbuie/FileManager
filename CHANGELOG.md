@@ -5,6 +5,31 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.60.0]
+
+### Added
+- **Clean up Logix backups.** In the File menu and the right-click More
+  menu. It sends Logix Designer's leftover files -- the `.BAK###.acd`
+  backups, and the `.Sem` and `.Wrk` files a project leaves behind when
+  Logix did not close it cleanly -- under the marked folders, or under the
+  folder you are in when no folder is marked, to the Recycle Bin, in every
+  folder inside as well. Folders and every other file stay. A project that
+  is open keeps its `.Sem` and `.Wrk`: Windows refuses to remove them and
+  the queue says so. It asks
+  first and runs in the queue, which says how many went and names any it
+  could not remove (a project open in Logix Designer, say). It uses the
+  same patterns as Duplicate Logix, `duplicate.logix_skip` in the settings
+  file. On a network share there is no Recycle Bin, so there they are
+  deleted.
+- **Duplicate Logix now clears the backups out of the original too.**
+  After the copy, a clean-up of the folder it was copied from goes into
+  the queue behind it, so yesterday's folder ends up without its `.BAK`,
+  `.Sem` and `.Wrk` files as well. Those are now also left out of the
+  copy, so tomorrow's folder never starts with a stale lock. Settings > Transfers > "Duplicate Logix clears the backups
+  out of the original" turns this off. Not checked here: Duplicate Logix a
+  day folder on a share, and Clean up Logix backups on a date folder with
+  site folders under it.
+
 ## [0.59.0]
 
 ### Added
