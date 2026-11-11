@@ -63,3 +63,19 @@ def test_a_folder_with_a_dot_is_not_given_an_extension():
 
 def test_a_dated_file_keeps_its_extension():
     assert duplicate_name("Line3_20260915.ACD", [], TODAY, is_dir=False) == "Line3_20260916.ACD"
+
+
+# ---------------------------------------------------------------- 0.59 redated
+
+
+def test_redated_moves_only_the_old_day_and_keeps_the_form():
+    import datetime as dt
+
+    from app.io.dates import redated
+
+    old, new = dt.date(2026, 11, 10), dt.date(2026, 11, 11)
+    assert redated("Line3_20261110.ACD", old, new) == "Line3_20261111.ACD"
+    assert redated("2026-11-10", old, new) == "2026-11-11"
+    assert redated("Pump 11.10.2026", old, new) == "Pump 11.11.2026"
+    assert redated("ref_20261001.ACD", old, new) == "ref_20261001.ACD"
+    assert redated("notes.txt", old, new) == "notes.txt"

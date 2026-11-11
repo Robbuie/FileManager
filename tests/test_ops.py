@@ -24,14 +24,14 @@ from app.io.protocol import Conflict, Event, Progress, JobKind
 
 
 def run_job(kind, sources, destination, *, conflict=Conflict.SKIP,
-            answer=None, timeout=30.0, rename=""):
+            answer=None, timeout=30.0, rename="", **rules):
     """Run one transfer to completion and return every event it produced."""
     events: "queue.Queue[Event]" = queue.Queue()
     transfers = Transfers(events.put)
     collected: list[Event] = []
     try:
         job = transfers.submit(kind, sources, destination, conflict=conflict,
-                               rename=rename)
+                               rename=rename, **rules)
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
@@ -450,3 +450,75 @@ def test_a_read_only_file_that_still_refuses_stays_read_only(tmp_path, monkeypat
         _replace_onto(str(partial), str(target))
     assert target.read_text() == "mine"
     assert not os.stat(target).st_mode & _stat.S_IWRITE
+
+
+# ------------------------------------------------------- Duplicate Logix (0.59)
+
+
+@pytest.fixture
+def day(tmp_path):
+    """A day's folder the way it is kept: a project at the top, site folders
+    each with their own, and Logix's backups beside every one of them."""
+    root = tmp_path / "2026-11-10"
+    root.mkdir()
+    (root / "Mixer_20261110.ACD").write_text("mixer")
+    (root / "Mixer_20261110.BAK000.acd").write_text("old")
+    (root / "notes.txt").write_text("notes")
+    for site in ("Site_A", "Site_B"):
+        (root / site).mkdir()
+        (root / site / "Line3_20261110.ACD").write_text(site)
+        (root / site / "Line3_20261110.BAK003.acd").write_text("old")
+        (root / site / "Line3_20261110.bak017.ACD").write_text("old")
+        (root / site / "ref_20261001.ACD").write_text("reference")
+    return root
+
+
+def test_duplicate_logix_redates_inside_and_leaves_the_backups(day):
+    before = tree(day)
+    events = run_job(JobKind.COPY, [str(day)], str(day.parent), rename="2026-11-11",
+                     redate=("2026-11-10", "2026-11-11"), skip=("*.BAK*.acd",))
+
+    done = final(events).payload
+    assert done["failed"] == 0
+    assert done["left_out"] == 5
+    assert done["redated"] == 3
+    assert tree(day.parent / "2026-11-11") == {
+        "Mixer_20261111.ACD": b"mixer",
+        "notes.txt": b"notes",
+        "Site_A/Line3_20261111.ACD": b"Site_A",
+        "Site_A/ref_20261001.ACD": b"reference",
+        "Site_B/Line3_20261111.ACD": b"Site_B",
+        "Site_B/ref_20261001.ACD": b"reference",
+    }
+    assert tree(day) == before
+
+
+def test_a_dated_folder_inside_takes_the_new_date_too(tmp_path):
+    root = tmp_path / "Job 11-10-2026"
+    (root / "export 2026-11-10").mkdir(parents=True)
+    (root / "export 2026-11-10" / "tags.csv").write_text("t")
+    run_job(JobKind.COPY, [str(root)], str(tmp_path), rename="Job 11-11-2026",
+            redate=("2026-11-10", "2026-11-11"))
+    assert tree(tmp_path / "Job 11-11-2026") == {"export 2026-11-11/tags.csv": b"t"}
+
+
+def test_a_plain_duplicate_copies_everything_under_its_own_names(day):
+    before = tree(day)
+    events = run_job(JobKind.COPY, [str(day)], str(day.parent), rename="2026-11-11")
+    assert final(events).payload["left_out"] == 0
+    assert tree(day.parent / "2026-11-11") == before
+
+
+def test_a_folder_pasted_into_its_own_folder_is_a_second_folder(day):
+    """0.59: it used to land inside the original as `x (2)` file by file."""
+    before = tree(day)
+    events = run_job(JobKind.COPY, [str(day)], str(day.parent), conflict=Conflict.RENAME)
+    assert final(events).payload["failed"] == 0
+    assert tree(day) == before
+    assert tree(day.parent / "2026-11-10 (2)") == before
+    run_job(JobKind.COPY, [str(day)], str(day.parent), conflict=Conflict.RENAME)
+    assert tree(day.parent / "2026-11-10 (3)") == before
+
+
+def test_a_folder_name_with_a_dot_is_numbered_whole(tmp_path):
+    assert _unique(str(tmp_path / "Line.3"), whole=True) == str(tmp_path / "Line.3 (2)")

@@ -126,6 +126,13 @@ class JobState:
     conflicts: int = 0
     rename: str = ""
     into: tuple[str, ...] = ()
+    #: 0.59: Duplicate Logix -- the dates its names move between and the
+    #: patterns it leaves out, kept so a Retry runs the same rules; and, once
+    #: it ends, how many files were left out and how many names redated.
+    redate: tuple[str, str] = ()
+    skip: tuple[str, ...] = ()
+    left_out: int = 0
+    redated: int = 0
 
     @property
     def speed(self) -> float:
@@ -224,6 +231,20 @@ def _duration(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{seconds:02d}"
 
 
+def logix_counts(redated: int, left_out: int) -> str:
+    """0.59: what a Duplicate Logix did besides copy, as a tail for the
+    outcome line -- ", 3 renamed to the new date, 12 left out" -- or
+    nothing for every other job. Said in so many words because both are
+    things the copy did on purpose that a person would otherwise have to open
+    the folder to confirm."""
+    out = ""
+    if redated:
+        out += f", {redated:,} renamed to the new date"
+    if left_out:
+        out += f", {left_out:,} left out"
+    return out
+
+
 def describe_entry(item: dict) -> tuple[str, str, str, str]:
     """A history entry as the four columns the history list shows.
 
@@ -253,6 +274,8 @@ def describe_entry(item: dict) -> tuple[str, str, str, str]:
         outcome = f"{int(item.get('copied', 0)):,} {verb}"
         if item.get("skipped"):
             outcome += f", {int(item['skipped']):,} skipped"
+    outcome += logix_counts(int(item.get("redated", 0) or 0),
+                             int(item.get("left_out", 0) or 0))
     if item.get("bytes") and not (kind is not None and kind.removes):
         outcome += f", {format_size(int(item['bytes']))}"
     seconds = float(item.get("seconds", 0) or 0)
@@ -370,15 +393,21 @@ class TransferQueue(QObject):
         move, putting each item back where it came from."""
         return self._start(JobKind.MOVE, sources, destination, into=tuple(into))
 
-    def duplicate(self, source: str, folder: str, name: str) -> int:
+    def duplicate(self, source: str, folder: str, name: str, *,
+                  redate: tuple[str, str] = (), skip: Iterable[str] = ()) -> int:
         """A copy of one item beside itself, under a new name.
 
         A copy job like any other -- the queue, the progress, the cancel, the
         write-beside-and-rename -- with one difference the engine enforces: it
         will not land on a name that is already taken. Merging into an existing
         folder is exactly wrong for a folder-per-day backup.
+
+        `redate` and `skip` are Duplicate Logix (0.59): the names inside that
+        carry the old day take the new one, and the files matching `skip` --
+        Logix Designer's backups -- are not copied at all.
         """
-        return self._start(JobKind.COPY, [source], folder, rename=name)
+        return self._start(JobKind.COPY, [source], folder, rename=name,
+                           redate=redate, skip=skip)
 
     def extract(self, source: str, destination: str, name: str) -> int:
         """0.41: all of an archive into `destination\\name`. `source` ends in a
@@ -419,16 +448,19 @@ class TransferQueue(QObject):
         job = self.jobs.get(job_id)
         if job is None or not job.retryable:
             return None
+        # 0.59: a Duplicate Logix's rules go with its retry, so a file that
+        # failed is written under the new date like the ones that did not.
+        rules = {"redate": job.redate, "skip": job.skip}
         if job.retry_all:
-            return self._start(job.kind, job.sources, job.destination)
+            return self._start(job.kind, job.sources, job.destination, **rules)
         pairs = list(dict.fromkeys(job.retry))
         sources = [source for source, _ in pairs]
         if job.kind.removes:
             return self._start(job.kind, sources, "")
         folders = [folder for _, folder in pairs]
         if len(set(folders)) == 1:
-            return self._start(job.kind, sources, folders[0])
-        return self._start(job.kind, sources, folders[0], into=folders)
+            return self._start(job.kind, sources, folders[0], **rules)
+        return self._start(job.kind, sources, folders[0], into=folders, **rules)
 
     def hold(self, job_id: int) -> None:
         """Keep a job where it is in the queue but do not let it run.
@@ -618,7 +650,8 @@ class TransferQueue(QObject):
 
     def _start(self, kind: JobKind, sources: Iterable[str], destination: str, *,
                conflict: Conflict = Conflict.ASK, rename: str = "",
-               into: Iterable[str] = (), part_size: int = 0) -> int:
+               into: Iterable[str] = (), part_size: int = 0,
+               redate: tuple[str, str] = (), skip: Iterable[str] = ()) -> int:
         """Start a job. `conflict` is the rule the process applies without
         asking; `ASK` is the default and the only one that stops.
 
@@ -635,13 +668,18 @@ class TransferQueue(QObject):
             extra["into"] = tuple(into)
         if part_size:
             extra["part_size"] = int(part_size)
+        redate, skip = tuple(redate), tuple(skip)
+        if redate:
+            extra["redate"] = redate
+        if skip:
+            extra["skip"] = skip
         job_id = self._transfers.submit(kind, sources, destination,
                                         conflict=conflict, **extra)
         self.jobs[job_id] = JobState(id=job_id, kind=kind, destination=destination,
                                      sources=sources, files=len(sources),
                                      total=len(sources) if kind.removes else 0,
                                      conflict=Conflict(conflict).value, rename=rename,
-                                     into=tuple(into))
+                                     into=tuple(into), redate=redate, skip=skip)
         self.order.append(job_id)
         self.changed.emit()
         return job_id
@@ -743,6 +781,8 @@ class TransferQueue(QObject):
             job.interruptible = True
             job.copied = int(event.payload.get("copied", 0))
             job.skipped = int(event.payload.get("skipped", 0))
+            job.left_out = int(event.payload.get("left_out", 0))
+            job.redated = int(event.payload.get("redated", 0))
             job.failed = max(job.failed, int(event.payload.get("failed", 0)))
             job.cancelled = bool(event.payload.get("cancelled"))
             if isinstance(event.payload.get("history"), dict):

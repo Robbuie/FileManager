@@ -337,6 +337,14 @@ DEFAULTS: dict[str, Any] = {
     "listing.placeholders": True,
     # 0.49: the app's taskbar button fills while a transfer runs.
     "transfers.taskbar": True,
+    # 0.59: files Duplicate Logix leaves out of the copy, as wildcard
+    # patterns matched against the file name without regard to case. Logix
+    # Designer writes a `.BAKnnn.acd` beside the project every time it saves,
+    # and a copy made to carry on working in has no use for yesterday's
+    # dozen of them. Not in the Options dialog, which has no row for a list
+    # of text; add to it here, e.g. "*.Sem" for the lock file Logix leaves
+    # beside a project that is open.
+    "duplicate.logix_skip": ["*.BAK*.acd"],
     # 0.58: a sync File Compare sends goes into the queue without this window
     # coming forward to ask again; on, it asks before removing or replacing.
     "transfers.ask_outside": False,

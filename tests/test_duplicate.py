@@ -41,9 +41,11 @@ class FakeBridge:
 class FakeQueue:
     def __init__(self):
         self.duplicates = []
+        self.rules = []
 
-    def duplicate(self, source, folder, name):
+    def duplicate(self, source, folder, name, **rules):
         self.duplicates.append((source, folder, name))
+        self.rules.append(rules)
         return 1
 
 
@@ -178,3 +180,26 @@ def test_the_name_prompt_refuses_a_name_in_use() -> None:
     prompt._field.setText("Job 2")
     assert prompt._ok.isEnabled()
     prompt.deleteLater()
+
+
+def test_ctrl_shift_f5_is_duplicate_logix(window, monkeypatch) -> None:
+    """0.59: the day in the old name and the new go to the engine, with the
+    backups to leave out; plain Shift+F5 sends neither."""
+    widget, queue, offered = prepare(window, monkeypatch, [entry("2026-11-10")],
+                                     cursor="2026-11-10", answer="2026-11-11")
+    press(widget._view, Qt.Key_F5, Qt.ShiftModifier | Qt.ControlModifier)
+
+    assert offered["title"] == "Duplicate Logix"
+    assert [d[2] for d in queue.duplicates] == ["2026-11-11"]
+    assert queue.rules == [{"redate": ("2026-11-10", "2026-11-11"),
+                            "skip": ("*.BAK*.acd",)}]
+
+    press(widget._view, Qt.Key_F5, Qt.ShiftModifier)
+    assert queue.rules[-1] == {}
+
+
+def test_duplicate_logix_without_a_date_still_leaves_the_backups(window, monkeypatch) -> None:
+    widget, queue, _ = prepare(window, monkeypatch, [entry("Line 3")],
+                               cursor="Line 3", answer="Line 3 copy")
+    press(widget._view, Qt.Key_F5, Qt.ShiftModifier | Qt.ControlModifier)
+    assert queue.rules == [{"skip": ("*.BAK*.acd",)}]

@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.listing import format_size
-from app.core.transfers import VERBS, describe_entry, shorten
+from app.core.transfers import VERBS, describe_entry, logix_counts, shorten
 from app.io.protocol import Conflict, JobKind
 from app.ui.dialogs import Dialog
 from app.ui.rows import parse_colour
@@ -276,7 +276,8 @@ def _detail(job) -> str:
         outcome = "cancelled" if job.cancelled else "done"
         verb = "removed" if job.kind.removes else "copied"
         return (f"{outcome}: {job.copied:,} {verb}, {job.skipped:,} skipped, "
-                f"{job.failed:,} failed")
+                f"{job.failed:,} failed"
+                + logix_counts(getattr(job, "redated", 0), getattr(job, "left_out", 0)))
     if job.held:
         return "held"
     if job.state == "queued":

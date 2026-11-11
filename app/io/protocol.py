@@ -634,6 +634,17 @@ class Job:
     into: tuple[str, ...] = ()
     #: 0.44: the size of each part, for a split.
     part_size: int = 0
+    #: 0.59: Duplicate Logix. `(old, new)` as ISO dates: inside the copy, a
+    #: file or folder whose name carries `old` is written under `new` instead,
+    #: in the form its name already used. Empty for every other job. Dates
+    #: as text rather than `date` objects because everything crossing to the
+    #: ops process stays a plain value.
+    redate: tuple[str, str] = ()
+    #: 0.59: wildcard patterns, matched against file names without regard to
+    #: case, for files a copy leaves out -- Logix Designer's `.BAK000.acd`
+    #: backups, which are worth nothing in a copy made to keep working in.
+    #: Folders are never left out by this; only files.
+    skip: tuple[str, ...] = ()
 
 
 def destination_of(job: Job, source: str) -> str:

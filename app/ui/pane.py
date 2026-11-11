@@ -1795,8 +1795,14 @@ class PaneWidget(QFrame):
             return
         pane.rename_many(steps, moves)
 
-    def duplicate_current(self) -> None:
+    def duplicate_current(self, *, logix: bool = False) -> None:
         """Shift+F5: copy the row under the cursor beside itself, renamed.
+
+        Ctrl+Shift+F5 is Duplicate Logix (0.59): the same, and inside the copy
+        the names carrying the old day take the new one and Logix Designer's
+        `.BAK` files are left behind -- see `core.pane.Pane.duplicate`. Its
+        own command rather than what Duplicate always does, because a folder
+        that has nothing to do with a PLC still wants a plain copy.
 
         For the folder-per-day habit: yesterday's folder is duplicated, the copy
         is named for today, and yesterday's stays as the backup. The name
@@ -1807,22 +1813,29 @@ class PaneWidget(QFrame):
         """
         if self._read_only():
             return
+        title = "Duplicate Logix" if logix else "Duplicate"
         if self._pane.current.flat:
-            self._pane.say("Duplicate works outside flat view -- Ctrl+B to leave it", "bad")
+            self._pane.say(f"{title} works outside flat view -- Ctrl+B to leave it", "bad")
             return
         row = self.current_row()
         names = self._pane.names_for({row}) if row >= 0 else []
         if not names:
             return
         suggestion = self._pane.duplicate_suggestion(row) or names[0]
+        label = f"Duplicate {names[0]} here as"
+        if logix:
+            label += ("\nDated names inside take the new date; "
+                      ".BAK backups are left out")
         name = dialogs.ask_name(
-            self.window(), title="Duplicate",
-            label=f"Duplicate {names[0]} here as", initial=suggestion,
+            self.window(), title=title, label=label, initial=suggestion,
             ok_text="Duplicate", taken=self._pane.name_taken,
         )
         row = self._pane.current.model.row_of(names[0])      # see rename_current
         if name and name != names[0] and row >= 0:
-            self._pane.duplicate(row, name)
+            if logix:
+                self._pane.duplicate(row, name, logix=True)
+            else:
+                self._pane.duplicate(row, name)
 
     def delete_selection(self, *, permanent: bool = False) -> None:
         if self._read_only():
@@ -1968,6 +1981,8 @@ class PaneWidget(QFrame):
             more = menu.addMenu("More")
             more.setToolTipsVisible(True)
             more.addAction("Duplicate\tShift+F5", self.duplicate_current)
+            more.addAction("Duplicate Logix\tCtrl+Shift+F5",
+                           lambda: self.duplicate_current(logix=True))
             if len(names) > 1:
                 more.addAction("Rename several...\tCtrl+M", self.rename_several)
             more.addAction("Attributes and dates...", self.attributes)
@@ -2333,6 +2348,9 @@ class PaneWidget(QFrame):
         shift = bool(event.modifiers() & Qt.ShiftModifier)
         if key == Qt.Key_F3:
             self.view_current()
+            return
+        if key == Qt.Key_F5 and shift and event.modifiers() & Qt.ControlModifier:
+            self.duplicate_current(logix=True)
             return
         if key == Qt.Key_F5 and shift:
             self.duplicate_current()

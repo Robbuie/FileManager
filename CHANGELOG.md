@@ -5,6 +5,37 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.59.0]
+
+### Added
+- **Duplicate Logix (Ctrl+Shift+F5).** Next to Duplicate in the File menu
+  and in the right-click More menu. It does what Duplicate does -- copies
+  the folder beside itself and offers today's date as the name -- and then
+  takes care of the inside of the copy, which used to be done by hand:
+  - Any file or folder inside whose name has the *same date as the folder
+    being duplicated* gets the new date, written the way that name already
+    wrote it. `2026-11-10\Line3_20261110.ACD` becomes
+    `2026-11-11\Line3_20261111.ACD`. This goes all the way down, so a date
+    folder holding site folders, each with its Rockwell file, works the
+    same way: the site folders keep their names and the files inside get
+    the new date. A name with some other date keeps it.
+  - Logix Designer's backups (`*.BAK*.acd`, any case) are not copied at
+    all, so there is nothing to delete afterwards. The list of patterns is
+    `duplicate.logix_skip` in the settings file; add `*.Sem` there, for
+    example, to leave out the lock file of a project that is open.
+  - The queue and the status bar say how many names were redated and how
+    many files were left out.
+  Plain Duplicate (Shift+F5) is unchanged, for folders that have nothing to
+  do with a PLC. Not checked here: Duplicate Logix a real day folder on a
+  share, and a date folder with site folders under it.
+
+### Fixed
+- **Copying a folder and pasting it in the same folder now makes a copy of
+  the folder.** It used to put a numbered copy of every file *inside the
+  original folder* (`a (2).txt`, `b (2).txt`) instead of a second folder.
+  The copy is now a new folder beside it, `Name (2)`, then `Name (3)`.
+  Files pasted into their own folder were already right and are unchanged.
+
 ## [0.58.1]
 
 ### Fixed

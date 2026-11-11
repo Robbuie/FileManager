@@ -28,7 +28,7 @@ from app import __version__
 from app.core import commands as core_commands
 from app.core import compare as core_compare
 from app.core import themeswitch, when
-from app.core.transfers import worth_notifying
+from app.core.transfers import logix_counts, worth_notifying
 from app.core import places as core_places
 from app.core.favorites import UNGROUPED
 from app.io import elevate, paths
@@ -90,6 +90,8 @@ def _outcome(job) -> str:
         summary = f"{job.copied:,} removed"
     else:
         summary = f"{job.copied:,} copied, {job.skipped:,} skipped"
+    if not job.cancelled and not job.kind.removes:
+        summary += logix_counts(getattr(job, "redated", 0), getattr(job, "left_out", 0))
     return f"{where}: {summary}" if where else summary
 
 
@@ -575,6 +577,10 @@ class MainWindow(QMainWindow):
                      lambda: self._current_widget().rename_several())
         self._hint(files, "Duplicate\tShift+F5",
                    lambda: self._current_widget().duplicate_current())
+        logix = self._hint(files, "Duplicate Logix\tCtrl+Shift+F5",
+                           lambda: self._current_widget().duplicate_current(logix=True))
+        logix.setToolTip("Duplicate, and inside the copy give dated names the new "
+                         "date and leave out Logix Designer's .BAK backups.")
         files.addSeparator()
         self._hint(files, "Delete\tDel", lambda: self._current_widget().delete_selection())
         self._hint(files, "Delete permanently\tShift+Del",

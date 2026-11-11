@@ -349,6 +349,9 @@ Ctrl+Alt+C  copy the path under the cursor as UNC (0.40)
 Ctrl+M  rename the marked rows by a rule, previewed (0.40)
 Alt+F7  search, and Find duplicates beside it on the Tools menu (0.42)
 Ctrl+Z  undo the last rename, new folder, copy or move (0.44)
+Shift+F5  duplicate the row here, named for today
+Ctrl+Shift+F5  Duplicate Logix: the same, and inside the copy the names with
+        the old day take the new one and `.BAK` backups are left out (0.59)
 Alt+Left / Alt+Right  back, forward -- and the two side buttons on the mouse,
 which walk the history of the tab in the pane the pointer is over (0.17)
 Ctrl+B  the navigation rail

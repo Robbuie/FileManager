@@ -1117,19 +1117,41 @@ class Pane(QObject):
         wanted = name.strip().lower()
         return any(existing.lower() == wanted for existing in self.current.model.names())
 
-    def duplicate(self, row: int, name: str) -> bool:
+    def duplicate(self, row: int, name: str, *, logix: bool = False) -> bool:
         """Copy a row beside itself under `name`, through the queue.
 
         The queue rather than a worker request for `delete`'s reason: a day's
         worth of PLC projects is a real copy, and a copy has a person watching
         it rather than a deadline. Without a queue this does nothing.
+
+        `logix` is Duplicate Logix (0.59): the rest of the folder-per-day
+        habit, which was done by hand after the copy. Inside the copy, every
+        file or folder whose name carries the day in the old name takes the
+        day in the new one -- `2026-11-10\\Line3_20261110.ACD` becomes
+        `2026-11-11\\Line3_20261111.ACD`, at any depth, so a date folder of
+        site folders is handled the same way -- and the files matching
+        `duplicate.logix_skip`, Logix Designer's backups, are not copied. The
+        two days are read from the names here; the walk is the engine's.
+        Without a date in both names nothing is redated and the backups are
+        still left out.
         """
         tab = self.current
         source = self.row_path(row)
         if source is None or not name or self.transfers is None:
             return False
+        rules: dict = {}
+        if logix:
+            entry = tab.model.entry(row)
+            old = naming.date_span(entry.name) if entry is not None else None
+            new = naming.date_span(name)
+            if old and new and old[2] != new[2]:
+                rules["redate"] = (old[2].isoformat(), new[2].isoformat())
+            skip = self._config.get("duplicate.logix_skip") or ()
+            if isinstance(skip, str):
+                skip = (skip,)
+            rules["skip"] = tuple(str(pattern) for pattern in skip if pattern)
         self._set_status(tab, f"duplicating to {name}", BUSY)
-        self.transfers.duplicate(source, tab.path, name)
+        self.transfers.duplicate(source, tab.path, name, **rules)
         return True
 
     def delete(self, names: list[str], *, permanent: bool = False) -> None:

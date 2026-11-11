@@ -81,7 +81,9 @@ Nothing is deleted that was not first written somewhere else.
 
 from __future__ import annotations
 
+import datetime
 import errno
+import fnmatch
 import multiprocessing as mp
 import os
 import queue
@@ -109,7 +111,7 @@ except ImportError:  # pragma: no cover - everywhere but Windows
 if os.environ.get(COPY_LOOP_ENV):  # pragma: no cover - the harness's switch
     win32file = None
 
-from app.io import archive, history, holders, paths
+from app.io import archive, dates, history, holders, paths
 from app.io.protocol import (
     CHUNK,
     PROGRESS_INTERVAL,
@@ -176,6 +178,12 @@ class Totals:
     failed: int = 0
     bytes: int = 0
     cancelled: bool = False
+    #: 0.59: files a skip pattern kept out of the copy, and names the copy
+    #: was written under with a new date. Counted apart from `skipped`, which
+    #: is a conflict answered "skip" -- a person deciding not to replace
+    #: something -- and which the undo reads as "this copy is not whole".
+    left_out: int = 0
+    redated: int = 0
 
 
 class _Cancelled(Exception):
@@ -463,7 +471,7 @@ class Runner:
 
             if sources:
                 self._emit(job.id, Progress.SCANNING)
-                items, unreadable = self._scan(job, sources)
+                items, unreadable = self._scan(job, sources, totals=totals)
                 totals.failed += len(unreadable)
                 for source, problem, folder in unreadable:
                     self._emit(job.id, Progress.FAILED_ITEM,
@@ -492,6 +500,7 @@ class Runner:
             "copied": totals.copied, "skipped": totals.skipped,
             "failed": totals.failed, "bytes": totals.bytes,
             "cancelled": totals.cancelled,
+            "left_out": totals.left_out, "redated": totals.redated,
         })
 
     def _archive_refusals(self, job: Job, sources: list[str]) -> list[str]:
@@ -707,7 +716,7 @@ class Runner:
         return room_for(job.destination, needed)
 
     def _scan(self, job: Job, sources: Iterable[str], *,
-              destination: str | None = None):
+              destination: str | None = None, totals: Totals | None = None):
         """Walk the sources into a flat list of items, directories first.
 
         Directories come before their contents so that creating them is just
@@ -719,6 +728,9 @@ class Runner:
         the part with the awkward cases in it -- a symlink that must not be
         followed, a folder that cannot be opened -- and those are worth having
         in one place whatever is going to be done with the result.
+
+        `totals`, when given, is where a Duplicate Logix's files left out and
+        names redated are counted (0.59); the walk is where both are decided.
         """
         items: list[Item] = []
         # (the path, what went wrong, the folder it was going into), the last
@@ -737,8 +749,10 @@ class Runner:
             try:
                 if (os.path.isdir(paths.api(source))
                         and not os.path.islink(paths.api(source))):
+                    if target and _beside_itself(job, target):
+                        target = _unique(target, whole=True)
                     items.append(Item(source, target, is_dir=True))
-                    self._walk(job, source, target, items, unreadable)
+                    self._walk(job, source, target, items, unreadable, totals)
                 else:
                     items.append(Item(source, target,
                                       size=os.path.getsize(paths.api(source))))
@@ -778,7 +792,8 @@ class Runner:
                                   member=(arc, path)))
 
     def _walk(self, job: Job, source: str, target: str, items: list[Item],
-              unreadable: list[tuple[str, str, str]]) -> None:
+              unreadable: list[tuple[str, str, str]],
+              totals: Totals | None = None) -> None:
         try:
             scanner = os.scandir(paths.api(source))
         except OSError as exc:
@@ -793,11 +808,23 @@ class Runner:
                 # into failure reports, retries and erase's refusal offer, which
                 # are exactly the places the prefix must never reach.
                 child = os.path.join(source, entry.name)
-                child_target = os.path.join(target, entry.name) if target else ""
                 try:
-                    if entry.is_dir(follow_symlinks=False):
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError as exc:
+                    unreadable.append((child, _describe(exc), target))
+                    continue
+                if not is_dir and _left_out(job, entry.name):
+                    if totals is not None:
+                        totals.left_out += 1
+                    continue
+                name = _redated(job, entry.name)
+                if name != entry.name and totals is not None:
+                    totals.redated += 1
+                child_target = os.path.join(target, name) if target else ""
+                try:
+                    if is_dir:
                         items.append(Item(child, child_target, is_dir=True))
-                        self._walk(job, child, child_target, items, unreadable)
+                        self._walk(job, child, child_target, items, unreadable, totals)
                     else:
                         items.append(Item(child, child_target,
                                           size=entry.stat(follow_symlinks=False).st_size))
@@ -1192,10 +1219,12 @@ class Transfers:
 
     def submit(self, kind: JobKind, sources: Iterable[str], destination: str = "", *,
                conflict: Conflict = Conflict.ASK, rename: str = "",
-               into: Iterable[str] = (), part_size: int = 0) -> int:
+               into: Iterable[str] = (), part_size: int = 0,
+               redate: tuple[str, str] = (), skip: Iterable[str] = ()) -> int:
         job = Job(id=next(self._ids), kind=kind, sources=tuple(sources),
                   destination=destination, conflict=conflict, rename=rename,
-                  into=tuple(into), part_size=int(part_size))
+                  into=tuple(into), part_size=int(part_size),
+                  redate=tuple(redate), skip=tuple(skip))
         with self._lock:
             self._ensure()
             self._inbox.put(("enqueue", job))
@@ -1381,13 +1410,60 @@ def _retryable(source: str, into: str) -> dict:
     return {"name": os.path.basename(source), "source": source, "into": into}
 
 
+def _left_out(job: Job, name: str) -> bool:
+    """0.59: whether a file of this name is one the job's skip patterns keep
+    out of the copy. Case-blind, as Windows is: Logix writes `.BAK000.acd`
+    and a person typing the pattern writes `*.bak*.ACD`."""
+    if not job.skip:
+        return False
+    lowered = name.lower()
+    return any(fnmatch.fnmatchcase(lowered, pattern.lower()) for pattern in job.skip)
+
+
+def _redated(job: Job, name: str) -> str:
+    """0.59: the name an item inside a Duplicate Logix is written under.
+
+    Its own unless it carries the day being duplicated from, which becomes
+    the day being duplicated to; see `dates.redated`. A job without `redate`,
+    or with one that does not read as two dates, changes nothing.
+    """
+    if len(job.redate) != 2:
+        return name
+    try:
+        old, new = (datetime.date.fromisoformat(day) for day in job.redate)
+    except ValueError:
+        return name
+    return dates.redated(name, old, new)
+
+
+def _beside_itself(job: Job, target: str) -> bool:
+    """0.59: a folder copied, keep-both, onto a name that is already there.
+
+    What a folder copied and pasted into the folder it is in comes to: its
+    target is itself. Before 0.59 the folder was "created" with `exist_ok`
+    and every file in it then collided with itself, so the copy landed
+    *inside the original* as `a (2).txt`, `b (2).txt` -- a mess in the very
+    folder the copy was made to protect. Keep-both for a folder means a
+    second folder, which is what Explorer does and what the paste meant.
+
+    Only for keep-both set on the job. A folder copied onto one of the same
+    name with the question still to ask is a merge somebody may well want,
+    and a duplicate already refuses a name that is taken.
+    """
+    return (not job.rename and job.conflict is Conflict.RENAME
+            and os.path.lexists(paths.api(target)))
+
+
 def _target_name(job: Job, source: str) -> str:
     """The name a source takes at the destination: its own, or a duplicate's.
 
     A path inside an archive is joined with backslashes whatever the platform,
     so its last part is found with both separators in mind.
+
+    A Duplicate Logix's retry (0.59) has no `rename` but does have `redate`,
+    so a file that failed under its old day lands under the new one.
     """
-    return job.rename or _leaf(source)
+    return job.rename or _redated(job, _leaf(source))
 
 
 def _split_plan(job: Job):
@@ -1511,15 +1587,17 @@ def room_for(destination: str, needed: int) -> tuple[int, int] | None:
     return None if free >= needed else (needed, int(free))
 
 
-def _unique(target: str) -> str:
+def _unique(target: str, *, whole: bool = False) -> str:
     """`report.pdf` -> `report (2).pdf`, the way Windows names a second copy.
 
     Counts up rather than using a timestamp or a uuid: the point of keeping
-    both files is that a person is going to look at them.
+    both files is that a person is going to look at them. `whole` (0.59) is
+    for a folder, whose name has no extension to keep at the end however
+    many dots it has: `Line.3` becomes `Line.3 (2)`, not `Line (2).3`.
     """
     folder, name = os.path.split(target)
     stem, dot, suffix = name.rpartition(".")
-    if not dot or not stem:
+    if whole or not dot or not stem:
         stem, suffix = name, ""
     index = 2
     while True:

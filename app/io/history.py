@@ -54,6 +54,9 @@ def entry(kind: str, sources: tuple[str, ...], destination: str, *,
         "failed": int(payload.get("failed", 0) or 0),
         "bytes": int(payload.get("bytes", 0) or 0),
         "cancelled": bool(payload.get("cancelled")),
+        # 0.59: Duplicate Logix's backups left out and names redated.
+        "left_out": int(payload.get("left_out", 0) or 0),
+        "redated": int(payload.get("redated", 0) or 0),
         "message": message,
         "problems": problems[:PROBLEMS],
     }
