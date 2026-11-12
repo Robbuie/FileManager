@@ -76,6 +76,8 @@ def win32_problem() -> str | None:
 LOCAL_VOLUME_KEY = "local"
 
 _UNC_RE = re.compile(r"^\\\\([^\\]+)\\([^\\]+)(\\.*)?$")
+#: 0.61: `\\server` with nothing after it -- a server rather than a share.
+_SERVER_RE = re.compile(r"^\\\\([^\\]+)$")
 _DRIVE_RE = re.compile(r"^([A-Za-z]):(\\.*)?$")
 _DRIVE_ROOT_RE = re.compile(r"^[A-Z]:\\$")
 
@@ -152,6 +154,26 @@ def split_unc(path: str) -> tuple[str, str, str] | None:
     if match is None:
         return None
     return match.group(1), match.group(2), match.group(3) or ""
+
+
+def server_of(path: str) -> str | None:
+    r"""`\\server` when the path is a server on its own, else None.
+
+    A server is a place a pane can stand since 0.61: its listing is its
+    shares. `\\?` and `\\.` are the long-path and device prefixes rather
+    than servers, so they never answer here.
+    """
+    match = _SERVER_RE.match(normalize(path or ""))
+    if match is None or match.group(1) in ("?", "."):
+        return None
+    return "\\\\" + match.group(1)
+
+
+def login_root(path: str) -> str | None:
+    r"""What a login is made against for `path`: its share, or the server
+    itself when the path is a bare `\\server` (0.61) -- which `connect`
+    attaches to as `\\server\IPC$`, the way Windows' own prompt does."""
+    return share_root(path) or server_of(path)
 
 
 def drive_letter(path: str) -> str | None:
@@ -540,6 +562,10 @@ def connections() -> tuple[list[Connection], str]:
                 remote = normalize(str(getattr(item, "lpRemoteName", "") or ""))
                 if not remote or not is_unc(remote):
                     continue
+                if split_unc(remote)[1].upper() == "IPC$":
+                    # 0.61: the login to a bare server is held as its IPC$,
+                    # which is a session rather than a place to open.
+                    continue
                 found.append(Connection(
                     remote=remote,
                     local=str(getattr(item, "lpLocalName", "") or ""),
@@ -595,6 +621,12 @@ def connect(remote: str, *, remember: bool = False, user: str = "", password: st
     """
     if win32wnet is None:
         return "not running on Windows"
+    if server_of(remote):
+        # 0.61: a server on its own is logged into through its IPC$ share,
+        # which is what lets its shares be listed and every share on it be
+        # opened as that account afterwards. Nothing about IPC$ is worth
+        # restoring at the next logon, so it is never remembered.
+        remote, remember = server_of(remote) + "\\IPC$", False
     user = account_for(remote, user)
     resource = win32wnet.NETRESOURCE()
     resource.dwType = _RESOURCETYPE_DISK
@@ -614,6 +646,59 @@ def connect(remote: str, *, remember: bool = False, user: str = "", password: st
     if user and save_credential:
         _save_credential(normalize(remote), user, password)
     return ""
+
+
+#: `NetShareEnum` share types. Only disk shares are folders; printers, IPC$
+#: and the administrative shares (`STYPE_SPECIAL`: C$, ADMIN$) are left out,
+#: as Explorer leaves them out.
+_STYPE_DISKTREE = 0
+_STYPE_MASK = 0xFF
+_STYPE_SPECIAL = 0x80000000
+_ERROR_MORE_DATA = 234
+
+
+def shares(server: str) -> list[str]:
+    r"""The disk shares a server offers, by name, for a pane on `\\server`.
+
+    One `NetShareEnum` against the server the person navigated to -- a listing
+    of that server, the way `scandir` is a listing of a folder, and run in that
+    server's own worker for the same reason. It is not the network browse
+    (`RESOURCE_GLOBALNET`) this module keeps out: nothing here asks what other
+    servers exist. A name ending in `$` is hidden by the server's owner and
+    stays hidden, as it does in Explorer; typing the full path still opens it.
+
+    Raises `OSError` carrying Windows' number, so a refusal reads the same as
+    a refused folder -- 1326 included, which is what offers the login prompt.
+    """
+    root = server_of(server)
+    if root is None:
+        raise OSError(0, "not a server", server)
+    try:
+        import win32net
+    except Exception as exc:  # noqa: BLE001 - off Windows, or a broken pywin32
+        raise OSError(0, f"shares cannot be listed here ({exc})", root) from None
+    found: list[str] = []
+    resume = 0
+    while True:
+        try:
+            rows, _total, resume = win32net.NetShareEnum(root, 1, resume, 65536)
+        except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+            number = getattr(exc, "winerror", None)
+            if number is None and getattr(exc, "args", None) and isinstance(exc.args[0], int):
+                number = exc.args[0]
+            if number == _ERROR_MORE_DATA:
+                continue
+            words = getattr(exc, "strerror", None) or str(exc)
+            raise OSError(0, words, root, number) from None
+        for row in rows:
+            kind = int(row.get("type", 0)) & 0xFFFFFFFF
+            name = str(row.get("netname") or "")
+            if (not name or name.endswith("$") or kind & _STYPE_SPECIAL
+                    or kind & _STYPE_MASK != _STYPE_DISKTREE):
+                continue
+            found.append(name)
+        if not resume:
+            return found
 
 
 #: 0.50.5: the failures a different account can fix, by Windows' number. A
@@ -725,7 +810,13 @@ def volume_key(path: str, *, mapping: Mapping[str, str] | None = None) -> str:
     connection to the server. Two shares on one server that hang independently
     would mean two processes to kill for one failure.
     """
-    parts = split_unc(resolve(path, mapping=mapping))
+    resolved = resolve(path, mapping=mapping)
+    server = server_of(resolved)
+    if server is not None:
+        # 0.61: the server's own worker, never the local one -- listing a
+        # server's shares is a call to that server and hangs with it.
+        return server.lower()
+    parts = split_unc(resolved)
     if parts is None:
         return LOCAL_VOLUME_KEY
     return "\\\\" + parts[0].lower()
@@ -775,7 +866,7 @@ def parent(path: str) -> str | None:
     too.
     """
     text = normalize(path)
-    if _DRIVE_ROOT_RE.match(text):
+    if _DRIVE_ROOT_RE.match(text) or server_of(text):
         return None
     parts = split_unc(text)
     if parts is not None and not parts[2]:
@@ -794,7 +885,7 @@ def join(path: str, name: str) -> str:
 def leaf(path: str) -> str:
     """The last segment, for a tab label. A root is named by itself."""
     text = normalize(path)
-    if _DRIVE_ROOT_RE.match(text):
+    if _DRIVE_ROOT_RE.match(text) or server_of(text):
         return text
     parts = split_unc(text)
     if parts is not None and not parts[2]:

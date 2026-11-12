@@ -104,6 +104,8 @@ def count_of(value: int, noun: str) -> str:
 
 
 def format_time(mtime: float) -> str:
+    if not mtime:
+        return ""  # 0.61: a share row has no date, and 1970 is not one
     try:
         return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
     except (ValueError, OSError, OverflowError):

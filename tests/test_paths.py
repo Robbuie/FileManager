@@ -104,6 +104,7 @@ def test_a_missing_pywin32_is_reported_rather_than_absorbed():
     (r"\\dc01\projects\Jobs\2026", r"\\dc01\projects\Jobs"),
     (r"\\dc01\projects\Jobs", r"\\dc01\projects"),
     (r"\\dc01\projects", None),
+    (r"\\dc01", None),
 ])
 def test_walking_up_stops_at_a_root(given, expected):
     assert paths.parent(given) == expected
@@ -168,3 +169,48 @@ def test_an_absolute_name_would_have_escaped_the_join(name):
     """
     assert ntpath.join(r"S:\Jobs", name) == name
     assert not paths.is_bare_name(name)
+
+
+# ------------------------------------------------------- a server on its own
+
+
+@pytest.mark.parametrize("given, expected", [
+    (r"\\nas01", r"\\nas01"),
+    ("\\\\nas01\\", r"\\nas01"),
+    ("//nas01", r"\\nas01"),
+    (r"\\nas01\share", None),
+    (r"\\?", None),
+    (r"\\.", None),
+    ("C:\\", None),
+    ("", None),
+])
+def test_a_bare_server_is_recognised(given, expected):
+    assert paths.server_of(given) == expected
+
+
+def test_a_bare_server_has_its_own_worker():
+    """Listing a server's shares is a call to that server, so it must hang
+    with that server's shares rather than with the local disks."""
+    key = paths.volume_key(r"\\NAS01", mapping={})
+    assert key == r"\\nas01"
+    assert key == paths.volume_key(r"\\nas01\public\x", mapping={})
+
+
+def test_a_bare_server_is_a_root_with_one_crumb():
+    assert paths.leaf(r"\\nas01") == r"\\nas01"
+    assert paths.crumbs(r"\\nas01") == [(r"\\nas01", r"\\nas01")]
+
+
+def test_a_login_is_made_against_the_share_or_the_server():
+    assert paths.login_root(r"\\nas01\public\Jobs") == r"\\nas01\public"
+    assert paths.login_root(r"\\nas01") == r"\\nas01"
+    assert paths.login_root(r"C:\Windows") is None
+
+
+def test_listing_shares_off_windows_fails_as_an_oserror():
+    """The worker turns an OSError into a reply; anything else would be a
+    crash in the listing path."""
+    with pytest.raises(OSError):
+        paths.shares(r"\\nas01")
+    with pytest.raises(OSError):
+        paths.shares(r"\\nas01\public")

@@ -282,6 +282,9 @@ def _list(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
     listing with every column is one pass and no extra syscalls. A per-row
     `os.stat` here would be 50,000 SMB round trips.
     """
+    if paths.server_of(request.path):
+        _list_shares(request, outbox)
+        return
     deadline = time.monotonic() + request.timeout
     batch: list[Entry] = []
     seq = 0
@@ -323,6 +326,29 @@ def _list(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> N
                 deadline = time.monotonic() + request.timeout
 
     outbox.put(Reply(request.id, Status.OK, payload=batch, seq=seq))
+
+
+#: What a share row carries as its attributes: a folder, nothing else known.
+_SHARE_ATTRIBUTES = 0x10
+
+
+def _list_shares(request: Request, outbox: Any) -> None:
+    r"""0.61: the listing of a bare `\\server` is its shares, as folders.
+
+    One call and a short answer, so it is sent whole rather than streamed. A
+    share has no size or date of its own to report, and none is invented: the
+    row says zero rather than a time that would be read as a modification.
+    """
+    try:
+        names = paths.shares(request.path)
+    except OSError as exc:
+        outbox.put(_failure(request, exc))
+        return
+    outbox.put(Reply(request.id, Status.OK, payload=[
+        Entry(name=name, is_dir=True, size=0, mtime=0.0,
+              attributes=_SHARE_ATTRIBUTES)
+        for name in names
+    ]))
 
 
 def _walk(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:

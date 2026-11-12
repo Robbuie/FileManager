@@ -108,7 +108,9 @@ def clean(path: str) -> str:
     text = paths.normalize((path or "").strip())
     if not text:
         return ""
-    return text.rstrip("\\") if paths.is_unc(text) else ""
+    text = text.rstrip("\\")
+    # 0.61: a bare `\\server` too, which is logged into through its IPC$.
+    return text if paths.is_unc(text) or paths.server_of(text) else ""
 
 
 class Network(QObject):

@@ -45,7 +45,8 @@ def kind_of(path: str, resolved: str, live: list[str] | tuple[str, ...]) -> str:
     marked through its drive letter is still live when shown as UNC."""
     if live_root(path, live) or live_root(resolved, live):
         return LIVE
-    if paths.is_unc(resolved) or paths.is_unc(path):
+    if (paths.is_unc(resolved) or paths.is_unc(path)
+            or paths.server_of(resolved) or paths.server_of(path)):
         return SERVER
     return LOCAL
 

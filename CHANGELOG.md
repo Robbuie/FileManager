@@ -5,6 +5,29 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.61.0]
+
+### Added
+- **A server on its own opens, and asks for an account.** A location such
+  as `\\servername`, with no share after it, now lists that server's
+  shares as folders, the way Explorer does -- open one to go in. Before,
+  it could not be opened at all, and on a server outside the domain it
+  only said `OSError: [WinError 1326] the user name or password is
+  incorrect` and never offered the Connect as prompt, because that prompt
+  was only offered for a share. It now is: type `\username` (the server's
+  own account) and the password, and the login is made to the server as a
+  whole, so its shares open as that account afterwards. Ctrl+Shift+R asks
+  again after a Cancel. Hidden shares (names ending in `$`) stay hidden;
+  typing the full path still opens one. Going up from a share does not
+  yet lead back to its server -- open the server location again.
+  Not checked here: any of this against a real server -- the share list,
+  the login, and that a share opened afterwards uses that account.
+
+### Fixed
+- A bare `\\servername` was given the local disks' worker, so a server
+  that stopped answering could have held up the local drives with it. It
+  has its own now, the same one as its shares.
+
 ## [0.60.0]
 
 ### Added

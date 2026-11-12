@@ -1680,6 +1680,8 @@ class Pane(QObject):
         tab.space_text = ""
         if tab is self.current:
             self.spaceChanged.emit("")
+        if paths.server_of(tab.path):
+            return  # 0.61: a server is not a volume and has no free space
         tab.space_id = self._bridge.submit(
             Op.FREE_SPACE, tab.path,
             timeout=float(self._config.get("timeout.free_space")),
@@ -1766,7 +1768,7 @@ def _login_share(resolved: str, reply: Reply) -> str | None:
     that folder, which is what the elevation offer is for, and no login
     prompt should stand in front of it.
     """
-    share = paths.share_root(resolved or "")
+    share = paths.login_root(resolved or "")
     if not share:
         return None
     found = _WINERROR_RE.search(reply.message or "")

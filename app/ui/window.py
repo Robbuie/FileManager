@@ -1187,7 +1187,7 @@ class MainWindow(QMainWindow):
         which is still the right one for a disk that stopped answering.
         """
         pane = self._current_pane()
-        share = paths.share_root(pane.resolved())
+        share = paths.login_root(pane.resolved())
         if share and self._network is not None:
             self._reconnect(share)
             return
