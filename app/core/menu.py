@@ -120,6 +120,46 @@ class ShellMenu(QObject):
             args={"token": token, "item": int(item_id)},
         )
 
+    def paste(self, folder: str) -> None:
+        """0.62: run Explorer's own Paste in a folder, without showing a menu.
+
+        Only for what the queue cannot copy: files offered with no path, as a
+        Remote Desktop session offers them. The background menu is built as a
+        right-click on empty space would build it, its `paste` entry is found
+        by verb rather than by position or wording -- which are the shell's
+        and the language's -- and that entry is invoked with the same token
+        rule as a click.
+        """
+        if self._running:
+            self.problem.emit("a command from the last menu is still open")
+            return
+        self._forget()
+        self._folder = folder
+        self._bridge.retry_host()
+
+        def built(reply: Reply) -> None:
+            if reply.id != self._request:
+                return
+            self._request = None
+            payload = reply.payload if isinstance(reply.payload, dict) else {}
+            if reply.status is not Status.OK:
+                self.problem.emit(f"could not paste: {_explain(reply)}")
+                return
+            self._token = int(payload.get("token") or reply.id)
+            item = _find_verb(payload.get("items") or (), "paste")
+            if item is None or not getattr(item, "enabled", True):
+                self.release()
+                self.problem.emit("Explorer has nothing to paste here")
+                return
+            self.invoke(self._token, int(item.id))
+
+        self._request = self._bridge.submit(
+            Op.MENU, folder,
+            timeout=float(self._config.get("timeout.menu")),
+            on_reply=built,
+            args={"names": [], "extended": False},
+        )
+
     def release(self) -> None:
         """Let go of a menu that was closed without anything being chosen.
 
@@ -155,6 +195,17 @@ class ShellMenu(QObject):
             return
         self._token = int(payload.get("token") or reply.id)
         self.ready.emit(self._token, list(payload.get("items") or ()))
+
+
+def _find_verb(items: Any, verb: str) -> Any:
+    """The first entry with this verb, looking into submenus as well."""
+    for item in items:
+        if str(getattr(item, "verb", "") or "").lower() == verb:
+            return item
+        found = _find_verb(getattr(item, "items", ()) or (), verb)
+        if found is not None:
+            return found
+    return None
 
 
 def _lend_foreground(bridge: Any) -> None:

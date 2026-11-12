@@ -2532,7 +2532,30 @@ def _link(request: Request, outbox: Any) -> None:
 
 
 def _link_target(request: Request, outbox: Any) -> None:
-    """0.45: where a link or junction points, read from the link itself."""
+    """0.45: where a link or junction points, read from the link itself.
+
+    0.62: a `.lnk` shortcut is answered too, from the shortcut file rather
+    than from the filesystem, and `args["check"]` adds `is_dir` -- whether the
+    target is a folder -- so that double-clicking a link to a folder can go
+    into it here instead of handing it to the shell, whose answer for a folder
+    is to open Explorer. The check is one stat of the target, made here in the
+    worker because a link's target is often on a share.
+    """
+    if request.path.lower().endswith(".lnk"):
+        try:
+            target = _shortcut_target(request.path)
+        except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+            outbox.put(Reply(request.id, _shell_status(exc), message=_describe(exc)))
+            return
+        if not target:
+            outbox.put(Reply(request.id, Status.ERROR,
+                             message="the shortcut does not point at a file or folder"))
+            return
+        answer = {"target": target}
+        if request.args.get("check"):
+            answer["is_dir"] = os.path.isdir(paths.api(target))
+        outbox.put(Reply(request.id, Status.OK, payload=answer))
+        return
     try:
         target = os.readlink(paths.api(request.path))
     except (OSError, ValueError) as exc:
@@ -2544,4 +2567,42 @@ def _link_target(request: Request, outbox: Any) -> None:
         target = target[4:]
     if not os.path.isabs(target):
         target = os.path.normpath(os.path.join(os.path.dirname(request.path), target))
-    outbox.put(Reply(request.id, Status.OK, payload={"target": target}))
+    answer = {"target": target}
+    if request.args.get("check"):
+        answer["is_dir"] = os.path.isdir(paths.api(request.path))
+    outbox.put(Reply(request.id, Status.OK, payload=answer))
+
+
+def _shortcut_target(path: str) -> str:
+    """The path a `.lnk` file points at, or empty for one that has none.
+
+    Read with `IShellLink` and not resolved: `Resolve` goes looking for a
+    target that has moved, which on a share that has stopped answering is a
+    search with no end. The path stored in the shortcut is what Explorer opens
+    first too. A shortcut to something that is not a file at all -- Control
+    Panel, a printer -- has no path, and says so by returning empty.
+    """
+    if win32shell is None or pythoncom is None:
+        raise OSError("reading a shortcut needs pywin32 on Windows")
+    _ensure_com()
+    link = pythoncom.CoCreateInstance(win32shell.CLSID_ShellLink, None,
+                                      pythoncom.CLSCTX_INPROC_SERVER,
+                                      win32shell.IID_IShellLink)
+    link.QueryInterface(pythoncom.IID_IPersistFile).Load(paths.api(path), 0)
+    target = ""
+    try:
+        target = str(link.GetPath(shellcon.SLGP_RAWPATH, 32768)[0] or "")
+    except Exception:  # noqa: BLE001 - a shortcut to a shell item has no path
+        target = ""
+    if target:
+        target = os.path.expandvars(target)
+    else:
+        try:
+            target = str(win32shell.SHGetPathFromIDList(link.GetIDList()) or "")
+        except Exception:  # noqa: BLE001
+            target = ""
+    if target.startswith("\\\\?\\UNC\\"):
+        target = "\\\\" + target[8:]
+    elif target.startswith("\\\\?\\"):
+        target = target[4:]
+    return target

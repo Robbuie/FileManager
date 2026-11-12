@@ -828,8 +828,49 @@ class Pane(QObject):
             # 0.41: into the archive, like a folder. Not from inside one:
             # archives inside archives are not opened.
             self.navigate(paths.join(tab.path, entry.name))
+        elif entry.is_link or entry.name.lower().endswith(".lnk"):
+            self._follow(row)
         else:
             self.open(row)
+
+    def _follow(self, row: int) -> None:
+        """0.62: a link to a folder is gone into here, not handed to Explorer.
+
+        A symbolic link to a folder lists as a file -- the listing does not
+        follow links, for the cost of a stat per row on a share -- and a `.lnk`
+        shortcut is a file. Either one opened through the shell opened
+        Explorer at the folder, which is the second file manager `open` exists
+        to avoid. So the worker reads the link and stats its target first: a
+        folder is navigated to, anything else is opened as before. A symbolic
+        link is entered at its own path, the way Explorer keeps it; a shortcut
+        goes to where it points, also as Explorer does.
+        """
+        tab = self.current
+        entry = tab.model.entry(row)
+        if entry is None:
+            return
+        source = paths.join(tab.path, entry.name)
+        self._set_status(tab, f"opening {entry.name}", BUSY)
+
+        def handle(reply: Reply) -> None:
+            payload = reply.payload if isinstance(reply.payload, dict) else {}
+            if reply.status is not Status.OK or not payload.get("is_dir"):
+                # Not a folder, or not readable as a link: the shell decides,
+                # exactly as a double click did before.
+                if tab is self.current and tab.path == paths.parent(source):
+                    self.open(row)
+                return
+            self._set_status(tab, tab.model.summary(), IDLE)
+            if entry.is_link:
+                self.navigate(source)
+            else:
+                target = paths.normalize(str(payload.get("target") or ""))
+                if target:
+                    self.navigate(target)
+
+        self._bridge.submit(Op.LINK_TARGET, source,
+                            timeout=float(self._config.get("timeout.stat")),
+                            on_reply=handle, args={"check": True})
 
     def open(self, row: int) -> None:
         """Hand a row to the shell.
@@ -1260,6 +1301,8 @@ class Pane(QObject):
             return "no clipboard"
         sources, cut = self.clipboard.contents()
         destination = self.current.path
+        if not sources and self.clipboard.has_virtual() and not self.in_archive:
+            return self._paste_through_shell(destination)
         why = refusal(sources, destination, cut=cut)
         if not why and self.in_archive:
             why = "inside an archive is read-only here"
@@ -1287,6 +1330,24 @@ class Pane(QObject):
             self.transfers.copy(sources, destination, conflict=conflict)
         word = "moving" if cut else "copying"
         self._set_status(self.current, f"{word} {len(sources)} item(s) here", BUSY)
+        return ""
+
+    def _paste_through_shell(self, destination: str) -> str:
+        """0.62: files copied inside a Remote Desktop session, pasted here.
+
+        They have no path on this machine -- only a name and contents that
+        come across the connection when asked -- so the queue, which copies
+        from paths, has nothing to copy from. Explorer's own paste does know
+        how to read them, so it is asked to paste into this folder, the same
+        as Paste on its background menu. Its progress window is Explorer's,
+        and so is its cancel; the listing picks up the files as they land.
+        """
+        if self.menu is None:
+            why = "files from a remote session need Explorer's paste, which is unavailable"
+            self._set_status(self.current, why, BAD)
+            return why
+        self.menu.paste(destination)
+        self._set_status(self.current, "pasting from the remote session through Explorer", BUSY)
         return ""
 
     def measure(self, names: list[str]) -> None:

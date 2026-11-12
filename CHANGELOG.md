@@ -5,6 +5,30 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.62.0]
+
+### Fixed
+- **Files copied inside a Remote Desktop session can be pasted here.** The
+  session offers them to this machine as file contents with no path
+  (`FileGroupDescriptorW`), not as a list of paths, so Paste was greyed and
+  Ctrl+V said "nothing on the clipboard" even though Explorer could paste
+  them. Now Paste is offered, and it hands the paste to Explorer's own Paste
+  for this folder: Explorer's progress window shows and its Cancel works;
+  this application's transfer queue is not involved. Files from Outlook
+  attachments arrive the same way and take the same path. A clipboard with
+  real paths still goes through the queue as before.
+- **A link to a folder opens here, not in Explorer.** Double-click or Enter on
+  a `.lnk` shortcut to a folder now goes to that folder in this pane, and a
+  symbolic link to a folder (`mklink /D`) is entered at its own path. Before,
+  both were handed to the shell, which opened Explorer. A shortcut to a file
+  or program still opens through the shell as before. Junctions already
+  worked and are unchanged.
+
+Not checked here: any of this on Windows -- a paste from a real RDP session
+(including a large one, and Cancel in Explorer's dialog), and shortcuts to a
+local folder, a mapped drive, a share, and one whose target is gone (that
+last one should fall back to the shell's own "problem with shortcut" box).
+
 ## [0.61.0]
 
 ### Added

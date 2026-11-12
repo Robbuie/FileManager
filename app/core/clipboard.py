@@ -55,6 +55,15 @@ from app.io import paths
 #: through. The quoting is part of the format string and not decoration.
 DROP_EFFECT = 'application/x-qt-windows-mime;value="Preferred DropEffect"'
 
+#: 0.62: files offered without paths. A Remote Desktop session puts the files
+#: copied inside it on this machine's clipboard as `FileGroupDescriptorW` plus
+#: their contents, never as `CF_HDROP`: there is no local path to give, only
+#: bytes that come across the connection when someone pastes. Outlook
+#: attachments and files in a zip opened in Explorer arrive the same way.
+#: Nothing here can copy those through the queue, so a paste of them is
+#: handed to Explorer's own paste -- see `Pane.paste`.
+VIRTUAL_FILES = 'application/x-qt-windows-mime;value="FileGroupDescriptorW"'
+
 #: `DROPEFFECT_COPY` and `DROPEFFECT_MOVE` from the Windows headers. They are
 #: flags rather than an enumeration, and some programs set more than one, so a
 #: cut is read as "the move bit is set" rather than "the word equals 2".
@@ -207,7 +216,18 @@ class Clipboard(QObject):
         """Whether Paste has anything to do, without resolving any of it."""
         board = QGuiApplication.clipboard()
         data = board.mimeData() if board is not None else None
-        return bool(data is not None and data.hasUrls())
+        return bool(data is not None and (data.hasUrls() or data.hasFormat(VIRTUAL_FILES)))
+
+    def has_virtual(self) -> bool:
+        """0.62: files with no path behind them, from a Remote Desktop session.
+
+        Asked only when there are no paths: a program that offers both is
+        pasted from the paths, through the queue, like any other copy.
+        """
+        board = QGuiApplication.clipboard()
+        data = board.mimeData() if board is not None else None
+        return bool(data is not None and not data.hasUrls()
+                    and data.hasFormat(VIRTUAL_FILES))
 
     def cut_names(self, folder: str) -> frozenset[str]:
         """The names in this folder that are marked cut.

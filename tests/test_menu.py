@@ -892,3 +892,15 @@ def test_a_command_that_opens_nothing_stops_being_watched(monkeypatch):
     state = {"hwnd": 0, "watch": (time.monotonic() - 1, {7})}
     host._watch(state)
     assert fronted == [] and state["watch"] is None
+
+
+def test_find_verb_looks_into_submenus():
+    """0.62: Explorer's Paste is found by its verb, wherever the shell put it."""
+    from app.core.menu import _find_verb
+    from app.io.protocol import MENU_SUBMENU, MenuItem
+
+    paste = MenuItem(id=7, text="&Paste", verb="paste")
+    items = [MenuItem(id=1, text="View", verb=""),
+             MenuItem(id=2, kind=MENU_SUBMENU, text="More", items=(paste,))]
+    assert _find_verb(items, "paste") is paste
+    assert _find_verb(items, "delete") is None
