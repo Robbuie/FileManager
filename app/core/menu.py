@@ -87,8 +87,13 @@ class ShellMenu(QObject):
             args={"names": list(names), "extended": bool(extended)},
         )
 
-    def invoke(self, token: int, item_id: int) -> None:
-        """Run one entry. Everything after this is the shell's business."""
+    def invoke(self, token: int, item_id: int, then: Any = None) -> None:
+        """Run one entry. Everything after this is the shell's business.
+
+        `then`, when given, is called with whether the shell took the command
+        and a line saying why not -- for a caller that put something on a
+        status line and has to take it down again.
+        """
         if self._token is None or token != self._token or self._running:
             return
         folder = self._folder
@@ -98,6 +103,10 @@ class ShellMenu(QObject):
             self._running = False
             self._token = None
             payload = reply.payload if isinstance(reply.payload, dict) else {}
+            if then is not None:
+                then(reply.status is Status.OK,
+                     "" if reply.status is Status.OK
+                     else (reply.message or "the command did not run"))
             if reply.status is Status.OK:
                 self.invoked.emit(str(payload.get("verb") or ""), folder)
             elif reply.status is Status.DENIED:
@@ -120,7 +129,7 @@ class ShellMenu(QObject):
             args={"token": token, "item": int(item_id)},
         )
 
-    def paste(self, folder: str) -> None:
+    def paste(self, folder: str, then: Any = None) -> None:
         """0.62: run Explorer's own Paste in a folder, without showing a menu.
 
         Only for what the queue cannot copy: files offered with no path, as a
@@ -130,8 +139,14 @@ class ShellMenu(QObject):
         and the language's -- and that entry is invoked with the same token
         rule as a click.
         """
+        def fail(message: str) -> None:
+            if then is not None:
+                then(False, message)
+            else:
+                self.problem.emit(message)
+
         if self._running:
-            self.problem.emit("a command from the last menu is still open")
+            fail("a command from the last menu is still open")
             return
         self._forget()
         self._folder = folder
@@ -143,15 +158,15 @@ class ShellMenu(QObject):
             self._request = None
             payload = reply.payload if isinstance(reply.payload, dict) else {}
             if reply.status is not Status.OK:
-                self.problem.emit(f"could not paste: {_explain(reply)}")
+                fail(f"could not paste: {_explain(reply)}")
                 return
             self._token = int(payload.get("token") or reply.id)
             item = _find_verb(payload.get("items") or (), "paste")
             if item is None or not getattr(item, "enabled", True):
                 self.release()
-                self.problem.emit("Explorer has nothing to paste here")
+                fail("Explorer has nothing to paste here")
                 return
-            self.invoke(self._token, int(item.id))
+            self.invoke(self._token, int(item.id), then=then)
 
         self._request = self._bridge.submit(
             Op.MENU, folder,

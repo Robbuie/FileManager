@@ -1346,8 +1346,22 @@ class Pane(QObject):
             why = "files from a remote session need Explorer's paste, which is unavailable"
             self._set_status(self.current, why, BAD)
             return why
-        self.menu.paste(destination)
-        self._set_status(self.current, "pasting from the remote session through Explorer", BUSY)
+        tab = self.current
+
+        def done(ok: bool, message: str) -> None:
+            # 0.62.1: the line is taken down either way. Explorer does not say
+            # when its paste ends -- its own progress window does that -- so
+            # a busy line left up after the shell took the command was a line
+            # that stayed until something else happened to clear it.
+            if ok:
+                self._set_status(tab, "handed to Explorer's paste -- its window "
+                                      "shows the progress", IDLE)
+            else:
+                self._set_status(tab, f"could not paste from the remote session: "
+                                      f"{message}", BAD)
+
+        self._set_status(tab, "pasting from the remote session through Explorer", BUSY)
+        self.menu.paste(destination, then=done)
         return ""
 
     def measure(self, names: list[str]) -> None:

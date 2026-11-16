@@ -579,10 +579,21 @@ def _ensure_com(state: dict[str, Any]) -> None:
     """
     if state.get("com") or pythoncom is None:
         return
+    # 0.62.1: `OleInitialize`, not `CoInitialize`. Both make this thread a
+    # single-threaded apartment, but only the first lets the thread use the
+    # OLE clipboard, and the shell's Paste begins with `OleGetClipboard`. In
+    # an apartment made by `CoInitialize` that call answers
+    # CO_E_NOTINITIALIZED, the shell swallows it, and Paste returns success
+    # having done nothing -- which is how 0.62.0's paste from a Remote
+    # Desktop session said it was pasting and never did. Every other verb is
+    # indifferent to the difference.
     try:
-        pythoncom.CoInitialize()
+        pythoncom.OleInitialize()
     except Exception:  # noqa: BLE001 - already initialised is fine
-        pass
+        try:
+            pythoncom.CoInitialize()
+        except Exception:  # noqa: BLE001
+            pass
     state["com"] = True
 
 

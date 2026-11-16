@@ -5,6 +5,20 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.62.1]
+
+### Fixed
+- **Paste from a Remote Desktop session did nothing.** 0.62.0 said it was
+  pasting and no files arrived. The likely cause: the process that runs
+  Explorer's commands had started COM in a way that does not allow use of
+  the clipboard, so Explorer's Paste could not read what was on it, and
+  failed without saying so. That process now starts COM in the way the
+  clipboard needs. The status line also no longer stays on "pasting" for
+  good: once Explorer has taken the paste it says so, and Explorer's own
+  window shows the progress; if Explorer refused, the reason is shown on
+  the pane's line instead of briefly in the window's status bar.
+  Not checked here: a paste from a real RDP session, small and large.
+
 ## [0.62.0]
 
 ### Fixed
