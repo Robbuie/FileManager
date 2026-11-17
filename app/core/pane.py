@@ -1302,7 +1302,7 @@ class Pane(QObject):
         sources, cut = self.clipboard.contents()
         destination = self.current.path
         if not sources and self.clipboard.has_virtual() and not self.in_archive:
-            return self._paste_through_shell(destination)
+            return self._paste_virtual(destination)
         why = refusal(sources, destination, cut=cut)
         if not why and self.in_archive:
             why = "inside an archive is read-only here"
@@ -1332,36 +1332,49 @@ class Pane(QObject):
         self._set_status(self.current, f"{word} {len(sources)} item(s) here", BUSY)
         return ""
 
-    def _paste_through_shell(self, destination: str) -> str:
-        """0.62: files copied inside a Remote Desktop session, pasted here.
+    def _paste_virtual(self, destination: str) -> str:
+        """0.62.2: files copied inside a Remote Desktop session, pasted here.
 
-        They have no path on this machine -- only a name and contents that
-        come across the connection when asked -- so the queue, which copies
-        from paths, has nothing to copy from. Explorer's own paste does know
-        how to read them, so it is asked to paste into this folder, the same
-        as Paste on its background menu. Its progress window is Explorer's,
-        and so is its cancel; the listing picks up the files as they land.
+        They have no path on this machine -- a name, and contents that come
+        across the connection when asked for -- so the queue, which copies
+        from paths, has nothing to copy from. The destination's worker reads
+        them off the clipboard and writes them (`Op.PASTE_VIRTUAL`). 0.62.0
+        and 0.62.1 handed this to Explorer's Paste instead, which accepted
+        the command and wrote nothing.
         """
-        if self.menu is None:
-            why = "files from a remote session need Explorer's paste, which is unavailable"
-            self._set_status(self.current, why, BAD)
-            return why
         tab = self.current
+        self._set_status(tab, "pasting from the remote session", BUSY)
 
-        def done(ok: bool, message: str) -> None:
-            # 0.62.1: the line is taken down either way. Explorer does not say
-            # when its paste ends -- its own progress window does that -- so
-            # a busy line left up after the shell took the command was a line
-            # that stayed until something else happened to clear it.
-            if ok:
-                self._set_status(tab, "handed to Explorer's paste -- its window "
-                                      "shows the progress", IDLE)
-            else:
+        def handle(reply: Reply) -> None:
+            payload = reply.payload if isinstance(reply.payload, dict) else {}
+            if reply.status is Status.PARTIAL:
+                self._set_status(tab, f"pasting from the remote session: "
+                                      f"{payload.get('files', 0):,} file(s), "
+                                      f"{format_size(int(payload.get('bytes', 0) or 0))} so far", BUSY)
+                return
+            if tab is self.current and tab.path == destination:
+                self.refresh()
+            if reply.status is Status.CANCELLED:
+                self._set_status(tab, "paste from the remote session stopped", BAD)
+                return
+            if reply.status is not Status.OK:
                 self._set_status(tab, f"could not paste from the remote session: "
-                                      f"{message}", BAD)
+                                      f"{_explain(reply)}", BAD)
+                return
+            done = int(payload.get("files", 0))
+            skipped = list(payload.get("skipped") or [])
+            failed = dict(payload.get("failed") or {})
+            line = f"pasted {done:,} file(s), {format_size(int(payload.get('bytes', 0) or 0))}"
+            if skipped:
+                line += f"; {len(skipped):,} already here and left alone ({skipped[0]})"
+            if failed:
+                name, why = next(iter(failed.items()))
+                line += f"; {len(failed):,} failed -- {name}: {why}"
+            self._set_status(tab, line, BAD if failed or skipped else IDLE)
 
-        self._set_status(tab, "pasting from the remote session through Explorer", BUSY)
-        self.menu.paste(destination, then=done)
+        self._bridge.submit(Op.PASTE_VIRTUAL, destination,
+                            timeout=float(self._config.get("timeout.paste_remote")),
+                            on_reply=handle)
         return ""
 
     def measure(self, names: list[str]) -> None:

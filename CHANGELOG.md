@@ -5,6 +5,23 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.62.2]
+
+### Fixed
+- **Paste from a Remote Desktop session writes the files itself.** 0.62.0
+  and 0.62.1 handed the paste to Explorer's Paste, which took the command
+  and wrote nothing, and the pane sat on "pasting from the remote session
+  through Explorer" for good. The folder's own worker now reads the files
+  off the clipboard and writes them, and the pane's line counts files and
+  size as they arrive, then says how many were pasted. Each file is
+  written under a temporary name and renamed only once all of it has
+  arrived, so a dropped session leaves no half file behind. A name that is
+  already in the folder is left alone and reported rather than replaced;
+  delete or rename it and paste again. Folders copied in the session come
+  across with what is inside them.
+  Not checked here: a real RDP paste -- a few small files, a folder, one
+  large file, and one name that is already there.
+
 ## [0.62.1]
 
 ### Fixed

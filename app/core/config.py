@@ -135,6 +135,10 @@ DEFAULTS: dict[str, Any] = {
     # that could sensibly go here, so the pane reported a failure while the
     # shell carried on deleting.
     "timeout.delete": 300.0,
+    # 0.62.2: the longest a paste from a Remote Desktop session may go without
+    # a block arriving. Not the length of the paste: the worker beats between
+    # blocks, and each beat starts this again.
+    "timeout.paste_remote": 120.0,
     "timeout.drives": 10.0,
     "timeout.free_space": 10.0,
     # Eject waits for Windows to ask every program holding the drive, which is

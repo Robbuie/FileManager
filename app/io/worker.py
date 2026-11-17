@@ -33,6 +33,7 @@ from dataclasses import replace
 from typing import Any
 
 from app.io import archive, decode, elevate, gdi, gitstatus, holders, paths, search
+from app.io import virtualfiles
 from app.io.protocol import (
     BATCH_SIZE,
     HASH_ALGORITHMS,
@@ -156,7 +157,7 @@ def run(inbox: Any, outbox: Any, control: Any) -> None:
 
 #: 0.41: what may not happen inside an archive, which is read-only here.
 _ARCHIVE_WRITES = frozenset({Op.MKDIR, Op.RENAME, Op.RENAME_MANY, Op.DELETE,
-                             Op.ATTRIBUTES, Op.LINK})
+                             Op.ATTRIBUTES, Op.LINK, Op.PASTE_VIRTUAL})
 #: Reads that ask Windows about a real file, which a name inside an archive is
 #: not. Answered with a plain refusal; the callers already treat a failure as
 #: "no badge", "no icon", "no marks".
@@ -242,6 +243,8 @@ def _handle(request: Request, outbox: Any, control: Any, cancelled: set[int]) ->
         _link(request, outbox)
     elif request.op is Op.LINK_TARGET:
         _link_target(request, outbox)
+    elif request.op is Op.PASTE_VIRTUAL:
+        _paste_virtual(request, outbox, control, cancelled)
     elif request.op is Op.DELETE:
         _delete(request, outbox)
     elif request.op is Op.PING:
@@ -2571,6 +2574,156 @@ def _link_target(request: Request, outbox: Any) -> None:
     if request.args.get("check"):
         answer["is_dir"] = os.path.isdir(paths.api(request.path))
     outbox.put(Reply(request.id, Status.OK, payload=answer))
+
+
+def _paste_virtual(request: Request, outbox: Any, control: Any, cancelled: set[int]) -> None:
+    """0.62.2: the clipboard's path-less files, written into a folder.
+
+    Replaces 0.62.0's hand-off to Explorer's Paste, which took the command and
+    did nothing, with no way to see why. Reading the streams here is the
+    route every file manager that handles a Remote Desktop paste takes, and a
+    failure arrives as a reason rather than as silence.
+
+    Three rules from the queue are kept, because these are writes:
+
+      * **Written beside, then renamed.** Each file goes to a temporary name
+        next to its target and takes the real name only when every byte has
+        arrived -- a connection dropped part way leaves no half file wearing a
+        real name.
+      * **Nothing replaced.** A name already in the folder is skipped and
+        listed in the reply. Asking is the queue's job and this is not the
+        queue; skipping loses nothing, and the rest can be pasted again.
+      * **The heartbeat between blocks**, so a large file over a slow session
+        neither trips the watchdog nor ignores a cancel.
+
+    `OleInitialize` rather than the worker's `CoInitializeEx`: the OLE
+    clipboard refuses a thread that only has the second, which is also what
+    sank 0.62.0's route through the shell host.
+    """
+    if pythoncom is None:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message="pasting from a remote session needs pywin32 on Windows"))
+        return
+    try:
+        import win32clipboard
+    except Exception:  # noqa: BLE001
+        outbox.put(Reply(request.id, Status.ERROR, message="win32clipboard is missing"))
+        return
+
+    _ensure_com()
+    try:
+        pythoncom.OleInitialize()
+    except Exception:  # noqa: BLE001 - already initialised is fine
+        pass
+
+    folder = request.path
+    files = folders = written_bytes = 0
+    skipped: list[str] = []
+    failed: dict[str, str] = {}
+    last_sent = time.monotonic()
+    seq = 0
+
+    def beat() -> None:
+        nonlocal last_sent, seq
+        _drain_control(control, cancelled)
+        if request.id in cancelled:
+            raise _WalkCancelled
+        if time.monotonic() - last_sent >= WALK_HEARTBEAT:
+            outbox.put(Reply(request.id, Status.PARTIAL, seq=seq,
+                             payload={"files": files, "bytes": written_bytes}))
+            seq += 1
+            last_sent = time.monotonic()
+
+    try:
+        data = pythoncom.OleGetClipboard()
+        table_format = win32clipboard.RegisterClipboardFormat("FileGroupDescriptorW")
+        contents_format = win32clipboard.RegisterClipboardFormat("FileContents")
+        medium = data.GetData((table_format, None, pythoncom.DVASPECT_CONTENT, -1,
+                               pythoncom.TYMED_HGLOBAL))
+        table = virtualfiles.parse(medium.data)
+    except Exception as exc:  # noqa: BLE001 - pywintypes.com_error is not an OSError
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message=f"could not read the clipboard: {_describe(exc)}"))
+        return
+    if not table:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message="the clipboard holds no files from a remote session"))
+        return
+
+    temp = ""
+    try:
+        for entry in table:
+            beat()
+            parts = virtualfiles.safe_parts(entry.name)
+            if parts is None:
+                failed[entry.name or f"#{entry.index}"] = "not a name that stays in this folder"
+                continue
+            target = os.path.join(folder, *parts)
+            if entry.is_dir:
+                try:
+                    if not os.path.isdir(paths.api(target)):
+                        os.makedirs(paths.api(target), exist_ok=True)
+                        folders += 1
+                except OSError as exc:
+                    failed[entry.name] = _describe(exc)
+                continue
+            if os.path.lexists(paths.api(target)):
+                skipped.append(entry.name)
+                continue
+            try:
+                os.makedirs(paths.api(os.path.dirname(target)), exist_ok=True)
+                content = data.GetData((contents_format, None, pythoncom.DVASPECT_CONTENT,
+                                        entry.index,
+                                        pythoncom.TYMED_ISTREAM | pythoncom.TYMED_HGLOBAL))
+                temp = f"{target}.~fm{os.getpid()}"
+                with open(paths.api(temp), "wb") as out:
+                    if content.tymed == pythoncom.TYMED_ISTREAM:
+                        stream = content.data
+                        while True:
+                            beat()
+                            block = stream.Read(1 << 20)
+                            if not block:
+                                break
+                            out.write(block)
+                            written_bytes += len(block)
+                    else:
+                        block = bytes(content.data or b"")
+                        if entry.size is not None:
+                            block = block[:entry.size]
+                        out.write(block)
+                        written_bytes += len(block)
+                if entry.size is not None and os.path.getsize(paths.api(temp)) != entry.size:
+                    raise OSError(f"{os.path.getsize(paths.api(temp)):,} of "
+                                  f"{entry.size:,} bytes arrived")
+                # `os.rename` and not `os.replace`: on Windows it refuses a
+                # name that appeared meanwhile rather than writing over it.
+                os.rename(paths.api(temp), paths.api(target))
+                temp = ""
+                try:
+                    _set_times(target, entry.mtime, entry.ctime)
+                except OSError:
+                    pass  # the file is there; its date is a nicety
+                files += 1
+            except _WalkCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - com_error included
+                failed[entry.name] = _describe(exc)
+            finally:
+                if temp:
+                    try:
+                        os.remove(paths.api(temp))
+                    except OSError:
+                        pass
+                    temp = ""
+    except _WalkCancelled:
+        cancelled.discard(request.id)
+        outbox.put(Reply(request.id, Status.CANCELLED, seq=seq,
+                         payload={"files": files, "bytes": written_bytes}))
+        return
+    outbox.put(Reply(request.id, Status.OK, seq=seq, payload={
+        "files": files, "folders": folders, "bytes": written_bytes,
+        "skipped": skipped, "failed": failed,
+    }))
 
 
 def _shortcut_target(path: str) -> str:

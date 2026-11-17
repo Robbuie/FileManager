@@ -180,6 +180,12 @@ class Op(str, Enum):
     LINK = "link"
     #: 0.45: where the link or junction at `path` points. `{"target": path}`.
     LINK_TARGET = "link_target"
+    #: 0.62.2: write the files on the clipboard that have no path -- what a
+    #: Remote Desktop session offers -- into the folder at `path`. Nothing is
+    #: replaced: a name already there is skipped and reported. PARTIALs carry
+    #: `{"files": n, "bytes": n}` so far; the reply is `{"files": n,
+    #: "folders": n, "bytes": n, "skipped": [name], "failed": {name: reason}}`.
+    PASTE_VIRTUAL = "paste_virtual"
 
     #: Delete `args["names"]` from the folder at `path`, to the Recycle Bin
     #: unless `args["permanent"]`. Several names in one request rather than one
