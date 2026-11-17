@@ -199,17 +199,20 @@ def test_no_reader_in_the_io_layer_opens_a_file_the_old_way():
     """The fix is only as good as its coverage: one preview path left on plain
     `open` is the same fault on one file type. Copies and archive extraction
     are left alone on purpose -- those write, or are the source of a copy that
-    is meant to finish."""
+    is meant to finish. 0.62.2: so is a write anywhere else -- the paste from a
+    Remote Desktop session writes its files in the worker -- which is told
+    apart by its mode, since `open_shared` refuses every writing one."""
     import pathlib
     import re
 
     root = pathlib.Path(paths.__file__).parent
     allowed = {"ops.py", "history.py", "archive.py", "paths.py"}
     pattern = re.compile(r"(?<![\w.])open\(paths\.api\(|Image\.open\(paths\.api\(")
+    writing = re.compile(r"""open\(paths\.api\([^)]*\),\s*["'][rb]*[wax][^"']*["']""")
     offenders = [f"{path.name}:{number}"
                  for path in sorted(root.glob("*.py")) if path.name not in allowed
                  for number, line in enumerate(path.read_text("utf-8").splitlines(), 1)
-                 if pattern.search(line)]
+                 if pattern.search(line) and not writing.search(line)]
     assert offenders == []
 
 

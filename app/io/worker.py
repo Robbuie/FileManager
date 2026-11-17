@@ -2676,7 +2676,11 @@ def _paste_virtual(request: Request, outbox: Any, control: Any, cancelled: set[i
                                         entry.index,
                                         pythoncom.TYMED_ISTREAM | pythoncom.TYMED_HGLOBAL))
                 temp = f"{target}.~fm{os.getpid()}"
-                with open(paths.api(temp), "wb") as out:
+                # Plain `open`, not `paths.open_shared`: this writes, and a
+                # file that could be deleted while it is written is a paste
+                # that reports success into a name that is gone. "xb" so a
+                # leftover temporary of the same name is refused, not reused.
+                with open(paths.api(temp), "xb") as out:
                     if content.tymed == pythoncom.TYMED_ISTREAM:
                         stream = content.data
                         while True:

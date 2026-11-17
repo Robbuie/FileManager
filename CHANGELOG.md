@@ -5,6 +5,16 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.62.3]
+
+### Fixed
+- The 0.62.2 release did not build: the check that every file reader in
+  the io layer opens files so a delete can get past them counted the
+  Remote Desktop paste, which writes, as a reader. The check now tells
+  writes apart by their mode. The paste itself is unchanged apart from
+  refusing to reuse a leftover temporary file of the same name. 0.62.2's
+  changes ship in this release.
+
 ## [0.62.2]
 
 ### Fixed
