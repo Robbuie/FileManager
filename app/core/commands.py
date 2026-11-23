@@ -76,6 +76,7 @@ from typing import Any, Iterable, Sequence
 from PySide6.QtCore import QObject, Signal
 
 from app.io import paths
+from app.io.elevate import CONSENT_GRACE
 from app.io.protocol import LIST_FILE, Op, Reply, Status
 
 #: The keys the pane already answers. A command may not take one of these, and
@@ -142,13 +143,18 @@ class Command:
     #: checkbox writes, and what a user who wants the key but not the clutter
     #: -- or the reverse -- ends up with.
     shown: bool = True
+    #: 0.63: start it as administrator, through the shell's own `runas`, which
+    #: puts the consent prompt on the screen every time. The program is
+    #: elevated, never this application -- see `worker._run_elevated`. Holding
+    #: Shift on the Tools menu does the same once for a row without it.
+    admin: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id, "name": self.name, "program": self.program,
             "arguments": self.arguments, "working": self.working,
             "shortcut": self.shortcut, "alternatives": list(self.alternatives),
-            "shown": self.shown,
+            "shown": self.shown, "admin": self.admin,
         }
 
 
@@ -202,6 +208,7 @@ class Launch:
     working: str = ""
     alternatives: tuple[str, ...] = ()
     list_names: tuple[str, ...] = ()
+    admin: bool = False
     #: What was substituted, for the harness and for a diagnosis. Not used to
     #: run anything.
     used: tuple[str, ...] = ()
@@ -232,6 +239,19 @@ DEFAULTS: tuple[Command, ...] = (
         alternatives=("pwsh.exe",),
         working="%P",
         shortcut="F9",
+    ),
+    Command(
+        # 0.63. A row of its own rather than only the checkbox, because the
+        # elevated terminal is the one somebody reaches for often enough to
+        # want a key -- and a key cannot carry "hold Shift" the way a menu
+        # click can.
+        id="terminal-admin",
+        name="PowerShell here as administrator",
+        program="powershell.exe",
+        alternatives=("pwsh.exe",),
+        working="%P",
+        shortcut="Ctrl+Shift+F9",
+        admin=True,
     ),
     Command(
         id="prompt",
@@ -329,8 +349,11 @@ def _value(token: str, context: Context) -> str | None:
     return None
 
 
-def expand(command: Command, context: Context) -> Launch:
+def expand(command: Command, context: Context, *, admin: bool = False) -> Launch:
     """Turn a row of the table into something a worker can start.
+
+    `admin` elevates this one launch whatever the row says; a row with
+    `admin` set is elevated whatever this says.
 
     Assumes `refusal` has already said yes. It is separate rather than folded
     in because the two are asked at different moments: the refusal decides
@@ -390,6 +413,7 @@ def expand(command: Command, context: Context) -> Launch:
         working=working,
         alternatives=tuple(command.alternatives),
         list_names=tuple(context.full(name) for name in selection) if wants_list else (),
+        admin=bool(command.admin or admin),
         used=tuple(dict.fromkeys(used)),
     )
 
@@ -586,6 +610,7 @@ def from_config(value: Any) -> tuple[Command, ...]:
             shortcut=normalise_shortcut(str(entry.get("shortcut", "") or "")),
             alternatives=tuple(str(item) for item in alternatives if str(item)),
             shown=bool(entry.get("shown", True)),
+            admin=bool(entry.get("admin", False)),
         ))
     return tuple(commands)
 
@@ -661,7 +686,7 @@ class Commands(QObject):
     """
 
     changed = Signal()                  # the table was edited
-    ran = Signal(str, str)              # command id, the program that started
+    ran = Signal(str, str, bool)        # command id, the program, as administrator
     problem = Signal(str, str)          # command id, why it did not
 
     def __init__(self, bridge, config, parent: QObject | None = None) -> None:
@@ -707,8 +732,10 @@ class Commands(QObject):
 
     # -------------------------------------------------------------- running
 
-    def run(self, identity: str, context: Context) -> bool:
+    def run(self, identity: str, context: Context, *, admin: bool = False) -> bool:
         """Start one command. False means it was refused and why was said.
+
+        `admin` runs it as administrator this once (Shift on the Tools menu).
 
         The refusal goes out on `problem` rather than being raised or returned
         as a string, so the caller does not have to decide where a sentence
@@ -724,13 +751,20 @@ class Commands(QObject):
             self.problem.emit(identity, why)
             return False
 
-        launch = expand(command, context)
+        launch = expand(command, context, admin=admin)
+        timeout = float(self._config.get("timeout.run"))
+        if launch.admin:
+            # `ShellExecuteEx` with `runas` returns only once the consent
+            # prompt is answered, and a deadline short enough to lose that
+            # race kills the worker under somebody reading the prompt.
+            timeout += CONSENT_GRACE
         self._bridge.submit(
             Op.RUN,
             context.path or launch.working,
-            timeout=float(self._config.get("timeout.run")),
+            timeout=timeout,
             on_reply=self._replier(command),
             args={
+                "admin": launch.admin,
                 "program": launch.program,
                 "alternatives": list(launch.alternatives),
                 "arguments": list(launch.arguments),
@@ -748,7 +782,14 @@ class Commands(QObject):
     def _on_reply(self, command: Command, reply: Reply) -> None:
         if reply.status is Status.OK:
             payload = reply.payload if isinstance(reply.payload, dict) else {}
-            self.ran.emit(command.id, str(payload.get("program", "")))
+            self.ran.emit(command.id, str(payload.get("program", "")),
+                          bool(payload.get("admin", False)))
+            return
+        if reply.status is Status.CANCELLED:
+            # The consent prompt was answered No. Said plainly, because it
+            # is the one outcome the person chose rather than suffered.
+            self.problem.emit(command.id,
+                              f"{command.name}: administrator was declined")
             return
         if reply.status is Status.TIMEOUT:
             # Worth its own sentence. A launch that timed out did not fail to

@@ -603,10 +603,15 @@ class CommandsEditor(Dialog):
         self._shortcut = QLineEdit()
         self._shortcut.setPlaceholderText("F9, Ctrl+F2, Shift+F9")
         self._shown = QCheckBox("Show it on the Tools menu")
+        self._admin = QCheckBox("Run as administrator")
+        self._admin.setToolTip(
+            "Windows asks for consent each time. Any row runs as administrator "
+            "once when chosen on the Tools menu with Shift held.")
         for field in (self._name, self._program, self._arguments,
                       self._working, self._shortcut):
             field.textEdited.connect(self._collect)
         self._shown.toggled.connect(self._collect)
+        self._admin.toggled.connect(self._collect)
 
         self._why = QLabel("")
         self._why.setWordWrap(True)
@@ -637,6 +642,7 @@ class CommandsEditor(Dialog):
         form.addRow("Start in", self._working)
         form.addRow("Shortcut", self._shortcut)
         form.addRow("", self._shown)
+        form.addRow("", self._admin)
 
         row = QHBoxLayout()
         row.setSpacing(6)
@@ -655,7 +661,8 @@ class CommandsEditor(Dialog):
         caption = QLabel(
             "Programs this application does not contain. A key here is "
             "answered by whichever pane has the keyboard, so %P is that "
-            "pane's folder.")
+            "pane's folder. Hold Shift when choosing one on the Tools menu "
+            "to run it as administrator.")
         caption.setWordWrap(True)
         layout.addWidget(caption)
         layout.addWidget(self._list, 1)
@@ -705,6 +712,10 @@ class CommandsEditor(Dialog):
         self._shown.setChecked(bool(command.shown) if live else False)
         self._shown.setEnabled(live)
         self._shown.blockSignals(False)
+        self._admin.blockSignals(True)
+        self._admin.setChecked(bool(command.admin) if live else False)
+        self._admin.setEnabled(live)
+        self._admin.blockSignals(False)
         self._remove.setEnabled(live)
         self._up.setEnabled(live and row > 0)
         self._down.setEnabled(live and row < len(self._commands) - 1)
@@ -735,6 +746,7 @@ class CommandsEditor(Dialog):
             working=self._working.text().strip(),
             shortcut=shortcut,
             shown=self._shown.isChecked(),
+            admin=self._admin.isChecked(),
         )
         item = self._list.item(row)
         if item is not None:

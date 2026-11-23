@@ -23,6 +23,7 @@ delivering is late even if it started a moment ago.
 from __future__ import annotations
 
 import hashlib
+import ntpath
 import os
 import queue
 import shutil
@@ -807,13 +808,20 @@ def _write_list(paths_to_write: list[str]) -> str:
 def _run(request: Request, outbox: Any) -> None:
     """Start a program, in a folder, and say that it started.
 
-    Detached on purpose, and in two senses. The process is started with
-    `DETACHED_PROCESS` and a new process group so closing this application does
-    not close a terminal somebody is still typing in, and so a Ctrl+C in a
-    console this was started from does not travel to it. And the reply comes
-    back as soon as the process exists: waiting for it would hold this worker
-    -- and therefore every listing on this volume -- for as long as somebody
-    left an editor open.
+    With a console of its own, and not waited for. `CREATE_NEW_CONSOLE` is
+    what puts PowerShell and cmd on the screen: until 0.63 this was
+    `DETACHED_PROCESS`, which for a console program means *no* console, so
+    the terminal started, found nothing to read and exited without a window
+    ever appearing -- while the status line said "started". A program with a
+    window of its own ignores the flag. A console of its own also means a
+    Ctrl+C anywhere else never reaches it, and nothing here holds the child,
+    so closing this application leaves it running. No new process group:
+    that flag switches Ctrl+C off inside the child, which in a terminal is the
+    key that stops a command.
+
+    The reply comes back as soon as the process exists: waiting for it would
+    hold this worker -- and therefore every listing on this volume -- for as
+    long as somebody left an editor open.
 
     The working directory is the reason this is worth a worker rather than
     three lines in a slot. A child inherits it, and a handle to a folder keeps
@@ -864,10 +872,12 @@ def _run(request: Request, outbox: Any) -> None:
                          message="that folder is not there any more"))
         return
 
+    if request.args.get("admin"):
+        _run_elevated(request, outbox, found, arguments, working, written)
+        return
+
     options: dict[str, Any] = {"cwd": working, "close_fds": True}
-    flags = 0
-    for name in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP"):
-        flags |= getattr(subprocess, name, 0)
+    flags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
     if flags:
         options["creationflags"] = flags
 
@@ -882,6 +892,115 @@ def _run(request: Request, outbox: Any) -> None:
         "arguments": arguments,
         "pid": started.pid,
         "list": written,
+        "admin": False,
+    }))
+
+
+#: Shells that are told their folder in their arguments when elevated, because
+#: the working directory alone does not get them there. Keyed on the file name
+#: without its extension, lower case.
+_POWERSHELLS = frozenset({"powershell", "pwsh"})
+_CMD = "cmd"
+_TERMINAL = "wt"
+
+
+def elevated_command(program: str, arguments: list[str],
+                     working: str) -> tuple[str, str]:
+    """The parameter string and folder for starting `program` elevated.
+
+    Two things go wrong with an elevated program that do not go wrong with an
+    ordinary one, and both are about the folder. An elevated process runs in
+    a different logon session, where a drive letter mapped in this one does
+    not exist -- so the folder goes over as UNC. And the folder handed to the
+    shell is not reliably the one the program starts in: an elevated cmd
+    opens in System32 whatever it was given. So the three terminals this
+    application ships rows for are told the folder in their arguments as
+    well, and only when the row gave them no arguments of its own -- a
+    template somebody wrote is theirs. cmd gets `pushd` rather than `cd`
+    because `cd` refuses a UNC path and `pushd` maps it to a letter.
+
+    Pure, so the quoting is tested off Windows.
+    """
+    folder = paths.resolve(working) if working else ""
+    # ntpath rather than os.path: a Windows path on every platform, so the
+    # tests mean what they say off Windows.
+    stem = ntpath.splitext(ntpath.basename(program))[0].lower()
+    if folder and not arguments:
+        if stem in _POWERSHELLS:
+            literal = folder.replace("'", "''")
+            arguments = ["-NoExit", "-Command", f"Set-Location -LiteralPath '{literal}'"]
+        elif stem == _CMD:
+            # cmd does not parse its command line the way every other program
+            # does, so it is written by hand: `/k` takes the rest of the line,
+            # and a folder name cannot contain a double quote.
+            return f'/k pushd "{folder}"', folder
+        elif stem == _TERMINAL:
+            arguments = ["-d", folder]
+    return subprocess.list2cmdline(arguments), folder
+
+
+def _run_elevated(request: Request, outbox: Any, found: str,
+                  arguments: list[str], working: str | None, written: str) -> None:
+    """Start the program as administrator: the shell's `runas`, as Explorer's
+    "Run as administrator" does.
+
+    The program is elevated and this application is not. Nothing of ours runs
+    with the elevated token, so `elevate.ACTIONS` -- which is about this
+    application making a change as administrator -- has nothing to say here;
+    what stands in for its rule is the consent prompt, which Windows shows
+    every time and which a person answers.
+
+    `ShellExecuteEx` returns once the prompt is answered, which is why the
+    request's deadline carries `elevate.CONSENT_GRACE` (`Commands.run`). A No
+    comes back as error 1223 and is answered CANCELLED, so the status line
+    can say it was declined rather than that something failed.
+    """
+    if win32shell is None:
+        outbox.put(Reply(request.id, Status.ERROR,
+                         message="running as administrator needs pywin32 on Windows"))
+        return
+    parameters, folder = elevated_command(found, arguments, working or "")
+    _ensure_com()
+    options: dict[str, Any] = {
+        # The mask `_elevate` uses, which is known to raise the prompt;
+        # FLAG_NO_UI is left off rather than tested against consent.
+        "fMask": shellcon.SEE_MASK_NOCLOSEPROCESS,
+        "lpVerb": "runas",
+        "lpFile": found,
+        "lpParameters": parameters,
+        "nShow": win32con.SW_SHOWNORMAL,
+    }
+    if folder:
+        options["lpDirectory"] = folder
+    try:
+        started = win32shell.ShellExecuteEx(**options)
+    except Exception as exc:  # noqa: BLE001 - pywintypes.error is not an OSError
+        number = exc.args[0] if getattr(exc, "args", None) and \
+            isinstance(exc.args[0], int) else getattr(exc, "winerror", None)
+        if number == 1223:  # ERROR_CANCELLED: the prompt was answered No
+            outbox.put(Reply(request.id, Status.CANCELLED,
+                             message="administrator was declined"))
+            return
+        outbox.put(Reply(request.id, _shell_status(exc), message=_describe(exc)))
+        return
+
+    pid = None
+    process = started.get("hProcess") if isinstance(started, dict) else None
+    if process:
+        try:
+            pid = win32process.GetProcessId(process) if win32process is not None else None
+        except Exception:  # noqa: BLE001 - the pid is a courtesy
+            pid = None
+        try:
+            win32api_close(process)
+        except Exception:  # noqa: BLE001
+            pass
+    outbox.put(Reply(request.id, Status.OK, payload={
+        "program": found,
+        "arguments": parameters,
+        "pid": pid,
+        "list": written,
+        "admin": True,
     }))
 
 

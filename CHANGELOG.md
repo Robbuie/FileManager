@@ -5,6 +5,25 @@ change gets an entry and a version bump.
 
 ## [Unreleased]
 
+## [0.63.0]
+
+### Fixed
+- **PowerShell and the command prompt open again.** F9 and Shift+F9 said
+  "started" and no window appeared: the program was started with no
+  console of its own, so it ran unseen and exited. Console programs now get
+  their own window, and Ctrl+C inside it stops a command as it should.
+
+### Added
+- **Commands can run as administrator.** The Commands editor (Tools >
+  Commands) has a "Run as administrator" box on each row, and any row runs
+  as administrator once when chosen on the Tools menu with Shift held.
+  Windows asks for consent each time; answering No says so on the status
+  line. A new row, "PowerShell here as administrator", is on Ctrl+Shift+F9.
+  An elevated PowerShell, command prompt or Windows Terminal is told the
+  folder in its arguments, as UNC, because an elevated program does not see
+  mapped drive letters and may not start in the folder it is given; a row
+  with arguments of its own is left as written.
+
 ## [0.62.3]
 
 ### Fixed

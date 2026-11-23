@@ -363,6 +363,8 @@ Ctrl+Q  quick view: the other pane shows the file under the cursor (0.52);
 External commands, which are a table rather than code (0.17)
 F9   PowerShell here       Shift+F9  Command prompt here
 Ctrl+F9  Windows Terminal  F4        Edit
+Ctrl+Shift+F9  PowerShell here as administrator (0.63); Shift on a Tools
+        menu entry runs any row as administrator once
 Ctrl+F2  compare the two panes with the tool  Alt+F2  compare the marked files
 -- one marked in each pane, or two in this one (`%C`, 0.29.13)
 Ctrl+Shift+F2  compare the panes here, marking what differs
@@ -791,6 +793,20 @@ bubble to the pane: `QAbstractItemView` answers a printable key with its own
   executable is a read as well. Both belong in the volume's worker, and the
   reply says the process exists rather than waiting for it to finish: waiting
   would hold every listing on that volume for the life of an editor.
+- **A started program gets a console of its own, and an elevated one is
+  told its folder.** Until 0.63 `Op.RUN` used `DETACHED_PROCESS`, which gives
+  a console program no console: PowerShell started, ran unseen and exited,
+  and the status line said "started". It is `CREATE_NEW_CONSOLE` now, and no
+  new process group, because that switches Ctrl+C off inside the terminal.
+  A row with `admin` (or Shift on the Tools menu) goes through
+  `ShellExecuteEx` with `runas` in the same worker -- the *program* is
+  elevated, never this application, so `elevate.ACTIONS` does not apply and
+  the consent prompt is the check. The request's deadline carries
+  `CONSENT_GRACE` because the call returns only once the prompt is
+  answered. `elevated_command` passes the folder as UNC (no mapped letters
+  in the elevated session) and puts it into the arguments of the three
+  shipped terminals when the row has none, because an elevated cmd opens in
+  System32 whatever folder it is handed.
 - **The command table is not allowed to take a key the pane already answers.**
   `commands.RESERVED` is that list and `shortcut_refusal` is where it is
   enforced, in the editor, while somebody can still see what they pressed. A

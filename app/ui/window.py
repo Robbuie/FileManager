@@ -107,6 +107,8 @@ def _tool_tip(command) -> str:
         line = f"{line} {command.arguments}"
     if command.working:
         line = f"{line}    (in {command.working})"
+    if command.admin:
+        line = f"{line}    as administrator"
     return line
 
 
@@ -1420,6 +1422,10 @@ class MainWindow(QMainWindow):
         the same table -- because a window shortcut on F4 would take the key
         from the path bar and the filter box, which is the rule every function
         key in this application already follows.
+
+        0.63: Shift held while choosing one runs it as administrator, once.
+        Read here, on the menu's click, and never in `_on_command` -- the keys
+        come through that too, and Shift+F9 is a key of its own.
         """
         menu = self._tools_menu
         menu.clear()
@@ -1446,7 +1452,9 @@ class MainWindow(QMainWindow):
                 action = QAction(label, menu)
                 action.setToolTip(_tool_tip(command))
                 action.triggered.connect(
-                    lambda _checked=False, i=command.id: self._on_command(i))
+                    lambda _checked=False, i=command.id: self._on_command(
+                        i, admin=bool(QApplication.keyboardModifiers()
+                                      & Qt.ShiftModifier)))
                 menu.addAction(action)
         menu.addSeparator()
         menu.addAction(self._edit_commands_action)
@@ -1483,14 +1491,16 @@ class MainWindow(QMainWindow):
             other_names=tuple(self._widgets[1 - self._active].marked_names()),
         )
 
-    def _on_command(self, identity: str) -> None:
+    def _on_command(self, identity: str, *, admin: bool = False) -> None:
         if self._commands is None:
             return
-        self._commands.run(identity, self._command_context())
+        self._commands.run(identity, self._command_context(), admin=admin)
 
-    def _on_command_ran(self, identity: str, program: str) -> None:
+    def _on_command_ran(self, identity: str, program: str, admin: bool = False) -> None:
         command = core_commands.find(self._commands.commands, identity)
         name = command.name if command is not None else identity
+        if admin and "administrator" not in name.lower():
+            name = f"{name} as administrator"
         self.statusBar().showMessage(f"started {name}", 4000)
 
     def _edit_commands(self) -> None:

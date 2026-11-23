@@ -507,3 +507,102 @@ def test_file_compare_is_found_in_its_install_folder_without_path(tmp_path, monk
     for name in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"):
         monkeypatch.delenv(name, raising=False)
     assert worker.locate("FileCompare.exe") == str(exe)
+
+
+# ------------------------------------------------- 0.63: the console, and admin
+
+def test_a_console_program_gets_a_console_of_its_own(monkeypatch) -> None:
+    """The reason F9 said "started" and nothing appeared: `DETACHED_PROCESS`
+    gives a console program no console, so PowerShell started and exited
+    unseen. The flags are Windows' and absent here, so they are planted.
+    """
+    import subprocess
+
+    monkeypatch.setattr(subprocess, "CREATE_NEW_CONSOLE", 0x10, raising=False)
+    monkeypatch.setattr(subprocess, "DETACHED_PROCESS", 0x08, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    seen = {}
+
+    class Started:
+        pid = 42
+
+    def fake_popen(argv, **options):
+        seen.update(options)
+        return Started()
+
+    monkeypatch.setattr(worker.subprocess, "Popen", fake_popen)
+    reply = run_request(program="python3", arguments=["-c", "pass"])
+    assert reply.status is Status.OK
+    assert seen["creationflags"] & 0x10
+    assert not seen["creationflags"] & 0x08
+    # A new group switches Ctrl+C off inside the child -- in a terminal, the
+    # key that stops a command.
+    assert not seen["creationflags"] & 0x200
+
+
+def test_the_admin_flag_survives_a_round_trip() -> None:
+    row = Command(id="x", name="X", program="cmd.exe", admin=True)
+    assert from_config(to_config([row]))[0].admin is True
+
+
+def test_a_saved_row_from_before_admin_is_not_elevated() -> None:
+    saved = [{"id": "x", "name": "X", "program": "cmd.exe"}]
+    assert from_config(saved)[0].admin is False
+
+
+def test_the_elevated_terminal_ships_and_reaches_an_edited_table() -> None:
+    shipped = find(DEFAULTS, "terminal-admin")
+    assert shipped is not None and shipped.admin
+    assert shipped.shortcut not in RESERVED
+    edited = (Command(id="mine", name="Mine", program="x.exe"),)
+    assert find(with_defaults(edited), "terminal-admin") is not None
+
+
+def test_shift_on_the_menu_elevates_a_row_that_is_not() -> None:
+    row = Command(id="x", name="X", program="cmd.exe", working="%P")
+    assert expand(row, context()).admin is False
+    assert expand(row, context(), admin=True).admin is True
+    assert expand(replace_admin(row), context()).admin is True
+
+
+def replace_admin(row):
+    from dataclasses import replace
+
+    return replace(row, admin=True)
+
+
+def test_an_elevated_powershell_is_told_its_folder() -> None:
+    """An elevated process may not start where it was asked to, so the shell
+    is told in its arguments. A quote in a folder name is doubled, which is
+    PowerShell's escape inside a single-quoted string.
+    """
+    parameters, folder = worker.elevated_command(
+        r"C:\Windows\powershell.exe", [], r"\\server\share\Bob's jobs")
+    assert folder == r"\\server\share\Bob's jobs"
+    assert "-NoExit" in parameters
+    assert "Set-Location -LiteralPath '\\\\server\\share\\Bob''s jobs'" in parameters
+
+
+def test_an_elevated_cmd_pushes_into_its_folder() -> None:
+    """`cd` refuses a UNC path; `pushd` maps it to a letter."""
+    parameters, _ = worker.elevated_command(
+        r"C:\Windows\System32\cmd.exe", [], r"\\server\share\Jobs")
+    assert parameters == r'/k pushd "\\server\share\Jobs"'
+
+
+def test_an_elevated_terminal_is_given_its_folder() -> None:
+    parameters, _ = worker.elevated_command("wt.exe", [], r"\\server\share\Jobs")
+    assert parameters.startswith("-d ")
+
+
+def test_arguments_somebody_wrote_are_left_alone_when_elevated() -> None:
+    parameters, _ = worker.elevated_command(
+        "powershell.exe", ["-File", r"C:\a b\x.ps1"], r"\\server\share")
+    assert parameters == r'-File "C:\a b\x.ps1"'
+
+
+def test_an_elevated_run_without_the_shell_says_so(monkeypatch) -> None:
+    monkeypatch.setattr(worker, "win32shell", None)
+    reply = run_request(program="python3", admin=True)
+    assert reply.status is Status.ERROR
+    assert "administrator" in reply.message
